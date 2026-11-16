@@ -765,6 +765,8 @@ class RequestEditor(QWidget):
     codeRequested = pyqtSignal()
     copyCurlRequested = pyqtSignal()
     deleteRequested = pyqtSignal()
+    mockRequested = pyqtSignal()
+    duplicateRequested = pyqtSignal()
 
     def __init__(self, store: Store, parent=None):
         super().__init__(parent)
@@ -778,6 +780,8 @@ class RequestEditor(QWidget):
         self.urlbar.cancelRequested.connect(self.cancelRequested.emit)
         self.urlbar.saveRequested.connect(self.saveRequested.emit)
         self.urlbar.codeRequested.connect(self.codeRequested.emit)
+        self.urlbar.mockRequested.connect(self.mockRequested.emit)
+        self.urlbar.duplicateRequested.connect(self.duplicateRequested.emit)
         self.urlbar.moreRequested.connect(self._on_more)
         self.urlbar.methodChanged.connect(self._on_method)
         self.urlbar.urlChanged.connect(self._on_url)

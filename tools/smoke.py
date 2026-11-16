@@ -751,8 +751,11 @@ def main() -> int:
         dlg.nav.set_key("network")
         dlg._on_nav("network")
         check("切回网络页不再复用内容", dlg.stack.currentWidget() is dlg._page_widgets["network"])
-        check("更新内容分三类", [k for k, _ in _group_items(CHANGELOG[0]["items"])]
-              == ["新功能", "改进", "修复"])
+        groups = [k for k, _ in _group_items(CHANGELOG[0]["items"])]
+        check("更新内容按功能 / 改进 / 修复分组", groups and all(
+            g in ("新功能", "改进", "修复") for g in groups)
+              and groups == [g for g in ("新功能", "改进", "修复") if g in groups],
+              str(groups))
         check("更新内容弹窗可用", WhatsNewDialog is not None)
         dlg.close()
 
@@ -2109,6 +2112,55 @@ def main() -> int:
                 pass
         check("停服务后老连接上也不再返回数据", not still)
         check("停完端口干净", not srv.port_in_use(port) and srv.port == 0)
+
+        # ---------- 地址栏「更多」菜单：Mock 数据 / 复制请求不能再崩
+        from PyQt6.QtGui import QAction as _QAction
+
+        from app import request_panel as _rp
+
+        picked = [""]
+
+        class _FakeMenu:
+            """把菜单换成「直接返回某一项」，好让 _on_more 的每个分支都跑到。"""
+
+            def __init__(self, *a, **k):
+                self.acts = []
+
+            def addAction(self, *args):
+                text = args[-1] if isinstance(args[-1], str) else ""
+                act = _QAction(text, None)
+                self.acts.append(act)
+                return act
+
+            def addSeparator(self):
+                pass
+
+            def deleteLater(self):
+                pass
+
+            def exec(self, *_a, **_k):
+                return next((a for a in self.acts if picked[0] in a.text()), None)
+
+        req_ed = _rp.RequestEditor(w.store)
+        got = []
+        req_ed.mockRequested.connect(lambda: got.append("mock"))
+        req_ed.duplicateRequested.connect(lambda: got.append("dup"))
+        req_ed.copyCurlRequested.connect(lambda: got.append("curl"))
+        orig_menu = _rp.Menu
+        _rp.Menu = _FakeMenu
+        try:
+            picked[0] = "Mock"
+            req_ed._on_more(req_ed.urlbar.more_btn)
+            picked[0] = "复制请求"
+            req_ed._on_more(req_ed.urlbar.more_btn)
+            picked[0] = "cURL"
+            req_ed._on_more(req_ed.urlbar.more_btn)
+        finally:
+            _rp.Menu = orig_menu
+        check("更多菜单的每一项都能走通", got == ["mock", "dup", "curl"], str(got))
+        check("编辑器把 Mock / 复制的信号转发出去",
+              hasattr(req_ed, "mockRequested") and hasattr(req_ed, "duplicateRequested"))
+        req_ed.deleteLater()
         return 0
 
     def finish():

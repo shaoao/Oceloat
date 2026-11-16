@@ -673,8 +673,8 @@ class MainWindow(QWidget):
         self.editor.codeRequested.connect(self.show_code)
         self.editor.copyCurlRequested.connect(self._copy_curl)
         self.editor.deleteRequested.connect(self._delete_current)
-        self.editor.urlbar.mockRequested.connect(self.open_mock)
-        self.editor.urlbar.duplicateRequested.connect(self._duplicate_request)
+        self.editor.mockRequested.connect(self.open_mock)
+        self.editor.duplicateRequested.connect(self._duplicate_request)
         self.response = ResponsePanel()
         self.response.setMinimumHeight(180)
         self.response.requestSaveBody.connect(lambda body, note: self.toast.show_message(

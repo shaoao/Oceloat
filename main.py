@@ -1,4 +1,4 @@
-"""Ocelot · macOS 风格 API 调试工具
+"""Ocelot · 为 macOS 开发的 API 调试工具
 
 启动：python3 main.py
 """

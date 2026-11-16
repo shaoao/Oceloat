@@ -17,6 +17,7 @@ from PyQt6.QtGui import (
     QPainter,
 )
 from PyQt6.QtWidgets import (
+    QHeaderView,
     QPlainTextEdit,
     QTextEdit,
     QTreeWidget,
@@ -375,6 +376,10 @@ class CodeView(QPlainTextEdit):
         self.centerCursor()
 
 
+# 树行高：默认 16px 会让 11.5pt 的等宽字挤在一起，值也容易和下一行贴住
+ROW_H = 21
+
+
 class JsonTree(QTreeWidget):
     """JSON 树：键/值两列，按类型着色，默认展开两层。"""
 
@@ -382,8 +387,11 @@ class JsonTree(QTreeWidget):
         super().__init__(parent)
         self.setColumnCount(2)
         self.setHeaderHidden(True)
-        self.setIndentation(13)
+        self.setIndentation(14)
         self.setUniformRowHeights(True)
+        # 键列按内容给宽度，剩下的都给值列：否则 two_factor 这种键会被截成 two_fa…
+        self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.header().setStretchLastSection(True)
         self.setAnimated(True)
         self.setExpandsOnDoubleClick(True)
         self.setFont(mono(11.5))
@@ -410,6 +418,7 @@ class JsonTree(QTreeWidget):
 
     def _add(self, parent, key: str, value: Any, depth: int, t) -> None:
         item = QTreeWidgetItem(parent)
+        item.setSizeHint(0, QSize(120, ROW_H))
         item.setText(0, key)
         item.setFont(0, self._key_font)
         item.setForeground(0, C(t.text_dim))

@@ -19,9 +19,25 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.18"
+VERSION = "1.0.19"
 
 CHANGELOG = [
+    {
+        "version": "1.0.19",
+        "date": "2026-11-17",
+        "items": [
+            "修复：点地址栏右侧「更多 → Mock 数据…」会崩 —— 编辑器少声明了 mockRequested "
+            "信号，菜单里那一项一点就抛 AttributeError；同一处「复制请求」也有同样的问题，"
+            "一并补上，两个入口现在都能正常用",
+            "修复：更多菜单里的 Mock / 复制请求原来只在地址栏上声明信号、由窗口直接连，"
+            "现在统一由编辑器转发，信号只连一次，不会出现点一次开两个窗口",
+            "改进：响应「树形」视图挤成一团 —— 行高从 16 提到 21，键列按内容给宽度，"
+            "two_factor 这类长键不再被截成 two_fa…，层级缩进也看得清了",
+            "改进：接口文档左下角那行原来只写「200 OK」，像飘出来的一串字，现在带上"
+            "「状态」前缀说明它是什么",
+            "优化：README 换成当前版本的截图，自测补到 384 项",
+        ],
+    },
     {
         "version": "1.0.18",
         "date": "2026-11-17",

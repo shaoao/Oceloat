@@ -363,8 +363,9 @@ class DocDialog(GlassDialog):
         self._build_metrics()
         self.url_label.setText(self.request.get("url") or "")
         if self.response is not None:
+            # 目录底部这行原来只有「200 OK」，看着像飘出来的一段文字；加个前缀说明它是什么
             self._outline_status.setText(
-                f"{self.response.status} {self.response.reason}".strip())
+                f"状态 {self.response.status} {self.response.reason}".strip())
         else:
             self._outline_status.setText("草稿")
 
