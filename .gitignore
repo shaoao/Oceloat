@@ -1,0 +1,21 @@
+# 缓存与编译产物
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 系统 / 编辑器
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# 运行产物
+*.log
+ocelot_shots/
+state.json
+state.json.bak

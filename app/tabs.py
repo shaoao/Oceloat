@@ -1,0 +1,399 @@
+"""请求标签栏：自绘胶囊标签 + 滑动选中指示器 + 拖拽重排 + 溢出滚动。"""
+from __future__ import annotations
+
+from typing import Dict, List, Optional
+
+from PyQt6.QtCore import QEasingCurve, QPoint, QPointF, QRectF, QSize, Qt, QVariantAnimation, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
+from PyQt6.QtWidgets import QSizePolicy, QWidget
+
+from . import icons
+from .anim import running as _anim_running, stop as _anim_stop
+from .theme import C, font, method_color, mono, theme
+
+TAB_H = 27
+MARGIN_Y = 6
+
+
+class TabStrip(QWidget):
+    currentChanged = pyqtSignal(str)
+    closeRequested = pyqtSignal(str)
+    orderChanged = pyqtSignal(list)
+    addRequested = pyqtSignal()
+    contextMenuRequested = pyqtSignal(str, QPoint)   # (tab_id 或 "", 全局坐标)
+    pinRequested = pyqtSignal(str)                   # 双击预览标签：转正固定
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.tabs: List[Dict] = []
+        self._current: Optional[str] = None
+        self._hover: Optional[str] = None
+        self._hover_close: Optional[str] = None
+        self._press_id: Optional[str] = None
+        self._drag_id: Optional[str] = None
+        self._drag_start = QPoint()
+        self._dragging = False
+        self._font = font(12.2, weight=QFont.Weight.Medium)
+        self._indicator = QRectF()
+        self._ind_anim: Optional[QVariantAnimation] = None
+        self._scroll = 0.0
+        self.setFixedHeight(TAB_H + MARGIN_Y * 2)
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_ctx)
+
+    def _on_ctx(self, pos) -> None:
+        self.contextMenuRequested.emit(self._hit(pos) or "", self.mapToGlobal(pos))
+
+    # -------------------------------------------------- 尺寸计算
+    BADGE_W = 27.0
+    LEFT_PAD = 11.0
+    BADGE_GAP = 8.0
+    RIGHT_PAD = 9.0
+    CLOSE_W = 16.0
+
+    def _tab_widths(self) -> List[float]:
+        fm = QFontMetricsF(self._font)
+        widths = []
+        for tab in self.tabs:
+            tw = fm.horizontalAdvance(tab.get("title") or "Untitled")
+            fixed = self.LEFT_PAD + self.BADGE_W + self.BADGE_GAP + self.RIGHT_PAD + self.CLOSE_W
+            widths.append(min(214.0, max(132.0, tw + fixed + 16)))
+        avail = max(self.width() - 52, 160)
+        total = sum(widths) + 4 * (len(widths) - 1)
+        if total > avail and widths:
+            # 压缩到最小 100，仍不够则交给滚动
+            excess = total - avail
+            shrinkable = sum(max(0.0, w - 100) for w in widths)
+            if shrinkable > 0:
+                factor = min(1.0, excess / shrinkable)
+                widths = [w - max(0.0, w - 100) * factor for w in widths]
+        return widths
+
+    def _rects(self) -> List[QRectF]:
+        widths = self._tab_widths()
+        rects = []
+        x = 8.0 - self._scroll
+        for w in widths:
+            rects.append(QRectF(x, MARGIN_Y, w, TAB_H))
+            x += w + 4
+        return rects
+
+    def _content_width(self) -> float:
+        widths = self._tab_widths()
+        return sum(widths) + 4 * max(0, len(widths) - 1) + 38
+
+    # -------------------------------------------------- 数据接口
+    def set_tabs(self, tabs: List[Dict], current: Optional[str] = None) -> None:
+        self.tabs = [dict(t) for t in tabs]
+        self._current = current or (self.tabs[0]["id"] if self.tabs else None)
+        self._scroll = 0.0
+        self._snap_indicator()
+        self.update()
+
+    def add_tab(self, tab: Dict, activate: bool = True) -> None:
+        self.tabs.append(dict(tab))
+        if activate or self._current is None:
+            self._current = tab["id"]
+            self._animate_indicator()
+        self.update()
+
+    def remove_tab(self, tab_id: str) -> None:
+        self.tabs = [t for t in self.tabs if t["id"] != tab_id]
+        if self._current == tab_id:
+            self._current = self.tabs[-1]["id"] if self.tabs else None
+        self._normalize_scroll()
+        self._animate_indicator()
+        self.update()
+
+    def update_tab(self, tab_id: str, title: Optional[str] = None,
+                   method: Optional[str] = None, dirty: Optional[bool] = None,
+                   preview: Optional[bool] = None) -> None:
+        for tab in self.tabs:
+            if tab["id"] == tab_id:
+                if title is not None:
+                    tab["title"] = title
+                if method is not None:
+                    tab["method"] = method
+                if dirty is not None:
+                    tab["dirty"] = dirty
+                if preview is not None:
+                    tab["preview"] = preview
+                # 标题变了宽度也变，的胶囊不跟着更新就会把 + 包进去
+                if _anim_running(self._ind_anim):
+                    self._animate_indicator()
+                else:
+                    self._snap_indicator()
+                self.update()
+                return
+
+    def set_current(self, tab_id: str, animate: bool = True) -> None:
+        if tab_id == self._current:
+            self._snap_indicator()
+            return
+        self._current = tab_id
+        if animate:
+            self._animate_indicator()
+        else:
+            self._snap_indicator()
+        self.update()
+
+    def current(self) -> Optional[str]:
+        return self._current
+
+    def ids(self) -> List[str]:
+        return [t["id"] for t in self.tabs]
+
+    def tab(self, tab_id: str) -> Optional[Dict]:
+        for t in self.tabs:
+            if t["id"] == tab_id:
+                return t
+        return None
+
+    # -------------------------------------------------- 指示器动画
+    def _active_rect(self) -> QRectF:
+        for tab, rect in zip(self.tabs, self._rects()):
+            if tab["id"] == self._current:
+                return QRectF(rect)
+        return QRectF()
+
+    def _snap_indicator(self) -> None:
+        self._indicator = self._active_rect()
+        self.update()
+
+    def _animate_indicator(self) -> None:
+        target = self._active_rect()
+        if target.isNull():
+            self._indicator = target
+            self.update()
+            return
+        if self._indicator.isNull():
+            self._indicator = QRectF(target.left(), target.top(), 0, target.height())
+        _anim_stop(self._ind_anim)
+        self._ind_anim = QVariantAnimation(self)
+        self._ind_anim.setStartValue(QRectF(self._indicator))
+        self._ind_anim.setEndValue(target)
+        self._ind_anim.setDuration(260)
+        self._ind_anim.setEasingCurve(QEasingCurve.Type.OutQuint)
+        self._ind_anim.valueChanged.connect(self._on_ind)
+        self._ind_anim.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _on_ind(self, v):
+        self._indicator = v
+        self.update()
+
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        if not _anim_running(self._ind_anim):
+            self._snap_indicator()
+
+    def _normalize_scroll(self) -> None:
+        overflow = self._content_width() - self.width()
+        self._scroll = max(0.0, min(self._scroll, max(0.0, overflow)))
+
+    # -------------------------------------------------- 交互
+    def _hit(self, pos) -> Optional[str]:
+        p = QPointF(pos)  # QRectF.contains 只接受 QPointF，传 QPoint 会 TypeError
+        for tab, rect in zip(self.tabs, self._rects()):
+            if rect.contains(p):
+                return tab["id"]
+        return None
+
+    def _close_rect(self, rect: QRectF) -> QRectF:
+        return QRectF(rect.right() - self.CLOSE_W - 2, rect.center().y() - 6, 12, 12)
+
+    def _badge_rect(self, rect: QRectF) -> QRectF:
+        w = self.BADGE_W - 3
+        return QRectF(rect.left() + self.LEFT_PAD, rect.center().y() - 7.5, w, 15)
+
+    def _title_left(self, rect: QRectF) -> float:
+        return rect.left() + self.LEFT_PAD + self.BADGE_W + self.BADGE_GAP
+
+    def _plus_rect(self) -> QRectF:
+        rects = self._rects()
+        x = (rects[-1].right() + 14) if rects else 10
+        return QRectF(x, MARGIN_Y + 3, 21, 21)
+
+    def mouseMoveEvent(self, e):  # noqa: N802
+        pos = e.position().toPoint()
+        hover = self._hit(pos)
+        close = None
+        if hover:
+            for tab, rect in zip(self.tabs, self._rects()):
+                if tab["id"] == hover and self._close_rect(rect).contains(e.position()):
+                    close = hover
+        plus_hover = self._plus_rect().contains(e.position())
+        if plus_hover != getattr(self, "_hover_plus", False):
+            self._hover_plus = plus_hover
+            self.update()
+        if hover != self._hover or close != self._hover_close:
+            self._hover = hover
+            self._hover_close = close
+            self.setCursor(Qt.CursorShape.PointingHandCursor if (hover or close) else Qt.CursorShape.ArrowCursor)
+            self.update()
+        if self._press_id and not self._dragging:
+            if (pos - self._drag_start).manhattanLength() > 6:
+                self._dragging = True
+                self._drag_id = self._press_id
+        if self._dragging and self._drag_id:
+            cur = next((j for j, t in enumerate(self.tabs) if t["id"] == self._drag_id), None)
+            if cur is not None:
+                target = len(self.tabs)
+                for j, rect in enumerate(self._rects()):
+                    if rect.center().x() > pos.x():
+                        target = j
+                        break
+                if target > cur:
+                    target -= 1
+                if target != cur and 0 <= target < len(self.tabs):
+                    self.tabs.insert(target, self.tabs.pop(cur))
+                    self.orderChanged.emit(self.ids())
+                    self._snap_indicator()
+                    self.update()
+        super().mouseMoveEvent(e)
+
+    def leaveEvent(self, e):  # noqa: N802
+        self._hover = None
+        self._hover_close = None
+        self.update()
+
+    def mousePressEvent(self, e):  # noqa: N802
+        if e.button() == Qt.MouseButton.MiddleButton:
+            # 浏览器习惯：中键点标签直接关闭
+            hit = self._hit(e.position().toPoint())
+            if hit:
+                self.closeRequested.emit(hit)
+            return
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        pos = e.position().toPoint()
+        if self._plus_rect().contains(e.position()):
+            self.addRequested.emit()
+            return
+        tab_id = self._hit(pos)
+        if tab_id is None:
+            return
+        self._press_id = tab_id
+        self._drag_start = pos
+        self._dragging = False
+        old = self._current
+        if tab_id != self._current:
+            self.set_current(tab_id)
+        # 关键：主窗口靠 currentChanged 才会把 editor/response 换成该标签的快照。
+        # 以前「点了当前标签」或只改指示器时都不发信号，一旦主窗口与标签栏状态
+        # 有一丝不同步（比如刚新建、刚恢复会话），内容就永远切不回来。
+        # 现在无条件发一次：处理函数本身幂等，最坏情况只是重绘一次。
+        if old != tab_id or self._current == tab_id:
+            self.currentChanged.emit(tab_id)
+
+    def mouseReleaseEvent(self, e):  # noqa: N802
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        pos = e.position()
+        if self._dragging:
+            self._dragging = False
+            self._press_id = None
+            self._drag_id = None
+            self._animate_indicator()
+            return
+        tab_id = self._hit(pos.toPoint())
+        self._press_id = None
+        if tab_id:
+            for tab, rect in zip(self.tabs, self._rects()):
+                if tab["id"] == tab_id and self._close_rect(rect).contains(pos):
+                    self.closeRequested.emit(tab_id)
+                    return
+
+    def mouseDoubleClickEvent(self, e):  # noqa: N802
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        hit = self._hit(e.position().toPoint())
+        if hit is None:
+            self.addRequested.emit()
+            return
+        # VSCode 行为：双击斜体的预览标签 → 转正固定（之前双击标签毫无反应）
+        tab = self.tab(hit)
+        if tab and tab.get("preview"):
+            self.pinRequested.emit(hit)
+
+    def wheelEvent(self, e):  # noqa: N802
+        if self._content_width() <= self.width():
+            return
+        delta = e.angleDelta().y()
+        self._scroll = max(0.0, min(self._scroll - delta / 3, self._content_width() - self.width()))
+        self._snap_indicator()
+        self.update()
+
+    # -------------------------------------------------- 绘制
+    def paintEvent(self, _e):
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        rects = self._rects()
+
+        # 选中底：滑动胶囊（无描边，靠明度区分，更干净）
+        if not self._indicator.isNull() and len(rects) == len(self.tabs):
+            r = self._indicator
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(C(t.elevated))
+            p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 7, 7)
+
+        for tab, rect in zip(self.tabs, rects):
+            is_cur = tab["id"] == self._current
+            is_hover = tab["id"] == self._hover
+            if is_hover and not is_cur:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(C(t.hover))
+                p.drawRoundedRect(rect, 7, 7)
+            # 方法徽标（替代原先的小色点，信息更明确、更好看）
+            method = (tab.get("method") or "GET").upper()
+            mcol = C(method_color(method, t))
+            br = self._badge_rect(rect)
+            fill = QColor(mcol)
+            fill.setAlpha(40 if is_cur else 26)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(fill)
+            p.drawRoundedRect(br, 4.5, 4.5)
+            p.setFont(mono(8.2, QFont.Weight.Bold))
+            p.setPen(mcol)
+            short = "DEL" if method == "DELETE" else ("OPT" if method == "OPTIONS" else method)
+            p.drawText(br, int(Qt.AlignmentFlag.AlignCenter), short)
+            # 标题（预览态用斜体，仿 VSCode：单击=临时查看，双击=固定）
+            if tab.get("preview"):
+                pf = QFont(self._font)
+                pf.setItalic(True)
+                p.setFont(pf)
+            else:
+                p.setFont(self._font)
+            p.setPen(C(t.accent) if is_cur else C(t.text_dim if is_hover else t.text_faint))
+            left = self._title_left(rect)
+            avail = rect.right() - self.RIGHT_PAD - self.CLOSE_W - left - 4
+            title = QFontMetricsF(self._font).elidedText(
+                tab.get("title") or "Untitled", Qt.TextElideMode.ElideRight, max(avail, 24))
+            p.drawText(QRectF(left, rect.top(), avail, rect.height()),
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), title)
+            # 关闭按钮
+            show_close = is_cur or is_hover
+            if show_close:
+                cr = self._close_rect(rect)
+                if tab["id"] == self._hover_close:
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(C(t.selected))
+                    p.drawRoundedRect(cr.adjusted(-3, -3, 3, 3), 4, 4)
+                col = t.text if tab["id"] == self._hover_close else t.text_faint
+                pm = icons.pixmap("close", col, 9, 2.1)
+                p.drawPixmap(QPointF(cr.left() + 1.5, cr.top() + 1.5), pm)
+        # 新建按钮
+        pr = self._plus_rect()
+        if pr.right() < self.width() + 40:
+            if getattr(self, "_hover_plus", False):
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(C(t.selected))
+                p.drawRoundedRect(pr, 6, 6)
+            pm = icons.pixmap("plus", t.text if getattr(self, "_hover_plus", False) else t.text_faint, 13, 1.8)
+            p.drawPixmap(QPointF(pr.center().x() - 6.5, pr.center().y() - 6.5), pm)
+        p.end()
