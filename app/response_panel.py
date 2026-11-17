@@ -153,6 +153,48 @@ LEVEL_META = {
 }
 
 
+class StaleBar(QWidget):
+    """「请求已修改」细提示条：不清屏，只在结果上方提醒这是上一次的响应。"""
+
+    resend = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(26)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 0, 8, 0)
+        lay.setSpacing(7)
+        self.dot = QLabel()
+        self.dot.setFixedSize(12, 12)
+        self.text = Label("请求已修改 · 下面是上一次的响应", 10.8, theme().text_dim)
+        self.resend_btn = Button("重新发送", None, kind="ghost", height=20,
+                                 padding=8, font_size=10.8)
+        self.resend_btn.setToolTip("用修改后的请求再发一次  ⌘↵")
+        self.resend_btn.clicked.connect(self.resend.emit)
+        lay.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(self.text, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addStretch(1)
+        lay.addWidget(self.resend_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.hide()
+        self.refresh_theme()
+
+    def refresh_theme(self) -> None:
+        self.dot.setPixmap(icons.pixmap("alert", theme().warning, 11, 1.5))
+
+    def paintEvent(self, _e):
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        bg = QColor(C(t.warning))
+        bg.setAlpha(26)
+        p.fillRect(self.rect(), bg)
+        sep = QColor(C(t.warning))
+        sep.setAlpha(70)
+        p.setPen(QPen(sep, 1))
+        p.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
+        p.end()
+
+
 class ConsoleLog(QWidget):
     """控制台：脚本的 console.* / test() 输出，按级别配色并带阶段标签。
 
@@ -282,6 +324,7 @@ class ConsoleLog(QWidget):
 
 class ResponsePanel(QWidget):
     requestSaveBody = pyqtSignal(bytes, str)
+    resendRequested = pyqtSignal()          # 提示条上的「重新发送」
     saveVariable = pyqtSignal(str, str)      # 名字, 值：把提取结果存进环境变量
     docRequested = pyqtSignal()              # 打开接口文档窗口
 
@@ -517,6 +560,9 @@ class ResponsePanel(QWidget):
         # 分割手柄的线叠在一起，看着像多了一套横线。
         self.head_divider = Divider()
         lay.addWidget(self.head_divider)
+        self.stale_bar = StaleBar()
+        self.stale_bar.resend.connect(self.resendRequested.emit)
+        lay.addWidget(self.stale_bar)
         lay.addWidget(self.center, 1)
         lay.addWidget(self.find_bar)
 
@@ -885,6 +931,7 @@ class ResponsePanel(QWidget):
         self.dot3.setVisible(self.meta.isVisible() and bool(self.node_label.text()))
 
     def show_empty(self) -> None:
+        self.stale_bar.hide()
         self.response = None
         self._body_text = ""
         self.console_host.clear()
@@ -906,23 +953,27 @@ class ResponsePanel(QWidget):
         self._set_actions_enabled(False)
         self.find_bar.hide()
 
-    def show_stale(self) -> None:
-        """请求已改动：旧响应不再可信，直接清空，避免地址与结果对不上。"""
+    def mark_stale(self) -> None:
+        """请求已改动：保留上一次的响应（很多人只是改个方式想对照结果），
+        在顶部挂一条提示说明「这是上一次的结果」，不清空、不误导。"""
         if getattr(self, "spinner", None) is not None:
             self.spinner.stop()
         self.shimmer.stop()
-        self.response = None
-        self._body_text = ""
-        self.center.setCurrentWidget(self.empty)
-        self.empty.set_text("请求已修改", "发送后这里会显示本次请求的新响应", "⌘ ↵ 发送")
-        self.tabs_row.hide()
-        self.meta.hide()
-        self._set_head_visible(False)
-        self._set_actions_enabled(False)
-        self._sync_view_tools()
-        self.find_bar.hide()
+        if self.response is None and self.center.currentWidget() is not self.content:
+            self.center.setCurrentWidget(self.empty)
+            self.empty.set_text("请求已修改", "发送后这里会显示本次请求的新响应", "⌘ ↵ 发送")
+            self.tabs_row.hide()
+            self.meta.hide()
+            self._set_head_visible(False)
+            self._set_actions_enabled(False)
+            self._sync_view_tools()
+            self.find_bar.hide()
+            return
+        self.stale_bar.show()
+        self._set_actions_enabled(True)
 
     def show_loading(self) -> None:
+        self.stale_bar.hide()
         self.center.setCurrentWidget(self.loading)
         self.tabs_row.hide()
         self.spinner.start()          # 关键：不启动定时器就只是一个静止的弧线
@@ -940,6 +991,7 @@ class ResponsePanel(QWidget):
         self._set_actions_enabled(False)
 
     def show_error(self, message: str) -> None:
+        self.stale_bar.hide()
         self.shimmer.stop()
         if getattr(self, 'spinner', None) is not None:
             self.spinner.stop()
@@ -958,6 +1010,7 @@ class ResponsePanel(QWidget):
         self._set_actions_enabled(False)
 
     def set_response(self, resp: Response) -> None:
+        self.stale_bar.hide()
         self.shimmer.stop()
         if getattr(self, 'spinner', None) is not None:
             self.spinner.stop()

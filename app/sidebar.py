@@ -594,7 +594,8 @@ class Sidebar(QWidget):
         # 搜索框右侧：导入 / 导出（一个按钮，一个对话框，导入导出都在里面切换）
         self.transfer_btn = icon_button("transfer", "导入 / 导出集合", 28, 14)
         self.transfer_btn.clicked.connect(self.transferRequested.emit)
-        root.addWidget(HBox(self.search, 1, self.transfer_btn, spacing=6))
+        # 搜索框吃掉全部剩余宽度，紧贴右侧按钮 —— 中间留一段空白既浪费又难看
+        root.addWidget(HBox((self.search, 1), self.transfer_btn, spacing=6))
 
         # 集合树
         self.tree = CollectionsTree()
@@ -789,6 +790,12 @@ class Sidebar(QWidget):
         self.tree.setCurrentItem(item)
         self.tree.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
 
+    def expand_node(self, node_id: Optional[str]) -> None:
+        """展开某个节点（导入完展示新集合用）。"""
+        item = self._find_item(node_id) if node_id else None
+        if item is not None and item.childCount():
+            item.setExpanded(True)
+
     # -------------------------------------------------- 增删改
     def _new_request(self) -> None:
         if self._mode == "history":
@@ -833,6 +840,25 @@ class Sidebar(QWidget):
         self.store.save()
         self.refresh()
         self.changed.emit()
+
+    def set_node_method(self, node_id: str, method: str) -> None:
+        """请求方式在编辑器里改了 → 集合树里的徽标同步跟上。
+
+        只动当前这一项的数据并重绘一行，不重建整棵树（重建会丢滚动位置和
+        正在进行的拖拽），也不覆盖用户的其它编辑。
+        """
+        node = self.store.find(node_id)
+        if node is None or node.get("type") != "request":
+            return
+        method = (method or "GET").upper()
+        if (node.get("method") or "GET").upper() == method:
+            return
+        node["method"] = method
+        item = self._find_item(node_id)
+        if item is not None:
+            item.setData(0, ROLE_DATA, node)
+        self.tree.viewport().update()
+        self.store.save()
 
     def delete_node(self, node_id: str) -> None:
         node = self.store.find(node_id)

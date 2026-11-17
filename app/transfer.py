@@ -47,6 +47,20 @@ EXPORT_TARGETS = [
 EXT = {"ocelot": ".json", "postman": ".json", "openapi-json": ".json",
        "openapi-yaml": ".yaml", "har": ".har"}
 
+# 展示用名字（导入成功后告诉用户「这次认成了什么」）
+FORMAT_LABELS = {
+    "ocelot": "Ocelot JSON",
+    "postman": "Postman v2.0 / v2.1",
+    "postman_dump": "Postman 数据包",
+    "postman_v1": "Postman v1",
+    "apifox": "Apifox",
+    "hoppscotch": "Hoppscotch",
+    "insomnia": "Insomnia v4",
+    "openapi": "OpenAPI / Swagger",
+    "har": "HAR",
+    "native": "Ocelot 集合",
+}
+
 
 # ---------------------------------------------------------------- 公共小工具
 
@@ -454,11 +468,10 @@ def _from_postman_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if extra.get("auth"):
         auth = extra["auth"]
     cookies = extra.get("cookies") or []
-    note = r.get("description") or item.get("description") or ""
+    note = _text_of(r.get("description")) or _text_of(item.get("description"))
     return _mk_request(str(item.get("name") or "Request"), r.get("method") or "GET",
                        base or raw_url, params=params, headers=headers, body=body,
-                       auth=auth, cookies=cookies, scripts=scripts,
-                       note=str(note) if isinstance(note, str) else "")
+                       auth=auth, cookies=cookies, scripts=scripts, note=note)
 
 
 def _import_postman_body(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -467,7 +480,10 @@ def _import_postman_body(body: Dict[str, Any]) -> Dict[str, Any]:
     if mode == "raw":
         lang = ((body.get("options") or {}).get("raw") or {}).get("language") or "json"
         mode_name = "json" if lang == "json" else ("xml" if lang == "xml" else "text")
-        out.update(mode=mode_name, raw=body.get("raw") or "", raw_lang=lang if lang else "text")
+        raw = body.get("raw")
+        if not isinstance(raw, str):
+            raw = json.dumps(raw, ensure_ascii=False, indent=2) if raw else ""
+        out.update(mode=mode_name, raw=raw, raw_lang=lang if lang else "text")
         if lang not in ("json", "xml", "text"):
             out["mode"] = "raw"
         return out
@@ -632,6 +648,19 @@ def _from_insomnia(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     roots = build(None)
     if not roots:
         roots = build("__WORKSPACE_ID__")
+    if not roots:
+        # 有的导出把 workspace 也写成资源、parentId 指向它，或者干脆丢了父节点：
+        # 这时把所有「父节点不是已知分组」的资源都当根，避免整份导入为空。
+        known = set(groups) | {None}
+        loose = [r for r in resources
+                 if r.get("_type") in ("request", "request_group")
+                 and r.get("parentId") not in known]
+        if loose:
+            orphan: Dict[Optional[str], List[Dict[str, Any]]] = {}
+            for res in loose:
+                orphan.setdefault("__root__", []).append(res)
+            by_parent.update(orphan)
+            roots = build("__root__")
     return roots
 
 
@@ -715,39 +744,80 @@ def _from_openapi(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 # ---------------------------------------------------------------- 顶层识别
 
+def sanitize(text: str) -> str:
+    """去掉 BOM 与首尾空白：Windows 上编辑过的 JSON 常带 U+FEFF，
+    不清掉 json.loads 会直接报 "Unexpected UTF-8 BOM"。"""
+    if not text:
+        return ""
+    return text.lstrip("\ufeff").replace("\ufeff", "").strip()
+
+
 def detect_format(text: str) -> str:
     """按内容猜格式（比看扩展名可靠：很多工具导出的都是 .json）。"""
-    stripped = text.lstrip()
-    if stripped.startswith("openapi:") or stripped.startswith("swagger:"):
+    text = sanitize(text)
+    if not text:
+        return "unknown"
+    head = text[:6000]
+    low = head.lower()
+    if low.startswith(("openapi:", "swagger:")):
         return "openapi"
+    if low.startswith("curl "):
+        return "curl"
     try:
         data = json.loads(text)
-    except Exception:  # noqa: BLE001
-        return "unknown"
-    if isinstance(data, dict):
-        if data.get("format") == "reqly-collection":
-            return "native"
-        if "log" in data and isinstance(data["log"], dict) and "entries" in (data["log"] or {}):
-            return "har"
-        if "__export_format" in data or data.get("_type") == "export":
-            return "insomnia"
-        if "openapi" in data or "swagger" in data:
+    except Exception:  # noqa: BLE001  可能是 YAML
+        if re.match(r"^[\w.-]+:\s", head) and "openapi" in low:
             return "openapi"
-        if "info" in data and "item" in data:
-            if "x-ocelot" in data:
-                return "ocelot"
-            schema = str((data.get("info") or {}).get("schema") or "")
-            if "apifox" in json.dumps(data.get("info") or {}, ensure_ascii=False).lower():
-                return "apifox"
-            return "postman" if "schema" in schema or "getpostman" in schema else "postman"
-        if "apiCollection" in data:
-            return "apifox"
+        return "unknown"
+    return format_of_data(data)
+
+
+def format_of_data(data: Any) -> str:
+    """已经解析成对象的输入，判断它来自哪个工具。"""
     if isinstance(data, list):
-        if data and isinstance(data[0], dict):
-            if "endpoint" in data[0] or "folders" in data[0]:
-                return "hoppscotch"
-            if data[0].get("type") in ("folder", "request") and "name" in data[0]:
-                return "native"
+        first = next((x for x in data if isinstance(x, dict)), None)
+        if first is None:
+            return "unknown"
+        if "endpoint" in first or "folders" in first or "v" in first:
+            return "hoppscotch"
+        if "request" in first or "item" in first:
+            return "postman"
+        if first.get("type") in ("folder", "request") and "name" in first:
+            return "native"
+        return "unknown"
+    if not isinstance(data, dict):
+        return "unknown"
+    if data.get("format") == "reqly-collection":
+        return "native"
+    log = data.get("log")
+    if isinstance(log, dict) and "entries" in log:
+        return "har"
+    if data.get("_type") == "export" or "__export_format" in data:
+        return "insomnia"
+    if "apiCollection" in data:
+        return "apifox"
+    if isinstance(data.get("collections"), list):
+        return "postman_dump"
+    if data.get("v") in (1, 2) and ("requests" in data or "folders" in data):
+        return "hoppscotch"
+    if "openapi" in data or "swagger" in data:
+        return "openapi"
+    if "info" in data and "item" in data:
+        if "x-ocelot" in data:
+            return "ocelot"
+        if "apifox" in json.dumps(data.get("info") or {}, ensure_ascii=False).lower():
+            return "apifox"
+        return "postman"
+    if "item" in data:
+        return "postman"                     # 少了 info 也算 Postman 集合
+    if "request" in data:
+        return "postman"                     # 单个请求条目
+    if isinstance(data.get("values"), list) and "name" in data:
+        return "env_file"                    # Postman / Apifox 的环境变量文件
+    if isinstance(data.get("requests"), list):
+        return "postman_v1"
+    if isinstance(data.get("resources"), list):
+        return "insomnia"
     return "unknown"
 
 
@@ -890,12 +960,15 @@ def _yaml_load(text: str) -> Any:
 
 def parse_text(text: str) -> Tuple[List[Dict[str, Any]], str, str]:
     """把一段文本解析成 (节点列表, 识别到的格式, 错误)。"""
+    text = sanitize(text)
     fmt = detect_format(text)
-    if fmt == "unknown" and text.lstrip().startswith(("openapi:", "swagger:")):
-        fmt = "openapi"
     if fmt == "unknown":
-        return [], fmt, "无法识别的文件格式"
-    if fmt == "openapi" and not text.lstrip().startswith("{"):
+        return [], fmt, "无法识别的文件格式：既不是 Postman / Apifox / Hoppscotch / Insomnia 集合，也不是 OpenAPI 或 HAR"
+    if fmt == "curl":
+        return [], fmt, "这是一条 cURL 命令，请用「从剪贴板导入」"
+    if fmt == "env_file":
+        return [], fmt, "这是环境变量文件，不是集合；请在「设置 → 环境变量」里导入"
+    if fmt == "openapi" and not text.startswith("{"):
         try:
             data = _yaml_load(text)
         except Exception as exc:  # noqa: BLE001
@@ -911,8 +984,15 @@ def parse_text(text: str) -> Tuple[List[Dict[str, Any]], str, str]:
     if fmt == "ocelot":
         nodes = _from_ocelot(data)
     elif fmt in ("postman", "apifox"):
-        # item 本身就是树，不用再套一层文件夹；否则每次来回导都多一层「Imported」。
-        nodes = [x for x in (_from_postman_item(i) for i in data.get("item") or []) if x]
+        if "apiCollection" in (data or {}):
+            nodes = _from_apifox(data)
+        else:
+            # item 本身就是树，不用再套一层文件夹；否则每次来回导都多一层「Imported」。
+            nodes = _from_postman_any(data)
+    elif fmt == "postman_dump":
+        nodes = _from_postman_dump(data)
+    elif fmt == "postman_v1":
+        nodes = _from_postman_v1(data)
     elif fmt == "hoppscotch":
         nodes = _from_hoppscotch(data)
     elif fmt == "insomnia":
@@ -926,7 +1006,195 @@ def parse_text(text: str) -> Tuple[List[Dict[str, Any]], str, str]:
         nodes = [_normalize_import(n) for n in (raw_nodes or []) if isinstance(n, dict)]
     else:
         return [], fmt, "无法识别的文件格式"
+    if not nodes:
+        return [], fmt, _empty_hint(fmt, data)
     return nodes, fmt, ""
+
+
+def _empty_hint(fmt: str, data: Any) -> str:
+    """识别成功但一个请求都没解析出来时，给一句能对症的话。"""
+    if fmt in ("apifox",) and isinstance(data, dict) and "apiCollection" in data:
+        return "识别为 Apifox 集合，但里面没有可导入的接口"
+    if isinstance(data, dict) and isinstance(data.get("values"), list):
+        return "这是环境变量文件（Postman Environment），不是集合；集合请从 Collection 导出"
+    if isinstance(data, dict) and (data.get("item") == [] or data.get("apiCollection") == []):
+        return "集合是空的：文件里没有任何请求"
+    return "文件里没有可导入的请求"
+
+
+def _from_postman_any(data: Any) -> List[Dict[str, Any]]:
+    """Postman 系（含单个请求、数组、缺 info 的裸集合）。"""
+    if isinstance(data, list):
+        items: List[Any] = []
+        for entry in data:
+            if isinstance(entry, dict):
+                items.extend(entry.get("item") or [])
+        return [x for x in (_from_postman_item(i) for i in items) if x]
+    if not isinstance(data, dict):
+        return []
+    items = data.get("item")
+    if isinstance(items, dict):
+        items = [items]
+    if not items and "request" in data:
+        items = [data]
+    return [x for x in (_from_postman_item(i) for i in items or []) if x]
+
+
+def _from_postman_dump(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Postman「Export Data」导出的整包 dump：collections + environments。"""
+    out: List[Dict[str, Any]] = []
+    for coll in data.get("collections") or []:
+        if not isinstance(coll, dict):
+            continue
+        info = coll.get("info") or {}
+        folder = new_folder(str(info.get("name") or coll.get("name") or "Imported"))
+        folder["children"] = [x for x in (_from_postman_item(i)
+                                          for i in coll.get("item") or []) if x]
+        if folder["children"]:
+            out.append(folder)
+    return out
+
+
+def _from_postman_v1(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Postman v1（很老的格式）：requests + folders + order。"""
+    reqs = {r.get("id"): r for r in data.get("requests") or [] if isinstance(r, dict)}
+    folders = {f.get("id"): f for f in data.get("folders") or [] if isinstance(f, dict)}
+
+    def one(r: Dict[str, Any]) -> Dict[str, Any]:
+        headers: List[Dict[str, Any]] = []
+        raw = r.get("headers")
+        if isinstance(raw, str):
+            for line in raw.splitlines():
+                if ":" in line:
+                    key, _, value = line.partition(":")
+                    if key.strip():
+                        headers.append(kv(key.strip(), value.strip()))
+        elif isinstance(raw, list):
+            headers = [kv(str(h.get("key") or h.get("name") or ""), str(h.get("value") or ""),
+                          not h.get("disabled")) for h in raw
+                       if isinstance(h, dict) and (h.get("key") or h.get("name"))]
+        body = {"mode": "none", "raw": "", "form": [], "file": ""}
+        mode = str(r.get("dataMode") or "")
+        if mode == "params":
+            rows = []
+            for line in str(r.get("rawModeData") or "").splitlines():
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    rows.append({"key": key, "value": value, "enabled": True, "type": "text"})
+            body = {"mode": "form", "raw": "", "form": rows, "file": ""}
+        elif mode == "raw":
+            raw_body = str(r.get("rawModeData") or "")
+            body = {"mode": "json" if raw_body.strip().startswith(("{", "[")) else "text",
+                    "raw": raw_body, "form": [], "file": ""}
+        return _mk_request(str(r.get("name") or "Request"), r.get("method") or "GET",
+                           str(r.get("url") or ""), headers=headers, body=body,
+                           note=str(r.get("description") or ""))
+
+    def walk(order: List[Any]) -> List[Dict[str, Any]]:
+        out = []
+        for oid in order or []:
+            if oid in folders:
+                f = folders[oid]
+                node = new_folder(str(f.get("name") or "Folder"))
+                node["children"] = walk(f.get("order") or [])
+                out.append(node)
+            elif oid in reqs:
+                out.append(one(reqs[oid]))
+        return out
+
+    roots = walk(data.get("order") or [])
+    if not roots:
+        roots = [one(r) for r in reqs.values()]
+        for f in folders.values():
+            node = new_folder(str(f.get("name") or "Folder"))
+            node["children"] = walk(f.get("order") or [])
+            if node["children"]:
+                roots.append(node)
+    return roots
+
+
+def _join_base(base: str, path: str) -> str:
+    base = (base or "").strip().rstrip("/")
+    path = (path or "").strip()
+    if not base:
+        return path
+    if not path:
+        return base
+    if path.lower().startswith(("http://", "https://")):
+        return path
+    return base + "/" + path.lstrip("/")
+
+
+def _from_apifox(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Apifox 自有格式（apiCollection）以及它的 Postman 兼容导出。"""
+    if "apiCollection" not in data:
+        return _from_postman_any(data)
+    base = ""
+    for key in ("baseUrl", "baseURL", "host"):
+        if isinstance(data.get(key), str) and data.get(key):
+            base = str(data[key])
+            break
+
+    def walk(node: Dict[str, Any], folder_base: str) -> Optional[Dict[str, Any]]:
+        if not isinstance(node, dict):
+            return None
+        local_base = str(node.get("baseUrl") or folder_base or "")
+        api = node.get("api")
+        if isinstance(api, dict):
+            return _apifox_request(str(node.get("name") or api.get("name") or "Request"),
+                                   api, local_base)
+        children = node.get("items") or node.get("children") or node.get("apiList") or []
+        if not isinstance(children, list):
+            children = []
+        folder = new_folder(str(node.get("name") or "Folder"))
+        folder["children"] = [x for x in (walk(c, local_base) for c in children) if x]
+        return folder
+
+    roots = []
+    for coll in data.get("apiCollection") or []:
+        node = walk(coll, base)
+        if node:
+            roots.append(node)
+    return roots
+
+
+def _apifox_request(name: str, api: Dict[str, Any], base: str) -> Dict[str, Any]:
+    params: List[Dict[str, Any]] = []
+    headers: List[Dict[str, Any]] = []
+    spec = api.get("parameters") or {}
+    if isinstance(spec, dict):
+        for row in spec.get("query") or []:
+            if isinstance(row, dict) and (row.get("name") or row.get("key")):
+                params.append(kv(str(row.get("name") or row.get("key")),
+                                 str(row.get("value") if row.get("value") is not None else row.get("example", "")),
+                                 row.get("enable", True) is not False))
+        for row in spec.get("header") or []:
+            if isinstance(row, dict) and (row.get("name") or row.get("key")):
+                headers.append(kv(str(row.get("name") or row.get("key")),
+                                  str(row.get("value") if row.get("value") is not None else row.get("example", "")),
+                                  row.get("enable", True) is not False))
+    body = {"mode": "none", "raw": "", "form": [], "file": ""}
+    rb = api.get("requestBody") or {}
+    if isinstance(rb, dict) and rb:
+        ctype = str(rb.get("type") or rb.get("mimeType") or "")
+        if "form" in ctype:
+            rows = []
+            for row in rb.get("parameters") or []:
+                if isinstance(row, dict) and (row.get("name") or row.get("key")):
+                    rows.append({"key": str(row.get("name") or row.get("key")),
+                                 "value": str(row.get("value") or row.get("example") or ""),
+                                 "enabled": True, "type": "text"})
+            body = {"mode": "form", "raw": "", "form": rows, "file": ""}
+        else:
+            raw = rb.get("raw") or rb.get("jsonSchema") or rb.get("example") or ""
+            if not isinstance(raw, str):
+                raw = json.dumps(raw, ensure_ascii=False, indent=2)
+            body = {"mode": "json" if "json" in ctype.lower() or raw.strip().startswith(("{", "[")) else "text",
+                    "raw": raw, "form": [], "file": ""}
+    method = str(api.get("method") or "GET").upper()
+    url = _join_base(base, str(api.get("path") or api.get("url") or ""))
+    return _mk_request(name, method, url, params=params, headers=headers, body=body,
+                       note=str(api.get("description") or ""))
 
 
 def _from_ocelot(data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -941,14 +1209,100 @@ def _normalize_import(node: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def environments_of(text: str) -> List[Dict[str, Any]]:
-    """Ocelot JSON 里带的整套环境变量；别的格式返回空列表。"""
+    """随文件带回来的环境变量：Ocelot 的 x-ocelot、Postman 整包 dump、
+    Apifox / Insomnia 的 environments 都认。返回 [{name, vars:[kv...]}]。"""
     try:
-        data = json.loads(text)
+        data = json.loads(sanitize(text))
     except Exception:  # noqa: BLE001
         return []
-    extra = (data.get("x-ocelot") or {}) if isinstance(data, dict) else {}
-    envs = extra.get("environments") or []
-    return [e for e in envs if isinstance(e, dict) and e.get("vars") is not None]
+    if not isinstance(data, dict):
+        return []
+
+    def rows(items: Any, key_name: str = "key") -> List[Dict[str, Any]]:
+        out = []
+        for row in items or []:
+            if not isinstance(row, dict):
+                continue
+            key = row.get(key_name) or row.get("name") or ""
+            if not key:
+                continue
+            out.append({"key": str(key), "value": str(row.get("value") or ""),
+                        "enabled": bool(row.get("enabled", row.get("enable", True))),
+                        "type": "text"})
+        return out
+
+    found: List[Dict[str, Any]] = []
+    extra = data.get("x-ocelot") or {}
+    for env in extra.get("environments") or []:
+        if isinstance(env, dict) and env.get("vars") is not None:
+            found.append({"name": str(env.get("name") or "Imported"),
+                          "vars": env.get("vars") or []})
+    for env in data.get("environments") or []:
+        if not isinstance(env, dict):
+            continue
+        # Postman dump 用 values，Apifox 用 variables / environments
+        items = env.get("values") or env.get("variables") or env.get("vars")
+        var_rows = rows(items)
+        if var_rows:
+            found.append({"name": str(env.get("name") or "Imported"), "vars": var_rows})
+    # Insomnia：environment 资源 + environment_variable 子资源
+    resources = data.get("resources")
+    if isinstance(resources, list):
+        envs = {r.get("_id"): r for r in resources
+                if isinstance(r, dict) and r.get("_type") == "environment"}
+        buckets: Dict[Any, List[Dict[str, Any]]] = {}
+        for res in resources:
+            if isinstance(res, dict) and res.get("_type") == "environment_variable":
+                buckets.setdefault(res.get("parentId"), []).append(
+                    {"key": str(res.get("name") or ""), "value": str(res.get("value") or ""),
+                     "enabled": not res.get("disabled"), "type": "text"})
+        for env_id, var_rows in buckets.items():
+            meta = envs.get(env_id) or {}
+            if var_rows:
+                found.append({"name": str(meta.get("name") or "Imported"), "vars": var_rows})
+    # 去重（同名环境只留第一份）
+    seen, out = set(), []
+    for env in found:
+        if env["name"] in seen:
+            continue
+        seen.add(env["name"])
+        out.append(env)
+    return out
+
+
+def _text_of(value: Any) -> str:
+    """描述字段可能是字符串，也可能是 {"content": "...", "type": ...}。"""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return str(value.get("content") or "")
+    return ""
+
+
+def summarize(nodes: List[Dict[str, Any]]) -> Dict[str, int]:
+    """统计这次导入带回来了什么 —— 成功页要按项展示，别只给一个总数。"""
+    out = {"folders": 0, "requests": 0, "pre": 0, "post": 0,
+           "cookies": 0, "auth": 0}
+
+    def walk(items: List[Dict[str, Any]]) -> None:
+        for node in items or []:
+            if node.get("type") == "folder":
+                out["folders"] += 1
+                walk(node.get("children") or [])
+                continue
+            out["requests"] += 1
+            scripts = node.get("scripts") or {}
+            if (scripts.get("pre") or "").strip():
+                out["pre"] += 1
+            if (scripts.get("post") or "").strip():
+                out["post"] += 1
+            if node.get("cookies"):
+                out["cookies"] += 1
+            if (node.get("auth") or {}).get("type") not in (None, "", "none"):
+                out["auth"] += 1
+
+    walk(nodes)
+    return out
 
 
 def count_requests(nodes: List[Dict[str, Any]]) -> int:

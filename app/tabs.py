@@ -94,11 +94,14 @@ class TabStrip(QWidget):
         self._snap_indicator()
         self.update()
 
-    def add_tab(self, tab: Dict, activate: bool = True) -> None:
+    def add_tab(self, tab: Dict, activate: bool = True, animate: bool = True) -> None:
         self.tabs.append(dict(tab))
         if activate or self._current is None:
             self._current = tab["id"]
-            self._animate_indicator()
+            if animate:
+                self._animate_indicator()
+            else:
+                self._snap_indicator()
         self.update()
 
     def remove_tab(self, tab_id: str) -> None:
@@ -161,6 +164,12 @@ class TabStrip(QWidget):
         return QRectF()
 
     def _snap_indicator(self) -> None:
+        # 关键：先把在飞的动画停掉。否则 _snap 之后残留的 animation 还会继续
+        # 把 _indicator 往它启动时算出的旧矩形上写，动画结束就永久停在一个
+        # 错的宽度上 —— 启动时「选中胶囊压住隔壁标签」就是这么来的。
+        if self._ind_anim is not None:
+            _anim_stop(self._ind_anim)
+            self._ind_anim = None
         self._indicator = self._active_rect()
         self.update()
 
@@ -179,7 +188,16 @@ class TabStrip(QWidget):
         self._ind_anim.setDuration(260)
         self._ind_anim.setEasingCurve(QEasingCurve.Type.OutQuint)
         self._ind_anim.valueChanged.connect(self._on_ind)
+        # 落点一律以「当前真实几何」为准：动画期间窗口可能缩放过、标题可能变过，
+        # 结束时直接对齐一次能把残余误差清零（不能在 finished 里调 stop()，
+        # DeleteWhenStopped 会在信号发射过程中销毁自己）。
+        self._ind_anim.finished.connect(self._on_ind_finished)
         self._ind_anim.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _on_ind_finished(self) -> None:
+        self._ind_anim = None
+        self._indicator = self._active_rect()
+        self.update()
 
     def _on_ind(self, v):
         self._indicator = v
@@ -336,8 +354,10 @@ class TabStrip(QWidget):
         rects = self._rects()
 
         # 选中底：滑动胶囊（无描边，靠明度区分，更干净）
-        if not self._indicator.isNull() and len(rects) == len(self.tabs):
-            r = self._indicator
+        # 动画没在跑时一律用实时几何，绝不信任可能过期的 _indicator。
+        capsule = self._indicator if _anim_running(self._ind_anim) else self._active_rect()
+        if not capsule.isNull() and len(rects) == len(self.tabs):
+            r = capsule
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(C(t.elevated))
             p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 7, 7)

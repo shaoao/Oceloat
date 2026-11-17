@@ -940,9 +940,17 @@ def main() -> int:
         w.response.set_response(r20)
         w.editor.urlbar.url.setText("https://v.api.aa1.cn/api/time-tx/index.php")
         app.processEvents()
-        check("改地址后旧图片响应清空", w.response.response is None
-              and stale_tab.get("response") is None
-              and w.response.center.currentWidget() is w.response.empty)
+        # 新行为：改地址不清空结果，只在顶部挂一条「这是上一次的响应」提示
+        check("改地址后保留旧响应并标注已修改",
+              w.response.response is r20
+              and w.response.center.currentWidget() is w.response.content
+              and not w.response.stale_bar.isHidden())
+        stale_tab["response"] = w.response.response
+        w._on_tab_changed(stale_tab["id"])
+        check("切回标签仍能看到旧响应与提示",
+              w.response.response is not None and not w.response.stale_bar.isHidden())
+        w.response.set_response(r20)
+        check("新响应到达后提示条消失", w.response.stale_bar.isHidden())
 
         # 4) 每个标签的响应与视图状态完全独立
         w.new_request()
@@ -2386,6 +2394,135 @@ def main() -> int:
               any("res" in s for _t, s in page.POST_SNIPPETS))
         return 0
 
+    def step34():
+        print("[31] 导入格式适配 / 结果页 / 标签指示器 / 搜索框 / 方法同步")
+        import json as _json
+
+        from app import transfer
+        from app.dialogs import TransferDialog
+
+        pm = {"info": {"name": "Demo", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+              "item": [{"name": "Folder A", "item": [
+                  {"name": "List", "request": {"method": "GET", "url": "https://api.demo.com/users",
+                                               "header": [{"key": "Accept", "value": "application/json"}]},
+                   "event": [{"listen": "test", "script": {"exec": ["pm.test('ok')"]}}]},
+                  {"name": "Create", "request": {"method": "POST", "url": "https://api.demo.com/users",
+                                                 "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "t"}]}}}]},
+                  {"name": "Ping", "request": {"method": "GET", "url": "https://api.demo.com/ping"}}]}
+
+        cases = {}
+        cases["postman v2.1"] = _json.dumps(pm, ensure_ascii=False)
+        cases["Postman 整包 dump"] = _json.dumps(
+            {"collections": [pm], "environments": [{"name": "Dev", "values": [{"key": "base_url", "value": "https://x"}]}]},
+            ensure_ascii=False)
+        cases["Postman v1"] = _json.dumps(
+            {"id": "c", "name": "Legacy", "order": ["r1"],
+             "requests": [{"id": "r1", "name": "Old", "method": "GET", "url": "https://a.test/old",
+                           "headers": "X-A: 1\n"}], "folders": []}, ensure_ascii=False)
+        cases["Apifox apiCollection"] = _json.dumps(
+            {"apiCollection": [{"name": "F", "baseUrl": "https://af.test", "items": [
+                {"name": "af get", "api": {"method": "get", "path": "/af/users",
+                                           "parameters": {"query": [{"name": "a", "value": "1"}]}}}]}]},
+            ensure_ascii=False)
+        cases["Hoppscotch 数组"] = _json.dumps(
+            [{"name": "HS", "folders": [], "requests": [
+                {"name": "hs", "method": "GET", "endpoint": "https://hs.test/a", "params": [], "headers": []}]}],
+            ensure_ascii=False)
+        cases["Hoppscotch v2 对象"] = _json.dumps(
+            {"v": 2, "name": "HS2", "folders": [], "requests": [
+                {"name": "hs2", "method": "GET", "endpoint": "https://hs.test/b", "params": [], "headers": []}]},
+            ensure_ascii=False)
+        cases["Insomnia v4（父节点是 workspace）"] = _json.dumps(
+            {"_type": "export", "__export_format": 4, "resources": [
+                {"_id": "wrk", "_type": "workspace", "name": "WS", "parentId": None},
+                {"_id": "fld", "_type": "request_group", "name": "F", "parentId": "wrk"},
+                {"_id": "r1", "_type": "request", "name": "ins", "parentId": "fld",
+                 "method": "GET", "url": "https://ins.test/a", "headers": [], "parameters": []}]},
+            ensure_ascii=False)
+        cases["带 BOM 的 Postman"] = "\ufeff" + _json.dumps(pm, ensure_ascii=False)
+
+        for name, text in cases.items():
+            nodes, fmt, err = transfer.parse_text(text)
+            check(f"{name} 能导入且不报错", bool(nodes) and not err,
+                  f"fmt={fmt} reqs={transfer.count_requests(nodes)} err={err}")
+
+        # 环境变量文件 / cURL 给出人话
+        nodes, fmt, err = transfer.parse_text(_json.dumps({"name": "E", "values": [{"key": "a", "value": "1"}]}))
+        check("环境变量文件给出提示", not nodes and "环境变量" in err, err)
+        nodes, fmt, err = transfer.parse_text("curl https://a.test -H 'X: 1'")
+        check("cURL 引导到剪贴板导入", not nodes and "cURL" in err, err)
+
+        nodes, fmt, err = transfer.parse_text(_json.dumps(
+            {"collections": [pm], "environments": [{"name": "Dev", "values": [{"key": "k", "value": "v"}]}]}))
+        envs = transfer.environments_of(_json.dumps(
+            {"collections": [pm], "environments": [{"name": "Dev", "values": [{"key": "k", "value": "v"}]}]}))
+        check("整包 dump 能带出环境变量", len(envs) == 1 and envs[0]["name"] == "Dev"
+              and envs[0]["vars"][0]["key"] == "k")
+
+        stats = transfer.summarize(nodes)
+        # dump 会把每份集合再包一层文件夹，所以这里 folders 是 2
+        check("导入汇总统计正确",
+              stats["requests"] == 3 and stats["folders"] == 2 and stats["post"] == 1
+              and stats["auth"] == 1, str(stats))
+        plain, _f, _e = transfer.parse_text(_json.dumps(pm, ensure_ascii=False))
+        check("单份集合不额外套文件夹", transfer.summarize(plain)["folders"] == 1)
+
+        # 结果页：导入后跳到 done 并列出明细
+        dlg = TransferDialog(w.store, w)
+        dlg.show()
+        dlg._choose_source("postman")
+        dlg._load_path("/tmp/ocelot_smoke_pm.json")
+        check("识别成功后可点导入", dlg.import_btn.isEnabled() and dlg._pending is not None,
+              dlg.file_status.text())
+        dlg._do_import()
+        app.processEvents()
+        check("导入完成后停在结果页", dlg.stack.current() == "done" and dlg._title_label.text() == "导入完成")
+        check("结果页列出明细", len(dlg.done._rows) >= 4, f"{len(dlg.done._rows)} 行")
+        check("结果页隐藏返回箭头", dlg.back_btn.isHidden())
+        dlg.close()
+
+        # 标签指示器始终等于当前标签的真实矩形（启动不再压住隔壁）
+        ts = w.tabstrip
+        act = ts._active_rect()
+        check("指示器对齐当前标签",
+              abs(ts._indicator.width() - act.width()) < 0.5
+              and abs(ts._indicator.x() - act.x()) < 0.5,
+              f"{ts._indicator.width():.1f} vs {act.width():.1f}")
+
+        # 搜索框吃掉剩余宽度，紧贴导入导出按钮
+        sb = w.sidebar
+        gap = sb.transfer_btn.mapTo(sb, sb.transfer_btn.rect().topLeft()).x() - (
+            sb.search.mapTo(sb, sb.search.rect().topLeft()).x() + sb.search.width())
+        check("搜索框紧贴右侧按钮", 0 <= gap <= 12, f"gap={gap}")
+
+        # 改请求方式 → 集合树 / 标签 / store 三处同步
+        req_node = None
+
+        def find_req(nodes):
+            for n in nodes or []:
+                if n.get("type") == "request":
+                    return n
+                found = find_req(n.get("children") or [])
+                if found:
+                    return found
+            return None
+
+        req_node = find_req(w.store.collections)
+        if req_node:
+            w._open_request_obj(req_node, node_id=req_node["id"])
+            app.processEvents()
+            tab = w.current_tab()
+            w.editor.urlbar.method._choose("PATCH")     # 模拟用户在下拉里点选
+            app.processEvents()
+            node = w.store.find(req_node["id"])
+            check("改方法同步到集合树", (node or {}).get("method") == "PATCH"
+                  and ts.tab(tab["id"])["method"] == "PATCH"
+                  and tab["method"] == "PATCH")
+            w.editor.urlbar.method._choose("GET")
+            app.processEvents()
+            check("改回来后依然同步", (w.store.find(req_node["id"]) or {}).get("method") == "GET")
+        return 0
+
     def finish():
         try:
             _SERVER.shutdown()
@@ -2399,7 +2536,7 @@ def main() -> int:
 
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

@@ -1141,4 +1141,47 @@ _EN.update({
     "关闭全部": "Close all",
     "删除": "Delete",
     "新建文件夹": "New Folder",
+    # ---- 导入 / 导出结果页
+    "导入完成": "Import complete",
+    "导出完成": "Export complete",
+    "完成": "Done",
+    "在文件夹中显示": "Show in Folder",
+    "重新发送": "Send again",
+    "请求已修改 · 下面是上一次的响应": "Request changed · showing the previous response",
+    "已导入 {n} 个请求": "Imported {n} requests",
+    "来自 {fmt} · 已追加到集合列表末尾": "From {fmt} · appended to the end of your collections",
+    "已导出 {name}": "Exported {name}",
+    "文件名": "File",
+    "大小": "Size",
+    "位置": "Location",
+    "请求": "Requests",
+    "文件夹": "Folders",
+    "前置脚本": "Pre-request scripts",
+    "后置脚本": "Post-response scripts",
+    "认证配置": "Auth",
+    "环境变量": "Environments",
+    "✓ 已识别 {fmt}：{detail}": "✓ Detected {fmt}: {detail}",
+    "{n} 个请求": "{n} requests",
+    "{n} 个文件夹": "{n} folders",
+    "{n} 个{name}": "{n} {name}",
+    "{n} 套环境变量": "{n} environments",
+    "选择要导入的文件": "Choose a file to import",
+    "读取失败：{err}": "Read failed: {err}",
+    "文件里没有可导入的请求": "No importable requests in this file",
+    "无法识别的文件格式：既不是 Postman / Apifox / Hoppscotch / Insomnia 集合，也不是 OpenAPI 或 HAR":
+        "Unrecognized file: not a Postman / Apifox / Hoppscotch / Insomnia collection, nor OpenAPI or HAR",
+    "这是一条 cURL 命令，请用「从剪贴板导入」":
+        "This is a cURL command — use “Import from clipboard” instead",
+    "这是环境变量文件，不是集合；请在「设置 → 环境变量」里导入":
+        "This is an environment file, not a collection. Import it from Settings → Environments",
+    "这是环境变量文件（Postman Environment），不是集合；集合请从 Collection 导出":
+        "This is a Postman environment file, not a collection. Export the Collection instead",
+    "集合是空的：文件里没有任何请求": "The collection is empty — no requests in this file",
+    "识别为 Apifox 集合，但里面没有可导入的接口":
+        "Detected an Apifox collection, but it contains no APIs",
+    "将导出 {f} 个集合、{n} 个请求": "Exporting {f} collections, {n} requests",
+    "还没有可导出的请求：先新建或导入一个集合":
+        "Nothing to export yet — create or import a collection first",
+    "还没有可导出的请求：先新建或导入一个集合。":
+        "Nothing to export yet — create or import a collection first.",
 })

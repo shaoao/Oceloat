@@ -1,5 +1,38 @@
 # What's Changed
 
+## v1.0.29 — 2026-11-18
+
+**Fixed**
+- The selected tab pill no longer overlaps the neighbouring tab at launch. A pending
+  indicator animation kept writing a stale rectangle after the geometry had been snapped;
+  the pill now always derives from live geometry, and restoring a session no longer
+  animates once per tab.
+- Changing the request method (POST → GET) now updates the method badge in the collection
+  tree. The editor, the tab badge, the stored node and the saved file stay in sync.
+- Switching method after a request no longer throws the response away. The previous result
+  stays on screen with a slim "Request changed · showing the previous response" bar that
+  offers a **Send again** action.
+- Importing a Postman file could fail with "no importable requests": Apifox
+  `apiCollection` payloads and Insomnia exports whose requests hang under a workspace were
+  parsed as empty. Postman data dumps, Postman v1 collections, Hoppscotch v2 objects,
+  files with a UTF-8 BOM and bare single-request files are now recognized too.
+
+**Added**
+- Import / export result page: a large check, the title, and a breakdown of what was
+  brought in (collections, requests, folders, pre-request scripts, post-response scripts,
+  auth, environment variables). Export results offer **Show in Folder**.
+- The file page reports what was detected before importing (format plus counts), and the
+  sidebar reveals and expands the newly imported collection.
+- Environments travel with the collection: Postman dumps, Apifox and Insomnia environment
+  resources are imported alongside the requests.
+- Dialogs and the settings panel now blur and dim the main window behind them, and the
+  modal is pinned in the centre of its parent instead of being draggable.
+
+**Improved**
+- The collection search field fills the width up to the import / export button.
+- The export page states what will be written ("Exporting 1 collection, 5 requests") and
+  disables the rows when there is nothing to export.
+
 ## v1.0.28 — 2026-11-18
 
 **Added**

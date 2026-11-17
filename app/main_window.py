@@ -713,6 +713,7 @@ class MainWindow(QWidget):
             {"copied": "响应已复制", "redacted": "已脱敏复制（token / Cookie 已打码）"}.get(note, "响应已保存"),
             "success"))
         self.response.saveVariable.connect(self._save_env_var)
+        self.response.resendRequested.connect(self.send_current)
         self.response.docRequested.connect(self.open_doc)
         self.splitter.addWidget(self.editor)
         self.splitter.addWidget(self.response)
@@ -1047,7 +1048,8 @@ class MainWindow(QWidget):
         }
         self.tabs_data.append(tab)
         self.tabstrip.add_tab({"id": tab_id, "title": tab["title"], "method": tab["method"],
-                               "preview": preview}, activate=activate)
+                               "preview": preview}, activate=activate,
+                              animate=activate)   # 批量恢复会话时不要逐个飞胶囊
         self._sync_open_ids()
         # 恢复会话时先只建标签，最后统一加载一次 —— 否则开 8 个标签要跑 8 遍编辑器装载
         if activate:
@@ -1231,6 +1233,7 @@ class MainWindow(QWidget):
                 self.response.set_response(tab["response"])
                 self._refresh_timeline(tab["request"])
                 self.response.restore_state(tab.get("view"))
+                self.response.stale_bar.setVisible(bool(tab.get("stale")))
             else:
                 self.response.show_empty()
                 self.response.restore_state(tab.get("view"))
@@ -1286,12 +1289,14 @@ class MainWindow(QWidget):
         tab["title"] = req.get("name") or "Untitled Request"
         tab["method"] = req.get("method", "GET")
         tab["dirty"] = True
-        # 请求一改，上一次响应就作废：绝不让旧图片 / 旧地址留在结果区误导用户。
-        had_response = tab.get("response") is not None or self.response.response is not None
-        tab["response"] = None
-        tab["view"] = None
-        if had_response:
-            self.response.show_stale()
+        # 请求方式改了，集合树里的徽标也要跟着变（不然一边 POST 一边显示 GET）
+        if tab.get("node_id"):
+            self.sidebar.set_node_method(tab["node_id"], tab["method"])
+        # 请求改了不销毁上一次的响应：很多人只是把 POST 改成 GET 想对照结果，
+        # 一改结果就全没了。保留内容 + 顶部一条「上一次的结果」提示，明确不误导。
+        if tab.get("response") is not None or self.response.response is not None:
+            tab["stale"] = True
+            self.response.mark_stale()
         # 用户一旦编辑预览标签就把它固定下来（VSCode 行为）
         if tab.get("preview"):
             tab["preview"] = False
@@ -1380,6 +1385,7 @@ class MainWindow(QWidget):
         tab = self._tab(tab_id) if tab_id else self.current_tab()
         if tab is not None:
             tab["response"] = resp
+            tab["stale"] = False
             tab["view"] = self.response.view_state() if tab_id == self.tabstrip.current() else None
             # 真实请求里的脚本输出回填到两个脚本页，用户不必再猜日志去哪了
             logs = list(getattr(self.client, "scriptLogs", []) or [])
@@ -1718,6 +1724,12 @@ class MainWindow(QWidget):
         self._on_store_changed()
         self._persist()
         self.toast.show_message(i18n.trf("已导入 {n} 个请求", n=count), "success")
+        # 导入完直接把新集合滚到眼前并展开，省得用户自己在树里找
+        if count:
+            newest = (self.store.collections or [None])[-1]
+            if newest:
+                self.sidebar.reveal(newest.get("id"))
+                self.sidebar.expand_node(newest.get("id"))
         self._cloud_autosync()
 
     def show_code(self) -> None:

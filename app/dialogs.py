@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
 
 from PyQt6.QtWidgets import QFileDialog
 
-from . import i18n, icons, shortcuts as sc
+from . import backdrop, i18n, icons, shortcuts as sc
 from .anim import stop as _anim_stop
 from .code_editor import CodeView
 from .codegen import LANGUAGES
@@ -71,6 +71,7 @@ class GlassDialog(QDialog):
         self._root.setContentsMargins(0, 0, 0, 0)
         self._root.setSpacing(0)
         self._drag_pos: Optional[QPoint] = None
+        self._backdrop_on = False
 
         self.title = title
         self.header = QWidget()
@@ -90,7 +91,7 @@ class GlassDialog(QDialog):
         self.body = QWidget()
         self._root.addWidget(self.body, 1)
 
-    # -------------------------------------------------- 绘制 / 拖动
+    # -------------------------------------------------- 绘制
     def paintEvent(self, _e):
         t = theme()
         p = QPainter(self)
@@ -102,11 +103,8 @@ class GlassDialog(QDialog):
         p.end()
 
     def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton and e.position().y() < 46:
-            handle = self.windowHandle()
-            if handle is not None:
-                handle.startSystemMove()
-                return
+        # 标题栏不再拖动窗口：模态框固定在父窗口正中，跟 macOS 的系统弹窗一致，
+        # 拖跑了反而会挡住正在看的内容。
         super().mousePressEvent(e)
 
     def keyPressEvent(self, e):
@@ -124,7 +122,24 @@ class GlassDialog(QDialog):
             if nav is not None:
                 nav.sync_width()
                 nav.update()
+        # 背景高斯模糊：把父窗口当前画面模糊 + 压暗，模态感更强、层次更清楚
+        if not self._backdrop_on:
+            self._backdrop_on = True
+            backdrop.acquire(self)
         fade_in(self, 140)
+
+    def _drop_backdrop(self) -> None:
+        if self._backdrop_on:
+            self._backdrop_on = False
+            backdrop.release(self)
+
+    def hideEvent(self, e):
+        self._drop_backdrop()
+        super().hideEvent(e)
+
+    def done(self, result: int) -> None:
+        self._drop_backdrop()
+        super().done(result)
 
 
 # ---------------------------------------------------------------- 输入框对话框
@@ -2229,6 +2244,8 @@ class TransferRow(QWidget):
         super().leaveEvent(e)
 
     def mouseReleaseEvent(self, e):  # noqa: N802
+        if not self.isEnabled():
+            return
         if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(
                 e.position().toPoint()):
             self.clicked.emit()
@@ -2249,7 +2266,8 @@ class TransferRow(QWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(bg)
             p.drawRoundedRect(r, 8, 8)
-        col = t.danger if self._danger else t.text_dim
+        enabled = self.isEnabled()
+        col = t.danger if self._danger else (t.text_dim if enabled else t.text_faint)
         pm = icons.pixmap(self._icon, col, 17, 1.5)
         p.drawPixmap(QPointF(12, (self.height() - 17) / 2), pm)
         left = 40
@@ -2339,6 +2357,154 @@ class DropZone(QWidget):
         p.end()
 
 
+def _short_path(path: str, keep: int = 42) -> str:
+    """太长的路径中间省略，保证一行放得下（悬停能看到完整值）。"""
+    if len(path) <= keep:
+        return path
+    head = path[: max(6, keep // 3)]
+    tail = path[-max(8, keep // 2):]
+    return head.rstrip("/") + "/…/" + tail.lstrip("/")
+
+
+def _size_text(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            if unit == "B":
+                return f"{int(value)} B"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size} B"
+
+
+class DonePage(QWidget):
+    """导入 / 导出的结果页：大对勾 + 明细清单 + 主按钮。
+
+    比单纯一行「✓ 已导入」有用多了 —— 用户能一眼确认到底导进来了什么。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rows: List[QWidget] = []
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 18, 24, 16)
+        lay.setSpacing(0)
+
+        self.badge = _SuccessBadge()
+        lay.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addSpacing(12)
+
+        self.title = Label("", 15, theme().text, weight=QFont.Weight.DemiBold)
+        self.title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(self.title)
+        lay.addSpacing(4)
+        self.sub = Label("", 11.3, theme().text_faint)
+        self.sub.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.sub.setWordWrap(True)
+        lay.addWidget(self.sub)
+        lay.addSpacing(16)
+
+        self.card = QWidget()
+        self.card_lay = QVBoxLayout(self.card)
+        self.card_lay.setContentsMargins(14, 4, 14, 4)
+        self.card_lay.setSpacing(0)
+        self.card.setStyleSheet(
+            f"background: {S(theme().panel_alt)}; border-radius: 10px;")
+        lay.addWidget(self.card)
+        lay.addStretch(1)
+
+        self.primary = Button("完成", "check", kind="primary", height=32,
+                              padding=20, font_size=12.2)
+        self.secondary = Button("返回", "chevron_left", kind="ghost", height=32,
+                                padding=14, font_size=12.2)
+        self.secondary.hide()
+        lay.addWidget(HBox(1, self.secondary, self.primary, spacing=8))
+
+    # -------------------------------------------------- 内容
+    def reset(self, title: str, subtitle: str, primary: str,
+              secondary: Optional[str] = None) -> None:
+        self.title.setText(title)
+        self.sub.setText(subtitle)
+        self.primary.setText(primary)
+        if secondary:
+            self.secondary.setText(secondary)
+            self.secondary.show()
+        else:
+            self.secondary.hide()
+        for row in self._rows:
+            row.setParent(None)
+            row.deleteLater()
+        self._rows = []
+        self.badge.restart()
+
+    def add_row(self, icon_name: str, name: str, value: str) -> None:
+        if self._rows:
+            self.card_lay.addWidget(Divider())
+        row = QWidget()
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(2, 7, 2, 7)
+        rl.setSpacing(9)
+        icon = QLabel()
+        icon.setFixedSize(14, 14)
+        icon.setPixmap(icons.pixmap(icon_name, theme().text_faint, 13, 1.6))
+        label = Label(name, 11.8, theme().text_dim)
+        value_label = Label(value, 12, theme().text, mono_font=True,
+                            weight=QFont.Weight.DemiBold)
+        rl.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        rl.addWidget(label, 1, Qt.AlignmentFlag.AlignVCenter)
+        rl.addWidget(value_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.card_lay.addWidget(row)
+        self._rows.append(row)
+
+
+class _SuccessBadge(QWidget):
+    """圆形底色里的对勾；出现时做一次轻微的缩放淡入。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(58, 58)
+        self._scale = 1.0
+        self._alpha = 1.0
+        self._anim: Optional[QVariantAnimation] = None
+
+    def restart(self) -> None:
+        _anim_stop(self._anim)
+        anim = QVariantAnimation(self)
+        anim.setStartValue(0.72)
+        anim.setEndValue(1.0)
+        anim.setDuration(240)
+        anim.setEasingCurve(QEasingCurve.Type.OutBack)
+
+        def _on(v):
+            self._scale = float(v)
+            self.update()
+
+        anim.valueChanged.connect(_on)
+        self._anim = anim
+        anim.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def paintEvent(self, _e):
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        side = 54 * self._scale
+        r = QRectF((self.width() - side) / 2, (self.height() - side) / 2, side, side)
+        fill = QColor(C(t.success))
+        fill.setAlpha(30)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(fill)
+        p.drawEllipse(r)
+        edge = QColor(C(t.success))
+        edge.setAlpha(110)
+        p.setPen(QPen(edge, 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(r.adjusted(0.5, 0.5, -0.5, -0.5))
+        pm = icons.pixmap("check", t.success, int(26 * self._scale), 2.6)
+        p.drawPixmap(QPointF(self.width() / 2 - pm.width() / 2,
+                             self.height() / 2 - pm.height() / 2), pm)
+        p.end()
+
+
 class TransferDialog(GlassDialog):
     """集合的导入 / 导出：一个对话框里完成选择来源、选文件、导出。
 
@@ -2356,6 +2522,8 @@ class TransferDialog(GlassDialog):
         self._pending: Optional[Tuple[List[Dict[str, Any]], str, str]] = None
         self._import_sources = IMPORT_SOURCES
         self._export_targets = EXPORT_TARGETS
+        self._done_title = "完成"
+        self._done_height = 470
 
         # 头部：返回 + 标题
         self.back_btn = icon_button("chevron_left", "返回", 24, 13)
@@ -2373,6 +2541,7 @@ class TransferDialog(GlassDialog):
         self.stack.add("import", self._build_import())
         self.stack.add("file", self._build_file())
         self.stack.add("export", self._build_export())
+        self.stack.add("done", self._build_done())
         self.stack.set_current("import", animate=False)
         self.setAcceptDrops(True)
 
@@ -2400,6 +2569,12 @@ class TransferDialog(GlassDialog):
         export_row.clicked.connect(lambda: self._show_page("export"))
         lay.addWidget(export_row)
         return page
+
+    def _build_done(self) -> QWidget:
+        self.done = DonePage()
+        self.done.primary.clicked.connect(self.accept)
+        self.done.secondary.clicked.connect(self._go_back)
+        return self.done
 
     @staticmethod
     def _source_icon(key: str) -> str:
@@ -2463,10 +2638,16 @@ class TransferDialog(GlassDialog):
     def _load_path(self, path: str) -> None:
         from pathlib import Path
 
-        from .transfer import count_requests, parse_text
+        from .transfer import FORMAT_LABELS, environments_of, parse_text, summarize
 
         try:
             text = Path(path).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            try:
+                text = Path(path).read_text(encoding="utf-8-sig")
+            except Exception as exc:  # noqa: BLE001
+                self._fail(i18n.trf("读取失败：{err}", err=exc))
+                return
         except Exception as exc:  # noqa: BLE001
             self._fail(i18n.trf("读取失败：{err}", err=exc))
             return
@@ -2474,18 +2655,23 @@ class TransferDialog(GlassDialog):
         if err or not nodes:
             self._fail(err or i18n.tr("文件里没有可导入的请求"))
             return
-        total = count_requests(nodes)
+        stats = summarize(nodes)
+        envs = environments_of(text)
         self._pending = (nodes, fmt, text)
         self.zone.filename = Path(path).name
         self.zone.update()
-        expected = self._source
-        note = ""
-        if expected in ("ocelot", "postman", "apifox", "hoppscotch", "insomnia",
-                        "openapi", "har") and fmt != expected:
-            note = i18n.trf("（识别为 {fmt} 格式，已按实际格式解析）", fmt=fmt)
-        self.file_status.setText(i18n.trf(
-            "✓ 已解析：{n} 个请求 · {size} 字节 {note}",
-            n=total, size=len(text.encode("utf-8")), note=note))
+        label = FORMAT_LABELS.get(fmt, fmt)
+        bits = [i18n.trf("{n} 个请求", n=stats["requests"])]
+        if stats["folders"]:
+            bits.append(i18n.trf("{n} 个文件夹", n=stats["folders"]))
+        for key, name in (("pre", "前置脚本"), ("post", "后置脚本"),
+                          ("auth", "认证"), ("cookies", "Cookies")):
+            if stats.get(key):
+                bits.append(i18n.trf("{n} 个{name}", n=stats[key], name=i18n.tr(name)))
+        if envs:
+            bits.append(i18n.trf("{n} 套环境变量", n=len(envs)))
+        self.file_status.setText(i18n.trf("✓ 已识别 {fmt}：{detail}",
+                                          fmt=label, detail=" · ".join(bits)))
         self.file_status.setStyleSheet(f"color: {theme().success}; background: transparent;")
         self.import_btn.setEnabled(True)
 
@@ -2498,27 +2684,52 @@ class TransferDialog(GlassDialog):
     def _do_import(self) -> None:
         if self._pending is None:
             return
-        from .transfer import count_requests, environments_of
+        from .transfer import FORMAT_LABELS, environments_of, summarize
 
         nodes, fmt, text = self._pending
         self.store.collections.extend(nodes)
-        # Ocelot JSON 里带的环境变量也一起还原（同名环境跳过，不覆盖现有配置）
-        if fmt == "ocelot":
-            existing = {e.get("name") for e in self.store.environments}
-            for env in environments_of(text):
-                if env.get("name") in existing:
-                    continue
-                env["id"] = uid()
-                self.store.environments.append(env)
+        # 随文件带回来的环境变量一起还原（同名环境跳过，不覆盖现有配置）
+        added_envs = 0
+        existing = {e.get("name") for e in self.store.environments}
+        for env in environments_of(text):
+            if env.get("name") in existing:
+                continue
+            env["id"] = uid()
+            self.store.environments.append(env)
+            existing.add(env.get("name"))
+            added_envs += 1
         self._pending = None
         self.store.save()
-        total = count_requests(nodes)
-        self.imported.emit(total)
-        self.file_status.setText(i18n.trf("✓ 已导入 {n} 个请求", n=total))
-        self.file_status.setStyleSheet(f"color: {theme().success}; background: transparent;")
-        self.import_btn.setEnabled(False)
-        self.zone.filename = ""
-        self.zone.update()
+        stats = summarize(nodes)
+        self.imported.emit(stats["requests"])
+        self._show_import_done(stats, added_envs, FORMAT_LABELS.get(fmt, fmt),
+                               collections=len(nodes))
+
+    def _show_import_done(self, stats: Dict[str, int], envs: int, fmt_label: str,
+                          collections: int = 1) -> None:
+        rows = [("folder", "集合", str(collections)),
+                ("grid", "请求", str(stats["requests"]))]
+        if stats["folders"]:
+            rows.append(("folder", "文件夹", str(stats["folders"])))
+        if stats["pre"]:
+            rows.append(("code", "前置脚本", str(stats["pre"])))
+        if stats["post"]:
+            rows.append(("code", "后置脚本", str(stats["post"])))
+        if stats["auth"]:
+            rows.append(("lock", "认证配置", str(stats["auth"])))
+        if stats["cookies"]:
+            rows.append(("grid", "Cookies", str(stats["cookies"])))
+        if envs:
+            rows.append(("layers", "环境变量", str(envs)))
+        self._done_title = i18n.tr("导入完成")
+        self._done_height = 290 + len(rows) * 30
+        self.done.reset(i18n.trf("已导入 {n} 个请求", n=stats["requests"]),
+                        i18n.trf("来自 {fmt} · 已追加到集合列表末尾", fmt=fmt_label),
+                        i18n.tr("完成"))
+        self.done.secondary.hide()
+        for icon_name, name, value in rows:
+            self.done.add_row(icon_name, i18n.tr(name), value)
+        self._show_page("done")
 
     def _import_clipboard(self) -> None:
         """剪贴板里的 JSON / cURL 直接导入，省掉存文件这一步。"""
@@ -2575,16 +2786,22 @@ class TransferDialog(GlassDialog):
         outer = QVBoxLayout(page)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+        # 顶部一行：这次会导出什么（几个集合、几个请求），心里有数再点
+        self.export_summary = Label("", 11.2, theme().text_faint)
+        self.export_summary.setContentsMargins(16, 8, 16, 2)
+        outer.addWidget(self.export_summary)
         host = QWidget()
         lay = QVBoxLayout(host)
-        lay.setContentsMargins(14, 10, 14, 12)
+        lay.setContentsMargins(14, 4, 14, 12)
         lay.setSpacing(2)
+        self.export_rows = []
         for key, title, desc in self._export_targets:
             row = TransferRow("grid" if key == "ocelot" else
                               ("code" if key.startswith("openapi") else "download"),
                               title, desc)
             row.clicked.connect(lambda k=key: self._do_export(k))
             lay.addWidget(row)
+            self.export_rows.append(row)
         lay.addStretch(1)
         scroll = SmoothScrollArea()
         scroll.setWidget(host)
@@ -2621,6 +2838,66 @@ class TransferDialog(GlassDialog):
         outer.addWidget(bottom)
         return page
 
+    def _refresh_export_summary(self) -> None:
+        from .transfer import count_requests
+
+        total = count_requests(self.store.collections)
+        folders = len(self.store.collections)
+        if total:
+            self.export_summary.setText(i18n.trf(
+                "将导出 {f} 个集合、{n} 个请求", f=folders, n=total))
+            for row in getattr(self, "export_rows", []):
+                row.setEnabled(True)
+                row.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.export_summary.setText(i18n.tr("还没有可导出的请求：先新建或导入一个集合"))
+            for row in getattr(self, "export_rows", []):
+                row.setEnabled(False)
+                row.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def _show_export_done(self, path: str, size: int, key: str) -> None:
+        import os
+        from pathlib import Path
+
+        from .transfer import EXPORT_TARGETS
+
+        name = Path(path).name
+        target = next((t for k, t, _d in EXPORT_TARGETS if k == key), "")
+        self._done_title = i18n.tr("导出完成")
+        self._done_height = 396
+        self.done.reset(i18n.trf("已导出 {name}", name=name),
+                        i18n.trf("{target} · {size}", target=i18n.tr(target),
+                                 size=_size_text(size)),
+                        i18n.tr("完成"), i18n.tr("在文件夹中显示"))
+        self.done.secondary.show()
+        self.done.secondary.set_icon("folder")
+        try:
+            self.done.secondary.clicked.disconnect()
+        except TypeError:
+            pass
+        self.done.secondary.clicked.connect(lambda: self._reveal(path))
+        for icon_name, label, value in (
+            ("file", i18n.tr("文件名"), name),
+            ("download", i18n.tr("大小"), _size_text(size)),
+            ("folder", i18n.tr("位置"), _short_path(str(Path(path).parent))),
+        ):
+            self.done.add_row(icon_name, label, value)
+        self._show_page("done")
+
+    def _reveal(self, path: str) -> None:
+        import subprocess
+        import sys
+
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            elif os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", path])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except Exception:      # noqa: BLE001
+            pass
+
     def _do_export(self, key: str) -> None:
         from .transfer import EXT, to_har, to_ocelot, to_openapi, to_postman, to_yaml
 
@@ -2649,18 +2926,20 @@ class TransferDialog(GlassDialog):
             self.export_status.setText(i18n.trf("✕ 导出失败：{err}", err=exc))
             self.export_status.setStyleSheet(f"color: {theme().danger}; background: transparent;")
             return
-        self.export_status.setText(i18n.trf("✓ 已导出到 {path} · {size} 字节",
-                                            path=path, size=len(text.encode("utf-8"))))
-        self.export_status.setStyleSheet(f"color: {theme().success}; background: transparent;")
+        self._show_export_done(path, len(text.encode("utf-8")), key)
 
     # -------------------------------------------------- 导航
     def _show_page(self, key: str) -> None:
         self.stack.set_current(key)
-        self.back_btn.setVisible(key != "import")
-        titles = {"import": "导入导出", "file": "导入集合", "export": "导出集合"}
+        self.back_btn.setVisible(key not in ("import", "done"))
+        titles = {"import": "导入导出", "file": "导入集合", "export": "导出集合",
+                  "done": self._done_title or "完成"}
         self._title_label.setText(i18n.tr(titles.get(key, "集合")))
         # 高度跟着内容走：列表页最高，选文件 / 导出页短一些，免得中间空一大块
-        height = {"import": 640, "file": 396, "export": 480}.get(key, 620)
+        if key == "export":
+            self._refresh_export_summary()
+        height = {"import": 640, "file": 402, "export": 486,
+                  "done": self._done_height}.get(key, 620)
         if self.height() != height:
             self.resize(self.width(), height)
 
