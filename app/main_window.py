@@ -608,7 +608,9 @@ class MainWindow(QWidget):
         i18n.set_language(store.settings.get("language", "zh"), notify=False)
         i18n.bus().languageChanged.connect(self._retranslate)
         if i18n.current() == "en":
-            i18n.apply_language(self)
+            # 走完整一遍重翻译：只 apply_language 不会重算自绘控件的尺寸，
+            # 英文比中文长的那几处（Collections / History）会被裁掉半截。
+            self._retranslate("en")
 
     def _retranslate(self, _lang: str) -> None:
         i18n.apply_language(self)
@@ -616,7 +618,9 @@ class MainWindow(QWidget):
         from .widgets import Button, SegmentedTabs
 
         for w in self.findChildren(QWidget):
-            if isinstance(w, (SegmentedTabs, Button)):
+            if isinstance(w, SegmentedTabs):
+                w.sync_size()
+            elif isinstance(w, Button):
                 w.updateGeometry()
                 w.update()
             fn = getattr(w, "refresh_theme", None)
@@ -965,7 +969,7 @@ class MainWindow(QWidget):
     def _sync_mock_state(self) -> None:
         """服务在对话框里启动 / 停止后，标题栏和提示保持同步。"""
         if self.mock.running:
-            self.toast.show_message(f"本地 Mock 服务运行在 {self.mock.base}", "success")
+            self.toast.show_message(i18n.trf("本地 Mock 服务运行在 {url}", url=self.mock.base), "success")
 
     def _use_mock(self, item: Dict[str, Any]) -> None:
         path = (item.get("u") or "").rstrip("/").split("/")[-1] or "mock"
@@ -1382,7 +1386,7 @@ class MainWindow(QWidget):
         self.store.save()
         self.env_pill.updateGeometry()
         self.env_pill.update()
-        self.toast.show_message(f"已保存变量 {{{{{name}}}}}", "success")
+        self.toast.show_message(i18n.trf("已保存变量 {{{name}}}", name=name), "success")
 
     def _persist(self) -> None:
         self.store.settings["sidebar_width"] = self._sidebar_target
@@ -1588,7 +1592,7 @@ class MainWindow(QWidget):
             self.toast.show_message(err, "error")
             return
         self.sidebar.refresh()
-        self.toast.show_message(f"已导入 {count} 个集合节点", "success")
+        self.toast.show_message(i18n.trf("已导入 {n} 个集合节点", n=count), "success")
 
     def export_collection(self) -> None:
         from .importer import export_collection
@@ -1599,9 +1603,9 @@ class MainWindow(QWidget):
             return
         try:
             count = export_collection(self.store, path)
-            self.toast.show_message(f"已导出 {count} 个集合", "success")
+            self.toast.show_message(i18n.trf("已导出 {n} 个集合", n=count), "success")
         except Exception as exc:
-            self.toast.show_message(f"导出失败：{exc}", "error")
+            self.toast.show_message(i18n.trf("导出失败：{err}", err=exc), "error")
 
     def show_code(self) -> None:
         tab = self.current_tab()
@@ -1799,7 +1803,7 @@ class MainWindow(QWidget):
         ok, _msg = self.mock.start(cfg.get("routes") or [], cfg.get("port") or 8787,
                                    bool(cfg.get("fallback_echo")))
         if ok:
-            self.toast.show_message(f"本地 Mock 服务已在 {self.mock.base} 运行", "success")
+            self.toast.show_message(i18n.trf("本地 Mock 服务已在 {port} 运行", port=self.mock.base), "success")
 
     def _next_tab(self) -> None:
         ids = self.tabstrip.ids()

@@ -12,6 +12,7 @@ import shlex
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlsplit
 
+from . import i18n
 from .store import uid
 
 
@@ -79,7 +80,7 @@ def parse_curl(cmd: str) -> Dict[str, Any]:
         if tok.startswith("--") and "=" in tok:
             return tok.split("=", 1)[1], idx
         if idx + 1 >= len(tokens):
-            raise CurlParseError(f"{name} 后面缺少参数")
+            raise CurlParseError(i18n.trf("{flag} 后面缺少参数", flag=name))
         return tokens[idx + 1], idx + 1
 
     while i < len(tokens):
@@ -146,7 +147,7 @@ def parse_curl(cmd: str) -> Dict[str, Any]:
                         value = tokens[i + 1]
                         i += 1
                     else:
-                        raise CurlParseError(f"-{ch} 后面缺少参数")
+                        raise CurlParseError(i18n.trf("-{flag} 后面缺少参数", flag=ch))
                     took_value = True
                     c = ch.lower()
                     if c == "x":

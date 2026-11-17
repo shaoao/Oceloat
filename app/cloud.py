@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+from . import i18n
+
 import json
 import time
 import urllib.error
@@ -109,7 +111,7 @@ class TursoClient:
                 raise CloudError("地址不对（404），确认是 https://<库名>-<组织>.turso.io") from exc
             raise CloudError(f"HTTP {exc.code} {detail}".strip()) from exc
         except urllib.error.URLError as exc:
-            raise CloudError(f"连不上：{exc.reason}") from exc
+            raise CloudError(i18n.trf("连不上：{err}", err=exc.reason)) from exc
         except TimeoutError as exc:
             raise CloudError("连接超时，检查网络或地址") from exc
         try:
@@ -138,8 +140,8 @@ class TursoClient:
         rows = self._rows(self._post([("SELECT 1", [])]))
         ms = int((time.perf_counter() - started) * 1000)
         if not rows:
-            return False, "连上了但没返回结果", ms
-        return True, f"连接正常 · {ms} ms", ms
+            return False, i18n.tr("连上了但没返回结果"), ms
+        return True, i18n.trf("连接正常 · {ms} ms", ms=ms), ms
 
     def ensure_table(self) -> None:
         self._post([(

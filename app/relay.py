@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from . import i18n
+
 import hashlib
 import json
 import urllib.error
@@ -155,12 +157,12 @@ class RelayClient(QObject):
                 text = json.loads(text).get("error") or text
             except Exception:  # noqa: BLE001
                 pass
-            self.failed.emit(f"在线节点请求失败：{text or reply.errorString()}")
+            self.failed.emit(i18n.trf("在线节点请求失败：{err}", err=text or reply.errorString()))
             return
         try:
             data = json.loads(raw.decode("utf-8", "replace"))
         except Exception as exc:  # noqa: BLE001
-            self.failed.emit(f"节点返回无法解析：{exc}")
+            self.failed.emit(i18n.trf("节点返回无法解析：{err}", err=exc))
             return
 
         if self._stage == "challenge":

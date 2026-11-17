@@ -432,7 +432,7 @@ class FileCell(QWidget):
             p.setPen(C(t.text_faint))
             p.drawText(QRectF(24, 0, self.width() - 32, self.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                       "点击选择文件…")
+                       i18n.tr("点击选择文件…"))
         p.end()
 
 

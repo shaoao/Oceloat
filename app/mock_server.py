@@ -21,6 +21,8 @@
 """
 from __future__ import annotations
 
+from . import i18n
+
 import json
 import random
 import re
@@ -395,8 +397,10 @@ class _Handler(BaseHTTPRequestHandler):
             status = 404
             self._json(status, {
                 "error": "no_mock_route",
-                "message": f"没有找到 {self.command} {raw_path} 的 Mock 规则",
-                "hint": "在 Ocelot「Mock 服务」里新建一条，或把路径写成 /api/users/* 做前缀匹配",
+                "message": i18n.trf("没有找到 {method} {path} 的 Mock 规则",
+                                    method=self.command, path=raw_path),
+                "hint": i18n.tr("在 Ocelot「Mock 服务」里新建一条，"
+                                "或把路径写成 /api/users/* 做前缀匹配"),
                 "routes": sorted(f"{m} {p}" for (m, p) in table),
             })
             if mock is not None:
@@ -588,26 +592,27 @@ class MockServer:
             httpd = _MockHTTPServer(("127.0.0.1", max(0, port)), _Handler)
         except OSError as exc:
             if not port:
-                return False, f"启动失败：{exc}"
+                return False, i18n.trf("启动失败：{err}", err=exc)
             # 端口被别人的进程占着。如果对方也是 Ocelot，说明另一个实例在跑 ——
             # 这时候最忌「默默换端口」，用户会以为 8787 是自己这个服务。
             other = self._probe_ocelot(port)
             try:
                 httpd = _MockHTTPServer(("127.0.0.1", 0), _Handler)
             except OSError:
-                return False, f"启动失败：{exc}"
+                return False, i18n.trf("启动失败：{err}", err=exc)
             if other:
-                note = (f"端口 {port} 已被另一个 Ocelot Mock 服务占用，"
-                        f"本次改用 {httpd.server_address[1]}")
+                note = i18n.trf("端口 {port} 已被另一个 Ocelot Mock 服务占用，本次改用 {alt}",
+                                port=port, alt=httpd.server_address[1])
             else:
-                note = f"端口 {port} 已被其它程序占用，本次改用 {httpd.server_address[1]}"
+                note = i18n.trf("端口 {port} 已被其它程序占用，本次改用 {alt}",
+                                port=port, alt=httpd.server_address[1])
         httpd.daemon_threads = True
         httpd.ocelot = self            # type: ignore[attr-defined]
         self._httpd = httpd
         self.port = httpd.server_address[1]
         self._thread = threading.Thread(target=self._serve, name="ocelot-mock", daemon=True)
         self._thread.start()
-        return True, note or f"已启动 · {self.base}"
+        return True, note or i18n.trf("已启动 · {url}", url=self.base)
 
     @staticmethod
     def _probe_ocelot(port: int, timeout: float = 0.6) -> bool:

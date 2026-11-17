@@ -66,6 +66,36 @@ class Menu(QMenu):
                             | Qt.WindowType.FramelessWindowHint
                             | Qt.WindowType.NoDropShadowWindowHint)
 
+    # -------------------------------------------------- 语言
+    def localize(self) -> None:
+        """弹出前把条目文案过一遍 tr()。
+
+        菜单都是一次性构建的（右键菜单、标题栏菜单），不走 apply_language，
+        所以在显示这一刻统一翻译最省事：原文记在 action 属性上，来回切换不失真。
+        """
+        for act in self.actions():
+            text = act.text()
+            if not text:
+                continue
+            src = act.property("i18n_src")
+            if src is None:
+                act.setProperty("i18n_src", text)
+                src = text
+            act.setText(i18n.tr(src))
+            sub = act.menu()
+            if sub is not None:
+                localize = getattr(sub, "localize", None)
+                if callable(localize):
+                    localize()
+
+    def exec(self, *args, **kwargs):  # noqa: A003
+        self.localize()
+        return super().exec(*args, **kwargs)
+
+    def popup(self, *args, **kwargs):
+        self.localize()
+        return super().popup(*args, **kwargs)
+
 
 class Quote(QWidget):
     """引用块：一条强调色竖线 + 极淡底，用于文档里的提示/说明。"""
@@ -567,7 +597,7 @@ class ChoiceMenu(QWidget):
         self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
                             | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self._items = list(items)
+        self._items = [list(it) for it in items]
         self._current = current
         self._hover = -1
         self.setMouseTracking(True)
@@ -582,6 +612,7 @@ class ChoiceMenu(QWidget):
     def popup(self, global_pos) -> None:
         from PyQt6.QtGui import QGuiApplication
 
+        self.localize()
         screen = QGuiApplication.screenAt(global_pos) or QGuiApplication.primaryScreen()
         geo = screen.availableGeometry()
         x = min(global_pos.x(), geo.right() - self.width() - 6)
@@ -601,6 +632,29 @@ class ChoiceMenu(QWidget):
     def _row_at(self, y: float) -> int:
         i = int((y - self.PAD) // self.ROW_H)
         return i if 0 <= i < len(self._items) else -1
+
+    def localize(self) -> None:
+        """把菜单项文案按当前语言翻一遍。
+
+        菜单是自绘的，走不了 i18n.apply_language（那套只管 QLabel / QAbstractButton），
+        所以这里在弹出前自己翻一次；hint（右侧的补充说明）同样要翻。
+        原文记在 _src_items 里，来回切语言不会把英文当成原文再翻一遍。
+        """
+        from .i18n import tr
+
+        src = getattr(self, "_src_items", None)
+        if src is None:
+            src = [tuple(it) for it in self._items]
+            self._src_items = src
+        for orig, item in zip(src, self._items):
+            if len(orig) >= 2 and isinstance(orig[1], str):
+                item[1] = tr(orig[1])
+            if len(orig) >= 4 and isinstance(orig[3], str):
+                item[3] = tr(orig[3])
+        self.update()
+
+    def items(self) -> List[Tuple[str, str, Optional[str], Optional[str]]]:
+        return [tuple(it) for it in self._items]
 
     def mouseMoveEvent(self, e):
         if not self.rect().contains(e.position().toPoint()):
@@ -693,12 +747,25 @@ class SegmentedTabs(QWidget):
         from .i18n import tr
         return tr(item["label"])
 
+    def sync_size(self) -> None:
+        """按当前语言重新量宽度。
+
+        控件是 Fixed 策略，宽度取 sizeHint；语言一换（「集合 / 历史」变成
+        Collections / History）文字长度就变了，父布局不会自己重排，
+        结果第二个标签被裁掉半截 —— 所以这里主动把尺寸钉到新的 sizeHint。
+        """
+        self.updateGeometry()
+        want = self.sizeHint().width()
+        if want and (self.minimumWidth() != want or self.maximumWidth() != want):
+            self.setFixedWidth(want)
+        self._snap_indicator()
+
     # -------------------------------------------------- API
     def set_label(self, key: str, label: str) -> None:
         for item in self._items:
             if item["key"] == key and item["label"] != label:
                 item["label"] = label
-                self.updateGeometry()
+                self.sync_size()
                 self.update()
                 return
 
@@ -707,7 +774,7 @@ class SegmentedTabs(QWidget):
             if item["key"] == key:
                 if item["badge"] != count:
                     item["badge"] = count
-                    self.updateGeometry()
+                    self.sync_size()
                     self.update()
                 return
 
@@ -777,7 +844,7 @@ class SegmentedTabs(QWidget):
 
     def showEvent(self, e):  # noqa: N802
         super().showEvent(e)
-        self._snap_indicator()
+        self.sync_size()
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
@@ -1058,11 +1125,28 @@ class Label(QLabel):
     def __init__(self, text: str = "", size: float = 12.5, color=None,
                  weight: QFont.Weight = QFont.Weight.Normal, mono_font: bool = False,
                  parent=None, spacing: float = 0.0):
-        super().__init__(text, parent)
+        super().__init__("", parent)
         self.setFont(mono(size, weight, spacing) if mono_font else font(size, weight, spacing))
         self._token = infer_token(color)
         self._raw = color
+        self.setText(text)
         self.refresh_theme()
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        """写入时就把中文原文记下来并显示译文。
+
+        页面里的文案大多在控件构造那一刻写进来 —— 如果界面已经是英文，
+        apply_language 那次遍历早就跑完了，晚造出来的这一批就永远停在中英混排。
+        在 setText 这一步翻译，创建顺序就无所谓了。
+        """
+        if not isinstance(text, str):
+            return super().setText(text)
+        src = self.property("i18n_src_text")
+        # apply_language 回写的是译文，别把它当成新原文存下来
+        if not (src and text == i18n.tr(src)):
+            self.setProperty("i18n_src_text", text)
+            src = text
+        super().setText(i18n.tr(src or text))
 
     def refresh_theme(self) -> None:
         col = getattr(theme(), self._token) if self._token else self._raw
@@ -1105,7 +1189,10 @@ class Pill(QWidget):
 
     def sizeHint(self) -> QSize:  # noqa: N802
         fm = QFontMetricsF(self._font)
-        return QSize(int(fm.horizontalAdvance(self._text) + self._pad * 2), self.height())
+        return QSize(int(fm.horizontalAdvance(self._title()) + self._pad * 2), self.height())
+
+    def _title(self) -> str:
+        return i18n.tr(self._text) if isinstance(self._text, str) else str(self._text)
 
     def paintEvent(self, _e):
         t = theme()
@@ -1120,7 +1207,7 @@ class Pill(QWidget):
         p.drawRoundedRect(r, self._radius, self._radius)
         p.setFont(self._font)
         p.setPen(col)
-        p.drawText(r, int(Qt.AlignmentFlag.AlignCenter), self._text)
+        p.drawText(r, int(Qt.AlignmentFlag.AlignCenter), self._title())
         p.end()
 
 
@@ -1232,7 +1319,7 @@ class FindBar(QWidget):
         super().__init__(parent)
         self.setFixedHeight(34)
         self._edit = QLineEdit()
-        self._edit.setPlaceholderText("在响应中查找…")
+        i18n.placeholder(self._edit, "在响应中查找…")
         self._edit.setFont(font(12))
         self._edit.setFixedHeight(24)
         self._edit.setStyleSheet(
@@ -1339,6 +1426,10 @@ class ElideLabel(QLabel):
         self.setToolTip(self._full if len(self._full) > 26 else "")
         self.update()
 
+    def _shown(self) -> str:
+        """显示用文本：完整原文过一遍 tr()，路由名 / 说明这类数据也在里面。"""
+        return i18n.tr(self._full) if self._full else ""
+
     def text(self) -> str:  # noqa: N802
         return self._full
 
@@ -1353,17 +1444,18 @@ class ElideLabel(QLabel):
 
     def sizeHint(self) -> QSize:  # noqa: N802
         fm = QFontMetricsF(self.font())
-        return QSize(int(fm.horizontalAdvance(self._full)) + 2, int(fm.height()) + 2)
+        return QSize(int(fm.horizontalAdvance(self._shown())) + 2, int(fm.height()) + 2)
 
     def paintEvent(self, _e):
-        if not self._full:
+        shown = self._shown()
+        if not shown:
             return
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         p.setFont(self.font())
         p.setPen(self._ink)
         fm = QFontMetricsF(self.font())
-        text = fm.elidedText(self._full, self._mode, max(self.width(), 10))
+        text = fm.elidedText(shown, self._mode, max(self.width(), 10))
         y = (self.height() + fm.ascent() - fm.descent()) / 2
         p.drawText(QPointF(0, y), text)
         p.end()

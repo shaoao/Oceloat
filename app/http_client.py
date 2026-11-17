@@ -24,6 +24,7 @@ from PyQt6.QtNetwork import (
     QSslSocket,
 )
 
+from . import i18n
 from .store import resolve_vars
 
 
@@ -285,7 +286,7 @@ class ApiClient(QObject):
             raw_url = "http://" + raw_url
         url = QUrl(raw_url)
         if not url.isValid() or not url.host():
-            raise ValueError(f"无效的 URL：{raw_url}")
+            raise ValueError(i18n.trf("无效的 URL：{url}", url=raw_url))
 
         query = QUrlQuery(url)
         for row in req.get("params", []):
@@ -395,7 +396,7 @@ class ApiClient(QObject):
             raw_url = "http://" + raw_url
         url = QUrl(raw_url)
         if not url.isValid() or not url.host():
-            self.finished.emit(Response(error=f"无效的 URL：{raw_url}"))
+            self.finished.emit(Response(error=i18n.trf("无效的 URL：{url}", url=raw_url)))
             return
 
         # 查询参数
@@ -531,7 +532,7 @@ class ApiClient(QObject):
                     with open(path, "rb") as fh:
                         payload = QByteArray(fh.read())
                 except Exception as exc:
-                    self.finished.emit(Response(error=f"读取文件失败：{exc}"))
+                    self.finished.emit(Response(error=i18n.trf("读取文件失败：{err}", err=exc)))
                     return
                 if not has_ct:
                     nreq.setHeader(QNetworkRequest.KnownHeaders.ContentTypeHeader,
@@ -567,7 +568,7 @@ class ApiClient(QObject):
             else:
                 reply = self.nam.sendCustomRequest(nreq, method.encode(), payload)
         except Exception as exc:
-            self.finished.emit(Response(error=f"请求构造失败：{exc}"))
+            self.finished.emit(Response(error=i18n.trf("请求构造失败：{err}", err=exc)))
             return
 
         self._reply = reply
@@ -647,7 +648,7 @@ class ApiClient(QObject):
         error = ""
         if err != QNetworkReply.NetworkError.NoError and status == 0:
             if self._timed_out:
-                error = f"请求超时（{self._timeout}s）"
+                error = i18n.trf("请求超时（{n}s）", n=self._timeout)
             elif self._cancelled:
                 error = "请求已取消"
             else:

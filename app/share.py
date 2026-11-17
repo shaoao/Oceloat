@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from . import i18n
+
 import json
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -134,31 +136,33 @@ def to_markdown(
     size = int(getattr(response, "size", 0) or 0) if response is not None else 0
     ct = (getattr(response, "content_type", "") or "") if response is not None else ""
     lines += [
-        "## 概览", "",
-        "| 项目 | 内容 |", "| --- | --- |",
-        f"| 方法 | `{method}` |",
-        f"| 地址 | `{url}` |",
+        "## " + i18n.tr("概览"), "",
+        f"| {i18n.tr('项目')} | {i18n.tr('内容')} |", "| --- | --- |",
+        f"| {i18n.tr('方法')} | `{method}` |",
+        f"| {i18n.tr('地址')} | `{url}` |",
     ]
     if response is not None:
-        lines.append(f"| 状态 | **{status} {reason}**".strip() + " |")
-        lines.append(f"| 耗时 | {elapsed} ms |")
-        lines.append(f"| 体积 | {_fmt_size(size)} |")
+        lines.append(f"| {i18n.tr('状态')} | **{status} {reason}**".strip() + " |")
+        lines.append(f"| {i18n.tr('耗时')} | {elapsed} ms |")
+        lines.append(f"| {i18n.tr('体积')} | {_fmt_size(size)} |")
         if ct:
-            lines.append(f"| 内容类型 | `{ct}` |")
+            lines.append(f"| {i18n.tr('内容类型')} | `{ct}` |")
     lines.append("")
 
     params = [(str(r.get("key")), str(r.get("value", "")))
               for r in request.get("params", [])
               if r.get("enabled", True) and r.get("key") and r.get("type") != "file"]
     if params:
-        lines += ["## Query 参数", "", "| 参数 | 值 |", "| --- | --- |"]
+        lines += ["## " + i18n.tr("Query 参数"), "",
+                  f"| {i18n.tr('参数')} | {i18n.tr('值')} |", "| --- | --- |"]
         for k, v in params:
             lines.append(f"| `{k}` | {('`' + _keep_tail(v) + '`') if (redact and is_secret_key(k)) else v} |")
         lines.append("")
 
     headers = redact_headers(d["headers"]) if redact else d["headers"]
     if headers:
-        lines += ["## 请求头", "", "| Header | 值 |", "| --- | --- |"]
+        lines += ["## " + i18n.tr("请求头"), "",
+                  f"| Header | {i18n.tr('值')} |", "| --- | --- |"]
         for k, v in headers:
             lines.append(f"| `{k}` | {v} |")
         lines.append("")
@@ -172,12 +176,13 @@ def to_markdown(
             token = _keep_tail(token)
         scheme = {"bearer": "Authorization: Bearer <token>",
                   "basic": "Authorization: Basic base64(user:password)",
-                  "apikey": "请求头 / 查询参数里带 API Key",
+                  "apikey": i18n.tr("请求头 / 查询参数里带 API Key"),
                   }.get(atype, atype)
-        lines += ["## 鉴权", "", f"类型：`{atype}`", "", f"发送方式：`{scheme}`"]
+        lines += ["## " + i18n.tr("鉴权"), "", f"{i18n.tr('类型')}：`{atype}`", "",
+                  f"{i18n.tr('发送方式')}：`{scheme}`"]
         if token:
             lines.append("")
-            lines.append(f"当前凭据：`{token}`")
+            lines.append(f"{i18n.tr('当前凭据')}：`{token}`")
         lines.append("")
 
     # ---------------- Cookies
@@ -185,7 +190,7 @@ def to_markdown(
                for r in request.get("cookies", [])
                if r.get("enabled", True) and r.get("key")]
     if cookies:
-        lines += ["## Cookies", "", "| 名称 | 值 |", "| --- | --- |"]
+        lines += ["## Cookies", "", f"| {i18n.tr('名称')} | {i18n.tr('值')} |", "| --- | --- |"]
         for k, v in cookies:
             lines.append(f"| `{k}` | `{_keep_tail(v) if redact else v}` |")
         lines.append("")
@@ -194,25 +199,28 @@ def to_markdown(
     if body_text:
         shown = redact_text(body_text) if redact else body_text
         lang = "json" if body_text.lstrip()[:1] in ("{", "[") else "text"
-        lines += ["## 请求体", ""] + _fence(lang, shown)
+        lines += ["## " + i18n.tr("请求体"), ""] + _fence(lang, shown)
         lines.append("")
     elif d["form"]:
-        lines += ["## 表单字段", "", "| 字段 | 值 |", "| --- | --- |"]
+        lines += ["## " + i18n.tr("表单字段"), "",
+                  f"| {i18n.tr('字段')} | {i18n.tr('值')} |", "| --- | --- |"]
         for k, v in d["form"]:
             lines.append(f"| `{k}` | {v if not (redact and is_secret_key(k)) else _keep_tail(v)} |")
         lines.append("")
 
     note = (request.get("note") or "").strip()
     if note:
-        lines += ["## 说明", "", "> " + note.replace("\n", " "), ""]
+        lines += ["## " + i18n.tr("说明"), "", "> " + note.replace("\n", " "), ""]
 
     if response is not None:
         err = getattr(response, "error", "") or ""
-        lines += ["## 响应", ""]
+        lines += ["## " + i18n.tr("响应"), ""]
         if err:
-            lines += [f"> 请求失败：{err}", ""]
+            lines += [f"> {i18n.tr('请求失败')}：{err}", ""]
         else:
-            bits = [f"**{status} {reason}**".strip(), f"耗时 {elapsed} ms", f"体积 {_fmt_size(size)}"]
+            bits = [f"**{status} {reason}**".strip(),
+                    f"{i18n.tr('耗时')} {elapsed} ms",
+                    f"{i18n.tr('体积')} {_fmt_size(size)}"]
             if ct:
                 bits.append(f"`{ct}`")
             lines += [" · ".join(bits), ""]
@@ -225,7 +233,8 @@ def to_markdown(
         except Exception:       # noqa: BLE001
             items = []
         if items:
-            lines += ["### 响应头", "", "| Header | 值 |", "| --- | --- |"]
+            lines += ["### " + i18n.tr("响应头"), "",
+                      f"| Header | {i18n.tr('值')} |", "| --- | --- |"]
             for k, v in items:
                 lines.append(f"| `{k}` | {str(v)[:120]} |")
             lines.append("")
@@ -238,16 +247,17 @@ def to_markdown(
             shown = redact_text(text) if redact else text
             truncated = len(shown) > body_limit
             if truncated:
-                shown = shown[:body_limit].rstrip() + "\n…（已截断，完整内容请在 Ocelot 里查看）"
-            lines += ["### 响应示例", ""] + _fence(_guess_lang(ct, text), shown)
+                shown = shown[:body_limit].rstrip() + "\n" + i18n.tr("…（已截断，完整内容请在 Ocelot 里查看）")
+            lines += ["### " + i18n.tr("响应示例"), ""] + _fence(_guess_lang(ct, text), shown)
             lines.append("")
 
         # 状态码语义：写文档时最容易被漏掉、但读的人最需要的一段
-        lines += ["## 状态码", "", "| 状态码 | 含义 |", "| --- | --- |"]
+        lines += ["## " + i18n.tr("状态码"), "",
+                  f"| {i18n.tr('状态码')} | {i18n.tr('含义')} |", "| --- | --- |"]
         lines.append(f"| {status} | {_status_meaning(status, reason)} |")
         for code, text_ in _COMMON_STATUS:
             if code != status:
-                lines.append(f"| {code} | {text_} |")
+                lines.append(f"| {code} | {i18n.tr(text_)} |")
         lines.append("")
 
     return "\n".join(lines).strip() + "\n"

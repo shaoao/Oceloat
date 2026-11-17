@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import icons
+from . import i18n, icons
 from .nodes import LOCAL_ID, NodeBook, probe_node
 from .theme import C, font, mono, theme
 from .widgets import Button, HBox, Label, SegmentedTabs, fade_in, icon_button
@@ -195,7 +195,7 @@ class NodePicker(QWidget):
         self.search.setObjectName("Field")
         self.search.setFixedHeight(27)
         self.search.setFont(font(11.5))
-        self.search.setPlaceholderText("搜索地区 / 运营商，如 上海、电信")
+        i18n.placeholder(self.search, "搜索地区 / 运营商，如 上海、电信")
         self.search.textChanged.connect(lambda _t: self._fill())
         lay.addWidget(self.search)
 
@@ -232,20 +232,22 @@ class NodePicker(QWidget):
             if kw and kw not in n.get("name", "") and kw not in n.get("carrier", ""):
                 continue
             nodes.append(n)
-        self.seg.set_label("v4", f"IPv4 节点 {sum(1 for n in all_nodes if n.get('v4') and n.get('kind') == 'relay')}")
-        self.seg.set_label("v6", f"IPv6 节点 {sum(1 for n in all_nodes if n.get('v6') and n.get('kind') == 'relay')}")
+        self.seg.set_label("v4", i18n.trf("IPv4 节点 {n}", n=sum(
+            1 for n in all_nodes if n.get("v4") and n.get("kind") == "relay")))
+        self.seg.set_label("v6", i18n.trf("IPv6 节点 {n}", n=sum(
+            1 for n in all_nodes if n.get("v6") and n.get("kind") == "relay")))
         self.list.set_nodes(nodes, self.book.current_id)
         self._update_hint(self.book.current())
 
     def _update_hint(self, node: Dict[str, Any]) -> None:
         if node.get("kind") == "relay":
-            self.hint.setText("在线节点转发")
+            self.hint.setText(i18n.tr("在线节点转发"))
         elif node.get("kind") == "proxy":
-            self.hint.setText(f"{node.get('scheme', 'http')} 代理")
+            self.hint.setText(i18n.trf("{scheme} 代理", scheme=node.get("scheme", "http")))
         elif node.get("kind") == "offline":
-            self.hint.setText("离线 · 点刷新节点")
+            self.hint.setText(i18n.tr("离线 · 点刷新节点"))
         else:
-            self.hint.setText("从本机发出")
+            self.hint.setText(i18n.tr("从本机发出"))
 
     # -------------------------------------------------- 在线节点缓存
     def refresh_nodes(self) -> None:
@@ -270,11 +272,11 @@ class NodePicker(QWidget):
         self.reload_btn.setText("刷新节点")
         self.reload_btn.setEnabled(True)
         if isinstance(result, dict):
-            self.hint.setText("拉取失败 · 用缓存")
+            self.hint.setText(i18n.tr("拉取失败 · 用缓存"))
             return
         self.book.set_remote(result)
         self._fill()
-        self.hint.setText(f"已载入 {len(result)} 个节点")
+        self.hint.setText(i18n.trf("已载入 {n} 个节点", n=len(result)))
 
     def refresh_current(self) -> None:
         self.list.current = self.book.current_id
@@ -362,9 +364,9 @@ class NodePicker(QWidget):
 
     def _on_speed_progress(self, done: int, total: int) -> None:
         if done >= total:
-            self.hint.setText(f"已测 {total} 个节点 · 速度仅供参考，不代表可用性")
+            self.hint.setText(i18n.trf("已测 {n} 个节点 · 速度仅供参考，不代表可用性", n=total))
         else:
-            self.hint.setText(f"测速中 {done}/{total} · 速度不代表可用性")
+            self.hint.setText(i18n.trf("测速中 {done}/{total} · 速度不代表可用性", done=done, total=total))
 
     def paintEvent(self, _e):
         t = theme()

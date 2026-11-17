@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import icons
+from . import i18n, icons
 from .code_editor import human_elapsed
 from .store import Store, new_folder, new_request
 from .anim import running as _anim_running, stop as _anim_stop
@@ -60,7 +60,7 @@ class SearchField(QWidget):
         self.setFixedHeight(28)
         self._edit = QLineEdit()
         self._edit.setObjectName("Bare")
-        self._edit.setPlaceholderText(placeholder)
+        i18n.placeholder(self._edit, placeholder)
         self._edit.setFont(font(12))
         self._edit.setFixedHeight(24)
         self._edit.textChanged.connect(self.changed.emit)
@@ -650,7 +650,8 @@ class Sidebar(QWidget):
         self.refresh()
         if node:
             self.requestDeleted.emit(node_id)
-        self.notify.emit(f"已删除「{node.get('name', '')}」" if node else "已删除")
+        self.notify.emit(i18n.trf("已删除「{name}」", name=node.get("name", ""))
+                         if node else i18n.tr("已删除"))
         self.changed.emit()
 
     def duplicate_node(self, node_id: str) -> None:

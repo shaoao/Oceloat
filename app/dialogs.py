@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate,
     QDialog,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -114,6 +115,9 @@ class GlassDialog(QDialog):
         # 对话框多半是在语言切完以后才建的，这里补一次翻译，否则英文界面里会混着中文
         if i18n.current() == "en":
             i18n.apply_language(self)
+            nav = getattr(self, "nav", None)
+            if nav is not None:
+                nav.sync_width()
         fade_in(self, 140)
 
 
@@ -169,6 +173,13 @@ class NavList(QWidget):
 
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(self.width(), 12 + len(self.items) * self.ROW_H)
+
+    def sync_width(self) -> None:
+        """按当前语言量一遍：英文条目（Environment Variables）比中文长，166px 放不下。"""
+        fm = QFontMetricsF(font(12.5, QFont.Weight.Medium))
+        longest = max((fm.horizontalAdvance(i18n.tr(label)) for _k, label, _i in self.items),
+                      default=0)
+        self.setFixedWidth(max(166, int(longest) + 52))
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return self.sizeHint()
@@ -230,7 +241,8 @@ class NavList(QWidget):
             p.setFont(font(12.5, QFont.Weight.Medium if selected else QFont.Weight.Normal))
             p.setPen(C(t.accent if selected else t.text_dim))
             p.drawText(QRectF(r.left() + 34, r.top(), r.width() - 40, r.height()),
-                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), label)
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                       i18n.tr(label))
         p.end()
 
 
@@ -325,7 +337,8 @@ class SchemePicker(QWidget):
             p.setFont(font(11))
             p.setPen(C(sch.text if sch.is_dark else sch.text))
             p.drawText(QRectF(r.left() + 10, r.bottom() - 22, r.width() - 30, 18),
-                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), label)
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                       i18n.tr(label))
             if selected:
                 pm = icons.pixmap("check", sch.text, 12, 1.9)
                 p.drawPixmap(QPointF(r.right() - 20, r.bottom() - 21), pm)
@@ -442,7 +455,7 @@ class ShortcutRecorder(GlassDialog):
     """录制一个组合键：按下什么就记什么，esc 放弃。"""
 
     def __init__(self, name: str, current: str = "", parent=None):
-        super().__init__(parent, 430, 226, f"录制快捷键 · {name}")
+        super().__init__(parent, 430, 226, i18n.trf("录制快捷键 · {name}", name=name))
         from . import shortcuts as sc
 
         t = theme()
@@ -498,7 +511,8 @@ class ShortcutRow(QWidget):
         h.setSpacing(10)
 
         default = sc.defaults().get(action, "")
-        sub = f"默认 {sc.display(default)}" if default != seq else "默认键位"
+        sub = (i18n.trf("默认 {keys}", keys=sc.display(default))
+               if default != seq else i18n.tr("默认键位"))
         text = VBox(Label(name, 12.4, t.text), Label(sub, 10.4, t.text_faint), spacing=2)
         h.addWidget(text, 1)
 
@@ -599,11 +613,16 @@ class SettingsDialog(GlassDialog):
         lay = QVBoxLayout(content)
         lay.setContentsMargins(2, 0, 10, 14)
         lay.setSpacing(16)
-        head = VBox(Label(title, 17, theme().text, weight=QFont.Weight.DemiBold, spacing=0.2),
-                    Label(desc, 11.6, theme().text_faint), spacing=4)
+        # 标题与说明都要能换行：英文比中文长不少，不换行就会被裁掉半截
+        head_title = Label(title, 17, theme().text, weight=QFont.Weight.DemiBold, spacing=0.2)
+        head_desc = Label(desc, 11.6, theme().text_faint)
+        head_desc.setWordWrap(True)
+        head = VBox(head_title, head_desc, spacing=4)
         lay.addWidget(head)
         lay.addWidget(Divider())
         for b in blocks:
+            if isinstance(b, QLabel):
+                b.setWordWrap(True)
             lay.addWidget(b)
         lay.addStretch(1)
         scroll = QScrollArea()
@@ -769,11 +788,12 @@ class SettingsDialog(GlassDialog):
                     if key != action and value and sc.display(value) == sc.display(seq):
                         sc.set_key(self.store, key, "")
                         self._refresh_shortcut_row(key)
-                self.shortcut_note.setText(f"{sc.display(seq)} 原来是「{other}」的，已让位")
+                self.shortcut_note.setText(i18n.trf("{keys} 原来是「{action}」的，已让位",
+                                                   keys=sc.display(seq), action=other))
             else:
-                self.shortcut_note.setText(f"已改为 {sc.display(seq)}")
+                self.shortcut_note.setText(i18n.trf("已改为 {keys}", keys=sc.display(seq)))
         else:
-            self.shortcut_note.setText(f"已清除 {sc.label_of(action)} 的快捷键")
+            self.shortcut_note.setText(i18n.trf("已清除 {name} 的快捷键", name=sc.label_of(action)))
         sc.set_key(self.store, action, seq)
         self._refresh_shortcut_row(action)
         self.shortcutsChanged.emit()
@@ -848,7 +868,7 @@ class SettingsDialog(GlassDialog):
         self.cloud_token.setMinimumWidth(320)
         self.cloud_token.setFont(mono(11))
         self.cloud_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.cloud_token.setPlaceholderText("粘贴 Turso 的 Auth Token")
+        i18n.placeholder(self.cloud_token, "粘贴 Turso 的 Auth Token")
         self.cloud_token.editingFinished.connect(self._save_cloud)
 
         test = Button("测试连接", "cloud", kind="subtle", height=26, padding=10, font_size=11.5)
@@ -880,6 +900,7 @@ class SettingsDialog(GlassDialog):
         )
         tip = Label("数据表：ocelot_sync（k / v / updated_at）。同一个 Token 可见范围内只有一行快照。",
                     10.5, theme().text_faint)
+        tip.setWordWrap(True)
         return self._page_shell("云同步", "用 Turso 做一份你自己的云备份 —— 不需要注册第三方账号体系。",
                                 block, tip)
 
@@ -953,7 +974,7 @@ class SettingsDialog(GlassDialog):
             return client.push(text)
 
         def done(ok, msg, _data):
-            self._cloud_say(ok, msg if ok else f"上传失败：{msg}")
+            self._cloud_say(ok, msg if ok else i18n.trf("上传失败：{err}", err=msg))
 
         self._spawn(run, done)
 
@@ -970,14 +991,14 @@ class SettingsDialog(GlassDialog):
 
         def done(ok, msg, text):
             if not ok:
-                self._cloud_say(False, f"恢复失败：{msg}")
+                self._cloud_say(False, i18n.trf("恢复失败：{err}", err=msg))
                 return
             try:
                 data = json.loads(text)
                 if not isinstance(data, dict) or "collections" not in data:
                     raise ValueError("云端数据不是 Ocelot 快照")
             except Exception as exc:  # noqa: BLE001
-                self._cloud_say(False, f"数据格式不对：{exc}")
+                self._cloud_say(False, i18n.trf("数据格式不对：{err}", err=exc))
                 return
             # 先备份本机快照，再整份替换；云端没带的字段（比如 token）保留本机值
             try:
@@ -1248,7 +1269,7 @@ class SettingsDialog(GlassDialog):
 
     def _apply_page_title(self) -> None:
         label = dict((k, l) for k, l, _i in self.NAV).get(self.nav.current_key(), "设置")
-        self._title_label.setText(f"设置 · {label}")
+        self._title_label.setText(i18n.trf("设置 · {name}", name=label))
 
     # -------------------------------------------------- 事件
     def _on_nav(self, key: str) -> None:
@@ -1477,7 +1498,7 @@ class EnvEditor(QWidget):
         self._loading = True
         if env:
             self.vars.set_rows(env.get("vars", []))
-            self.right_label.setText(f"变量 · {env.get('name', '')}")
+            self.right_label.setText(i18n.trf("变量 · {name}", name=env.get("name", "")))
         else:
             self.vars.set_rows([])
         self._loading = False
@@ -1491,7 +1512,7 @@ class EnvEditor(QWidget):
 
     def _add_env(self) -> None:
         env = {"id": f"env_{len(self.envs)}_{os.urandom(2).hex()}",
-               "name": f"环境 {len(self.envs) + 1}", "vars": []}
+               "name": i18n.trf("环境 {n}", n=len(self.envs) + 1), "vars": []}
         self.envs.append(env)
         self._fill_list()
         self.list.setCurrentRow(len(self.envs) - 1)
@@ -1641,23 +1662,23 @@ class ImportCurlDialog(GlassDialog):
     def _summarize(self, req) -> str:
         bits = [f"{req['method']}  {req['url']}"]
         if req.get("params"):
-            bits.append(f"查询参数 {len(req['params'])} 个")
+            bits.append(i18n.trf("查询参数 {n} 个", n=len(req["params"])))
         if req.get("headers"):
-            bits.append(f"请求头 {len(req['headers'])} 个")
+            bits.append(i18n.trf("请求头 {n} 个", n=len(req["headers"])))
         body = req.get("body") or {}
         mode = body.get("mode", "none")
         if mode == "json":
-            bits.append(f"JSON 请求体 {len(body.get('raw') or '')} 字符")
+            bits.append(i18n.trf("JSON 请求体 {n} 字符", n=len(body.get("raw") or "")))
         elif mode == "text":
-            bits.append(f"文本请求体 {len(body.get('raw') or '')} 字符")
+            bits.append(i18n.trf("文本请求体 {n} 字符", n=len(body.get("raw") or "")))
         elif mode == "form":
             files = sum(1 for f in body.get("form", []) if f.get("type") == "file")
-            bits.append(f"multipart {len(body.get('form', []))} 字段"
-                        + (f"（含 {files} 个文件）" if files else ""))
+            bits.append(i18n.trf("multipart {n} 字段", n=len(body.get("form", [])))
+                        + (i18n.trf("（含 {n} 个文件）", n=files) if files else ""))
         elif mode == "urlencoded":
-            bits.append(f"urlencoded {len(body.get('form', []))} 字段")
+            bits.append(i18n.trf("urlencoded {n} 字段", n=len(body.get("form", []))))
         if (req.get("auth") or {}).get("type") == "basic":
-            bits.append("Basic 认证")
+            bits.append(i18n.tr("Basic 认证"))
         return " · ".join(bits)
 
     def _preview(self) -> None:
@@ -1742,7 +1763,7 @@ class WhatsNewPanel(QWidget):
         date = Label(entry.get("date", ""), 10.5, t.text_faint, mono_font=True)
         head = HBox(ver, date, spacing=10)
         if latest:
-            tag = Label(f"当前版本 {VERSION}", 9.5, t.text_dim, mono_font=True)
+            tag = Label(i18n.trf("当前版本 {v}", v=VERSION), 9.5, t.text_dim, mono_font=True)
             tag.setStyleSheet(
                 f"color: {t.text_dim}; background: {S(t.hover)}; border-radius: 4px;"
                 f" padding: 2px 6px;")
@@ -1856,7 +1877,8 @@ class PaletteList(QWidget):
         if not self.items:
             p.setFont(font(12))
             p.setPen(C(t.text_faint))
-            p.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter), "没有匹配的结果")
+            p.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter),
+                       i18n.tr("没有匹配的结果"))
             p.end()
             return
         for i, item in enumerate(self.items):
@@ -1942,7 +1964,7 @@ class CommandPalette(QWidget):
         cl.setSpacing(6)
         self.edit = QLineEdit()
         self.edit.setObjectName("Bare")
-        self.edit.setPlaceholderText("搜索请求，或执行命令…")
+        i18n.placeholder(self.edit, "搜索请求，或执行命令…")
         self.edit.setFont(font(15))
         self.edit.setFixedHeight(34)
         self.edit.textChanged.connect(self._filter)
@@ -2062,22 +2084,22 @@ class CommandPalette(QWidget):
     def _collect(self) -> List[Dict[str, Any]]:
         items = []
         for key, title, icon_name, hint in self.ACTIONS:
-            items.append({"kind": "action", "key": key, "title": title,
+            items.append({"kind": "action", "key": key, "title": i18n.tr(title),
                           "icon": icon_name, "hint": hint, "subtitle": ""})
         for env in self.store.environments:
             active = env.get("id") == self.store.data.get("active_env")
             items.append({
                 "kind": "env", "key": env.get("id"),
-                "title": f"切换到环境 · {env.get('name', '')}",
-                "icon": "globe", "hint": "当前" if active else "",
-                "subtitle": f"{len(env.get('vars') or [])} 个变量",
+                "title": i18n.trf("切换到环境 · {name}", name=env.get("name", "")),
+                "icon": "globe", "hint": i18n.tr("当前") if active else "",
+                "subtitle": i18n.trf("{n} 个变量", n=len(env.get("vars") or [])),
             })
         for node, _ in self.store.walk():
             if node.get("type") != "request":
                 continue
             items.append({
                 "kind": "request", "key": node.get("id"), "node": node,
-                "title": node.get("name", "请求"), "icon": "send",
+                "title": node.get("name") or i18n.tr("请求"), "icon": "send",
                 "subtitle": f"{node.get('method', 'GET')}  {node.get('url', '')}",
                 "hint": "",
             })

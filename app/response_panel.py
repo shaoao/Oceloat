@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import icons
+from . import i18n, icons
 from .code_editor import CodeView, JsonTree, ctype_label, human_elapsed, human_size, pretty_json
 from .http_client import Response
 from .theme import C, font, mono, status_color, theme
@@ -89,8 +89,8 @@ def _hexdump(data: bytes, limit: int = 4096) -> str:
         a = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
         rows.append(f"{i:08X}  {h:<47}  {a}")
     if len(data) > limit:
-        rows.append(f"... 仅显示前 {limit} 字节，共 {len(data)} 字节")
-    return "\n".join(rows) or "响应体为空"
+        rows.append(i18n.trf("... 仅显示前 {n} 字节，共 {m} 字节", n=limit, m=len(data)))
+    return "\n".join(rows) or i18n.tr("响应体为空")
 
 
 class HeaderRows(QWidget):
@@ -288,7 +288,7 @@ class ResponsePanel(QWidget):
         self.path_edit.setObjectName("Field")
         self.path_edit.setFont(mono(11.8))
         self.path_edit.setFixedHeight(28)
-        self.path_edit.setPlaceholderText("输入路径，例如 data.items[0].name  或  args.*")
+        i18n.placeholder(self.path_edit, "输入路径，例如 data.items[0].name  或  args.*")
         self.path_edit.textChanged.connect(lambda _t: self._run_extract())
         self.extract_status = Label("", 10.5, theme().text_faint, mono_font=True)
         self.extract_copy = Button("复制值", "copy", kind="ghost", height=24, padding=8, font_size=11.5)
@@ -714,7 +714,7 @@ class ResponsePanel(QWidget):
         """在指标条上标出这次请求走的是哪个节点（本地直连不显示，免得噪音）。"""
         name = (node or {}).get("name", "")
         local = (node or {}).get("kind") == "local"
-        self.node_label.setText("" if local else f"节点 {name}")
+        self.node_label.setText("" if local else i18n.trf("节点 {name}", name=name))
         self.dot3.setVisible(self.meta.isVisible() and bool(self.node_label.text()))
 
     def show_empty(self) -> None:
@@ -818,8 +818,9 @@ class ResponsePanel(QWidget):
         if resp.kind in BINARY_KINDS:
             # 二进制直接 utf-8 解码会变成一排问号，别再往代码区里塞了
             self.pretty.setPlainText(
-                f"这是二进制内容（{ctype_label(resp.content_type)} · {human_size(resp.size)}）。\n"
-                "请切换到「预览」查看；「原始」页里是十六进制内容。")
+                i18n.trf("这是二进制内容（{type} · {size}）。\n"
+                         "请切换到「预览」查看；「原始」页里是十六进制内容。",
+                         type=ctype_label(resp.content_type), size=human_size(resp.size)))
             self.raw.setPlainText(_hexdump(resp.body))
             ok = False
         else:
@@ -829,8 +830,9 @@ class ResponsePanel(QWidget):
             truncated = len(body) > VIEW_LIMIT
             if truncated:
                 # 超大响应：直接截断，避免一次 setPlainText 就卡住一两秒
-                note = (f"\n\n⋯（共 {human_size(len(body))}，此处只预览前 "
-                        f"{human_size(VIEW_LIMIT)}；完整内容请用「另存为」或「复制」）")
+                note = i18n.trf("\n\n⋯（共 {total}，此处只预览前 {shown}；"
+                                "完整内容请用「另存为」或「复制」）",
+                                total=human_size(len(body)), shown=human_size(VIEW_LIMIT))
                 pretty_text = body[:VIEW_LIMIT] + note
             elif as_json:
                 pretty_text, _ok = pretty_json(body)
@@ -843,8 +845,9 @@ class ResponsePanel(QWidget):
             self.pretty.setPlainText(pretty_text)
             # 「原始」页按需填充：绝大多数人只看美化页，没必要每次都解析两遍
             if truncated:
-                self._raw_text = body[:VIEW_LIMIT] + (
-                    f"\n\n⋯（共 {human_size(len(body))}，仅显示前 {human_size(VIEW_LIMIT)}）")
+                self._raw_text = body[:VIEW_LIMIT] + i18n.trf(
+                    "\n\n⋯（共 {total}，仅显示前 {shown}）",
+                    total=human_size(len(body)), shown=human_size(VIEW_LIMIT))
             else:
                 self._raw_text = body
             self._raw_pending = True
@@ -881,13 +884,13 @@ class ResponsePanel(QWidget):
             flags = " · ".join(filter(None, [
                 "Secure" if c.get("secure") else "",
                 "HttpOnly" if c.get("http_only") else "",
-                f"过期 {c.get('expires')}" if c.get("expires") else "",
+                i18n.trf("过期 {when}", when=c.get("expires")) if c.get("expires") else "",
                 f"domain={c.get('domain')}" if c.get("domain") else "",
                 f"path={c.get('path')}" if c.get("path") else "",
             ]))
             self.cookies_host.add(c.get("name", ""), c.get("value", ""), True, meta=flags)
         if not resp.cookies:
-            self.cookies_host.add("—", "本次响应未设置 Cookie")
+            self.cookies_host.add("—", i18n.tr("本次响应未设置 Cookie"))
         self.tabs.set_badge("cookies", len(resp.cookies))
 
         # 预览
@@ -946,14 +949,17 @@ class ResponsePanel(QWidget):
         prev_lines = (prev.get("body") or "").splitlines()
         cur_lines = (body or "").splitlines()
         diff = list(difflib.unified_diff(prev_lines, cur_lines,
-                                         fromfile="上一次", tofile="本次", lineterm="", n=2))
+                                         fromfile=i18n.tr("上一次"), tofile=i18n.tr("本次"),
+                                         lineterm="", n=2))
         added = sum(1 for line in diff if line.startswith("+") and not line.startswith("+++"))
         removed = sum(1 for line in diff if line.startswith("-") and not line.startswith("---"))
         self.tabs.set_badge("diff", 1 if diff else 0)
-        self.diff_note.setText(
-            f"较上一次：+{added} 行 / -{removed} 行 · 状态 {prev.get('status')} → "
-            f"{self.response.status if self.response else 0} · 耗时 {prev.get('elapsed')}ms → "
-            f"{self.response.elapsed if self.response else 0}ms")
+        self.diff_note.setText(i18n.trf(
+            "较上一次：+{added} 行 / -{removed} 行 · 状态 {was} → {now} · 耗时 {t0}ms → {t1}ms",
+            added=added, removed=removed, was=prev.get("status"),
+            now=self.response.status if self.response else 0,
+            t0=prev.get("elapsed"),
+            t1=self.response.elapsed if self.response else 0))
         cur = QTextCursor(view.document())
         cur.beginEditBlock()
         for line in diff:
@@ -1038,9 +1044,9 @@ class ResponsePanel(QWidget):
         if not path:
             if isinstance(data, dict):
                 keys = "、".join(list(data.keys())[:8])
-                self.extract_status.setText(f"可用的顶层字段：{keys}")
+                self.extract_status.setText(i18n.trf("可用的顶层字段：{keys}", keys=keys))
             else:
-                self.extract_status.setText("响应是数组，试试 [0] 或 [0].字段名")
+                self.extract_status.setText(i18n.tr("响应是数组，试试 [0] 或 [0].字段名"))
             self.extract_status.setStyleSheet(f"color: {t.text_faint}; background: transparent;")
             self.extract_view.setPlainText("")
             self._extracted = None
@@ -1049,7 +1055,8 @@ class ResponsePanel(QWidget):
         try:
             value = self._json_path_get(data, path)
         except Exception as exc:  # noqa: BLE001
-            self.extract_status.setText(f"路径无效：{exc.__class__.__name__} · {exc}")
+            self.extract_status.setText(i18n.trf("路径无效：{kind} · {msg}",
+                                             kind=exc.__class__.__name__, msg=exc))
             self.extract_status.setStyleSheet(f"color: {t.danger}; background: transparent;")
             self.extract_view.setPlainText("")
             self._extracted = None
@@ -1058,7 +1065,7 @@ class ResponsePanel(QWidget):
         self._extracted = value
         self.extract_save.setEnabled(True)
         kind = type(value).__name__
-        self.extract_status.setText(f"命中 {kind} · 路径 {path}")
+        self.extract_status.setText(i18n.trf("命中 {kind} · 路径 {path}", kind=kind, path=path))
         self.extract_status.setStyleSheet(f"color: {t.success}; background: transparent;")
         if isinstance(value, (dict, list)):
             self.extract_view.setPlainText(json.dumps(value, ensure_ascii=False, indent=2))

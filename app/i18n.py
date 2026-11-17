@@ -42,6 +42,21 @@ def tr(text: str) -> str:
     return _EN.get(text, text)
 
 
+def trf(template: str, **kwargs) -> str:
+    """带占位的文案：模板与参数分别翻译，再拼起来。
+
+    像「设置 · 环境变量」「默认 ⌘N」这种由两段拼成的界面文字，整句没有词条，
+    直接把拼接结果丢进 tr() 会原样返回中文。用模板走词条、参数各自翻译最稳。
+    模板里有字面量花括号（{{变量}}）时不要用这个函数。
+    """
+    tpl = tr(template) if "{" in template else template
+    try:
+        return tpl.format(**{k: (tr(v) if isinstance(v, str) else v) for k, v in kwargs.items()})
+    except (KeyError, IndexError, ValueError):
+        return template
+
+
+
 def placeholder(widget, text: str) -> None:
     """给输入框设置「可跟着语言切换」的占位文字。
 
@@ -506,5 +521,456 @@ _EN.update({
     "已连上本地 Mock 路由": "Connected to the local mock route",
     "这条请求还没有响应，文档里只会有请求部分":
         "This request has no response yet — the doc will only cover the request side",
+})
+
+# 第三轮清扫：把自绘控件、菜单项、设置页拼接串也纳进来（这些不经过 QLabel，
+# 之前整片漏在中文里）。术语继续对齐 Postman：Send / Params / Headers / Body /
+# Auth / Collections / Environments / Mock Server。
+_EN.update({
+    # ---------------------------------------------------------- 菜单 / QAction
+    "Mock 服务…": "Mock Server…",
+    "管理环境…": "Manage Environments…",
+    "无环境": "No environment",
+    "关闭其他": "Close Others", "关闭全部": "Close All",
+    "复制标签": "Duplicate Tab", "复制为 cURL": "Copy as cURL",
+    "查看接口文档…": "View API Docs…",
+    "生成代码片段": "Generate Code Snippet",
+    "Mock 数据…": "Mock Data…",
+    "复制请求": "Duplicate Request", "删除请求": "Delete Request",
+    "创建副本": "Duplicate", "重命名…": "Rename…",
+    "上移": "Move Up", "下移": "Move Down",
+    "复制此行": "Duplicate Row", "删除此行": "Delete Row",
+    "关闭  esc": "Close  esc",
+
+    # ---------------------------------------------------------- 请求编辑
+    "无": "None", "文本": "Text", "表单": "Form",
+    "URL 编码": "URL Encoded", "文件": "File",
+    "添加查询参数": "Add a query param", "添加请求头": "Add a header",
+    "添加表单字段": "Add a form field", "添加变量": "Add a variable",
+    "变量": "Variables", "变量名": "Variable name",
+    "选择文件": "Choose File", "选择请求体文件": "Choose Body File",
+    "点击选择要上传的文件": "Click to choose a file",
+    "点击选择文件…": "Choose a file…", "选择要上传的文件": "Choose a file to upload",
+    "所有文件 (*)": "All Files (*)",
+    "参数值类型（Auto = 按内容推断）": "Value type (Auto infers from content)",
+    "添加为请求头": "Add as Header", "添加为查询参数": "Add as Query Param",
+
+    # ---------------------------------------------------------- 设置 · 通用
+    "清除": "Clear", "小": "Small", "标准": "Default", "大": "Large",
+    "100 条": "100", "240 条": "240", "500 条": "500",
+    "复制版本信息": "Copy version info", "去设置": "Open Settings",
+    "恢复默认": "Reset", "已恢复默认键位": "Shortcuts reset to defaults",
+    "设置 · {name}": "Settings · {name}",
+    "变量 · {name}": "Variables · {name}",
+    "环境 {n}": "Environment {n}",
+    "默认 {keys}": "Default {keys}",
+    "按下组合键": "Press a key combo",
+    "录制快捷键 · ": "Recording… ",
+    "设为当前": "Set Active", "重命名环境": "Rename Environment",
+    "名称": "Name", "代码片段": "Code Snippets",
+    "外观与主题色…": "Appearance…", "显示 / 隐藏侧边栏": "Show / Hide Sidebar",
+    "快捷键设置…": "Shortcuts…",
+    "已复制": "Copied", "已用云端数据覆盖本机": "Restored from the cloud",
+    "纯本地": "Local only", "云端还没有数据": "Nothing in the cloud yet",
+    "已获取快照": "Snapshot fetched",
+    "连接中…": "Connecting…", "上传中…": "Uploading…", "读取中…": "Loading…",
+    "上传失败：": "Upload failed: ", "恢复失败：": "Restore failed: ",
+    "数据格式不对：": "Unexpected data: ",
+    "云端数据不是 Ocelot 快照": "The cloud data is not an Ocelot snapshot",
+    "已上传到云端": "Uploaded to the cloud",
+
+    # ---------------------------------------------------------- 配色方案名
+    "石墨": "Graphite", "岩蓝": "Slate", "暖灰": "Warm Ash",
+    "松绿": "Moss", "墨黑": "Ink", "浅色": "Light",
+
+    # ---------------------------------------------------------- 导入 cURL
+    "导入 cURL": "Import cURL",
+    "从剪贴板粘贴": "Paste from Clipboard", "解析并打开": "Parse and Open",
+    "粘贴浏览器「Copy as cURL」或任意 cURL 命令，自动解析方法、请求头、请求体与认证。":
+        "Paste a browser's “Copy as cURL” output or any cURL command — method, "
+        "headers, body and auth are parsed automatically.",
+    "已使用当前环境变量解析值，可直接粘贴到终端运行。":
+        "Variables are already resolved — paste it straight into a terminal.",
+    "查询参数 {n} 个": "{n} query params",
+    "请求头 {n} 个": "{n} headers",
+    "JSON 请求体 {n} 字符": "JSON body · {n} chars",
+    "文本请求体 {n} 字符": "text body · {n} chars",
+    "multipart {n} 字段": "multipart · {n} fields",
+    "（含 {n} 个文件）": " ({n} files)",
+    "urlencoded {n} 字段": "urlencoded · {n} fields",
+    "Basic 认证": "Basic auth",
+    "请先粘贴 cURL 命令": "Paste a cURL command first",
+
+    # ---------------------------------------------------------- 命令面板 / 浮层
+    "没有匹配的结果": "No matches",
+    "切换到环境 · {name}": "Switch to environment · {name}",
+    "当前": "Active", "{n} 个变量": "{n} variables",
+
+    # ---------------------------------------------------------- Mock 中心
+    "本地 Mock": "Local Mock", "公开接口": "Public Endpoints", "请求日志": "Request Log",
+    "启动服务": "Start Server", "停止服务": "Stop Server",
+    "新建路由": "New Route", "复制地址": "Copy URL",
+    "未启动": "Stopped", "全部": "All",
+    "回显调试": "Echo", "假数据": "Fake Data",
+    "用户与登录": "Users & Auth", "图片与文本": "Images & Text",
+    "清空": "Clear",
+    "{n} 个公开接口 · 点一行新建请求":
+        "{n} public endpoints · click a row to start a request",
+    "例如：带 token 返回 VIP 数据": "e.g. VIP payload when a token is present",
+    "body 支持 a.b.c 取嵌套字段": "Nested keys work: a.b.c",
+    "要比对的值": "Value to match",
+    "条件规则": "Rules", "添加规则": "Add Rule",
+
+    # ---------------------------------------------------------- 文档 / 预览
+    "接口文档": "API Docs", "保存 .md": "Save .md",
+    "保存接口文档": "Save API Docs", "未命名请求": "Untitled Request",
+    "草稿": "Draft", "草稿 · 尚未发送": "Draft · not sent yet",
+    "状态": "Status", "耗时": "Time", "体积": "Size",
+    "目录": "Contents", "打码": "Redact", "代码示例": "Code Samples",
+    "（无章节）": "(no sections)", "保存失败": "Save failed",
+    "保存到本地": "Save to Disk", "播放": "Play", "暂停": "Pause",
+    "适应窗口": "Fit to Window", "放大": "Zoom In", "缩小": "Zoom Out",
+    "PDF 响应": "PDF response", "保存后用系统阅读器打开":
+        "Save it and open with your system reader",
+    "没有可预览的内容": "Nothing to preview",
+    "这个响应不是图片 / 音频 / 视频，切到「美化」看正文":
+        "This response isn't an image, audio or video — switch to Pretty to read it.",
+    "无法解码这张图片": "Couldn't decode this image",
+    "无法在应用内播放": "Can't play this in-app",
+    "缺少 QtMultimedia 模块，可另存为后用系统播放器打开":
+        "QtMultimedia is missing — save it and open with your system player",
+    "把这张图片保存到本地": "Save this image to disk",
+    "二进制内容 · ": "Binary · ", " 字节 · 仅显示前 8 KB": " bytes · first 8 KB only",
+    "复制这段代码": "Copy this code", "（无数据）": "(no data)",
+
+    # ---------------------------------------------------------- 导入 / 导出
+    "读取失败：": "Read failed: ", "无法识别的集合文件格式":
+        "Unrecognized collection file format",
+    "已导入 {n} 个集合节点": "Imported {n} collection nodes",
+    "已导出 {n} 个集合": "Exported {n} collections",
+    "导出失败：": "Export failed: ",
+    "本地 Mock 服务运行在 {url}": "Local mock server is running at {url}",
+    "本地 Mock 服务已在 {port} 运行": "Local mock server is already running on {port}",
+    "已保存变量 {{{name}}}": "Saved variable {{{name}}}",
+
+    # ---------------------------------------------------------- 节点面板
+    "搜索地区 / 运营商，如 上海、电信":
+        "Search by region or carrier — e.g. Shanghai, China Telecom",
+})
+
+# 第四轮：Mock 中心的示例数据。路由名与公开接口说明都写在数据里，
+# 显示时统一过 tr()，所以词条要跟数据里的字符串一模一样。
+_EN.update({
+    "字段": "Field", "未命名": "Untitled", "回显": "echo", "条规则": "rules",
+    "延迟 {ms}ms": "delay {ms}ms", "{n} 条规则": "{n} rules", "{n} 次": "{n} hits",
+    "示例 · 用户信息（动态）": "Sample · User profile (dynamic)",
+    "示例 · 鉴权规则": "Sample · Auth rule",
+    "示例 · 回显请求": "Sample · Echo request",
+    "示例 · 慢接口 2s": "Sample · Slow endpoint 2s",
+    "示例 · 服务异常": "Sample · Server error",
+
+    "回显请求头与查询参数，最稳的调试靶子":
+        "Echoes headers and query params — the most reliable practice target",
+    "回显 JSON 请求体": "Echoes the JSON body",
+    "指定状态码，用来测错误分支与配色":
+        "Forces a status code — good for testing error states and colors",
+    "延迟 2 秒返回，看 loading 与超时设置":
+        "Responds after 2s — watch the loading state and timeout setting",
+    "2KB 随机字节，测二进制 / 十六进制预览":
+        "2 KB of random bytes — tests the binary and hex preview",
+    "两次 302 跳转，验证跟随重定向开关":
+        "Two 302 hops — verifies the follow-redirects switch",
+    "服务端种 Cookie，用来测 Cookies 页与「从响应导入」":
+        "Sets a cookie server-side — tests the Cookies tab and Import from Response",
+    "逐行输出 8 条 JSON，测流式响应":
+        "Streams eight JSON objects — tests streamed responses",
+    "任意路径都会原样回显，适合乱试":
+        "Echoes anything back — handy for poking around",
+    "100 条文章，列表渲染的标准素材":
+        "100 posts — the classic fixture for list rendering",
+    "单条文章，字段少、结构清晰": "A single post — few fields, clean shape",
+    "带查询参数的评论列表": "Comment list with a query param",
+    "创建资源（返回 201）": "Creates a resource (201)",
+    "电商商品列表，字段更接近真实业务":
+        "Product list — fields closer to a real business payload",
+    "单个商品，含图片数组": "A single product with an image array",
+    "购物车，嵌套结构，适合测树形视图":
+        "A cart with nested structures — good for the tree view",
+    "带搜索的列表，测参数联动": "Search-backed list — tests parameter wiring",
+    "强制 500，测失败提示": "Forces a 500 — tests the failure state",
+    "分页用户列表（需带 x-api-key: reqres-free-v1）":
+        "Paged user list (needs x-api-key: reqres-free-v1)",
+    "登录成功返回 token": "Successful login returns a token",
+    "缺字段 → 400，测参数校验": "Missing field → 400, tests validation",
+    "创建用户（201）": "Creates a user (201)",
+    "随机一个人，含头像地址": "A random person, avatar URL included",
+    "10 个用户，含地址与公司": "Ten users with address and company",
+    "随机狗图（返回图片直链）": "Random dog photo (direct image URL)",
+    "随机图片，直接测图片预览": "Random image — tests the image preview",
+    "一句猫知识，纯文本 JSON": "A cat fact in plain JSON",
+    "GitHub 仓库信息，字段多、层级深":
+        "GitHub repo info — many fields, deep nesting",
+})
+
+# 第五轮：对话框、错误提示与应用内文案（这些多由 Label / Button 直接构造，
+# 显示前会走一次 tr()，补齐词条即可）。
+_EN.update({
+    # 通用操作
+    "剪切": "Cut", "复制所选": "Copy Selection", "复制全部": "Copy All",
+    "删除所选": "Delete Selection", "知道了": "Got it",
+    "格式化": "Format", "压缩": "Minify", "格式化 JSON": "Format JSON",
+    "预览随机数据": "Preview Random Data", "动态数据预览": "Dynamic Data Preview",
+    "发送请求后会自动记录在这里": "Requests you send land here automatically",
+    "⌘↵ 发送": "⌘↵ to send", "暂无历史记录": "No history yet",
+    "这个地址还没有足够的历史记录\n再发几次，就能看到耗时趋势了":
+        "Not enough history for this URL yet\nSend a few more and the trend shows up here",
+
+    # 请求编辑
+    "用户名": "Username", "密码": "Password", "Key 名称": "Key name",
+    "留空表示沿用路由的默认响应体，只改状态码 / 延迟；同样支持 {{@name}} 之类的动态占位符。":
+        "Leave empty to keep the route's default body and only override status / delay. "
+        "Dynamic placeholders like {{@name}} work here too.",
+    "回显模式：服务会把收到的请求（方法 / 路径 / 头 / 请求体）原样返回，下面的响应体不会生效。":
+        "Echo mode: the server returns the request it received (method, path, headers, body). "
+        "The body below is ignored.",
+
+    # 响应区
+    "请求已修改": "Request changed",
+    "发送后这里会显示本次请求的新响应":
+        "Send it again — the new response shows up here",
+    "请求中": "In flight",
+    "已把当前响应设为基准，下次发送后即可对比":
+        "Current response set as baseline — send again to compare",
+    "还没有可对比的上一次响应 · 同地址请求一次后再看这里":
+        "No previous response to compare yet — send to this URL again",
+    "（同一地址的第二次响应会自动与上一次逐行对比）":
+        "(The second response from the same URL is diffed automatically)",
+    "上一次": "Before", "本次": "After",
+    "当前响应不是 JSON，无法用路径提取":
+        "This response isn't JSON — path extraction isn't available",
+    "内容过大，已跳过树形视图": "Too large — tree view skipped",
+    "用「提取」按路径取值更快": "Use Extract to pull a value by path",
+    "响应体不是合法 JSON": "The response body isn't valid JSON",
+    "响应是数组，试试 [0] 或 [0].字段名":
+        "The response is an array — try [0] or [0].field",
+    "* 只能用于对象或数组": "* only works on objects and arrays",
+    "缺少 ]": "Missing ]",
+    "脱敏复制响应体": "Copy Response Body (redacted)",
+    "复制响应头": "Copy Response Headers",
+    "复制状态行": "Copy Status Line",
+    "保存响应": "Save Response",
+    "准备 / DNS / TCP / SSL 为按 TTFB 比例估算":
+        "Prepare / DNS / TCP / SSL are estimated from TTFB",
+    "Header 为估算 · Body 为正文":
+        "Header is an estimate · Body is the payload",
+    "存为环境变量": "Save as Environment Variable",
+
+    # Mock 路由编辑
+    "规则名称": "Rule name", "只是给自己看的备注，可以空着":
+        "Just a note for yourself — can be empty",
+    "条件来源": "Condition source", "比较方式": "Comparison",
+    "「存在 / 不存在」不看值，只看有没有这个键":
+        "“exists / missing” only checks the key, not the value",
+    "命中后的响应体": "Body on match",
+    "状态码要在 100 ~ 599 之间": "Status code must be 100–599",
+    "填一下要比对的键名": "Enter the key to compare",
+    "列表里显示的名字，随便写": "Shown in the list — call it anything",
+    "延迟到时间后才会返回，用来测 Loading、骨架屏与超时。":
+        "Responds only after the delay — good for loading states, skeletons and timeouts.",
+    "响应体": "Response Body", "回显请求": "Echo Request",
+    "条件响应": "Conditional Response",
+    "路径要以 / 开头": "Path must start with /",
+    "服务已停止。已经填好的路由仍然保留，重启后继续用。":
+        "Server stopped. Your routes are kept — start it again to keep going.",
+    "先启动服务，才有地址可复制": "Start the server first — there's no URL yet",
+    "先启动服务，再试用这条路由": "Start the server, then try this route",
+    "没有匹配的接口，换个关键词试试": "No endpoint matches — try another keyword",
+    "键": "Key", "路径": "Path", "方法": "Method",
+    "状态码": "Status code", "延迟（毫秒）": "Delay (ms)",
+    "内容类型": "Content type", "以 / 开头；结尾 * 做前缀匹配":
+        "Starts with /; a trailing * matches by prefix",
+    "不是合法 JSON，没法格式化": "Not valid JSON — can't format",
+    "状态码要填数字": "Status code must be a number",
+    "延迟要填数字（毫秒）": "Delay must be a number (ms)",
+    "提示：响应体不是合法 JSON，仍可保存":
+        "Heads up: the body isn't valid JSON — you can still save it",
+    "还没有规则。例如「请求头 token 等于 123 → 200」，没带 token 时返回 401。":
+        "No rules yet. For example: “header token equals 123 → 200”, "
+        "and a 401 when the token is missing.",
+    "编辑规则": "Edit rule", "删除规则": "Delete rule",
+    "根地址已复制": "Base URL copied",
+    "等于": "equals",
+
+    # 节点
+    "测试当前分栏全部节点的延迟（速度仅供参考，不代表可用性与整体请求速度）":
+        "Test latency for every node here (indicative only — not availability or throughput)",
+    "从 tcping.cn 重新拉取完整节点列表": "Fetch the full node list again from tcping.cn",
+    "添加代理节点": "Add Proxy Node",
+    "地址，例如 socks5://127.0.0.1:1080": "Address, e.g. socks5://127.0.0.1:1080",
+    "选择请求节点（默认从本地发出）": "Choose a node (defaults to direct)",
+    "在线节点转发": "Relayed via node", "拉取失败 · 用缓存": "Fetch failed · using cache",
+    "离线 · 点刷新节点": "Offline · hit Refresh Nodes",
+
+    # 导入导出 / 文件对话框
+    "导入集合": "Import Collection", "导出集合": "Export Collection",
+    "JSON (*.json);;所有文件 (*)": "JSON (*.json);;All Files (*)",
+    "Markdown (*.md);;所有文件 (*)": "Markdown (*.md);;All Files (*)",
+
+    # 云同步
+    "请先填写数据库地址": "Enter the database URL first",
+    "请先填写 Auth Token": "Enter the Auth Token first",
+    "连接超时，检查网络或地址": "Connection timed out — check the network or URL",
+    "返回的不是合法 JSON，地址可能不是 Turso 数据库":
+        "The response isn't valid JSON — that may not be a Turso database",
+    "Token 被拒绝（401/403），检查是否复制完整":
+        "Token rejected (401/403) — make sure it was copied in full",
+    "地址不对（404），确认是 https://<库名>-<组织>.turso.io":
+        "Wrong URL (404) — should look like https://<db>-<org>.turso.io",
+
+    # cURL 解析
+    "命令为空，请粘贴完整的 curl 命令": "Empty command — paste a full curl command",
+    "这不是 curl 命令，请粘贴以 curl 开头的命令":
+        "That isn't a curl command — it should start with curl",
+    "命令里没有 URL": "No URL in the command",
+
+    # 网络层错误
+    "请求地址为空": "Request URL is empty",
+    "无效的 URL：{url}": "Invalid URL: {url}",
+    "读取文件失败：{err}": "Couldn't read the file: {err}",
+    "请求构造失败：{err}": "Couldn't build the request: {err}",
+    "请求超时（{n}s）": "Request timed out ({n}s)",
+    "在线节点不支持文件上传 / multipart，请切回本地直连或自建代理":
+        "File uploads and multipart aren't supported through nodes — "
+        "switch to direct or your own proxy",
+    "请选择一个有效的二进制文件": "Choose a valid binary file",
+
+    "环境": "Environment",
+    "直接按下新的组合键。支持 ⌘ / ⌃ / ⌥ / ⇧ 与字母、数字、方向键、回车等。":
+        "Just press the new combo. ⌘ / ⌃ / ⌥ / ⇧ work with letters, digits, arrows, Enter and more.",
+    "每次请求都会重新生成，下面的值只是其中一次的结果。":
+        "Regenerated on every request — what you see is one of those draws.",
+    "回显兜底": "echo fallback", "未匹配": "no match",
+    "带 token=123 返回 VIP 数据": "VIP payload when token=123",
+    "节点校验计算超时": "Node handshake timed out",
+    "URL 查询参数无法携带文件；文件上传请在「请求体 → Form 表单」里添加":
+        "Query params can't carry files — use Body → Form to upload.",
+})
+
+# 第六轮：界面里由 f-string 拼出来的动态文案（toast、状态行、错误提示）。
+# 统一走 trf()，模板带 {占位}，参数各自翻译。
+_EN.update({
+    "响应体为空": "The response body is empty",
+    "... 仅显示前 {n} 字节，共 {m} 字节":
+        "... showing the first {n} of {m} bytes",
+    "节点 {name}": "Node {name}",
+    "这是二进制内容（{type} · {size}）。\n请切换到「预览」查看；「原始」页里是十六进制内容。":
+        "This is binary content ({type} · {size}).\nSwitch to Preview to look at it; "
+        "the Raw tab holds the hex dump.",
+    "\n\n⋯（共 {total}，此处只预览前 {shown}；完整内容请用「另存为」或「复制」）":
+        "\n\n⋯ {total} in total, previewing the first {shown}. "
+        "Use Save As or Copy for the whole thing.",
+    "\n\n⋯（共 {total}，仅显示前 {shown}）":
+        "\n\n⋯ {total} in total, showing the first {shown}",
+    "过期 {when}": "expires {when}",
+    "较上一次：+{added} 行 / -{removed} 行 · 状态 {was} → {now} · 耗时 {t0}ms → {t1}ms":
+        "vs. last time: +{added} / -{removed} lines · status {was} → {now} · {t0}ms → {t1}ms",
+    "可用的顶层字段：{keys}": "Top-level fields: {keys}",
+    "路径无效：{kind} · {msg}": "Invalid path: {kind} · {msg}",
+    "命中 {kind} · 路径 {path}": "Matched {kind} · path {path}",
+
+    "✓ 合法 JSON · {n} 个字段": "✓ Valid JSON · {n} fields",
+    "✓ 合法 JSON · {n} 项": "✓ Valid JSON · {n} items",
+    "{p} 参数 · {h} 请求头": "{p} params · {h} headers",
+    "{n} 条 Cookie 会合并成 Cookie 请求头":
+        "{n} cookies will be merged into the Cookie header",
+    "把上一次响应的 {n} 条 Set-Cookie 收进这张表":
+        "Pull {n} Set-Cookie entries from the last response into this table",
+    "上一次响应没有 Set-Cookie": "The last response had no Set-Cookie",
+    "经由节点：{name}": "Via node: {name}",
+    "从本机发出": "Sent from this machine",
+
+    # Mock 状态
+    "服务运行中：{url} —— 本机浏览器、脚本、别的设备都能连。":
+        "Running at {url} — browsers, scripts and other devices on your network can reach it.",
+    "服务运行中：{url} —— 本机任何工具都能连这个地址。":
+        "Running at {url} — anything on this machine can connect.",
+    "启动后：请求发到 http://127.0.0.1:<端口>/<路径>，本机的浏览器、脚本、别的设备都能连。":
+        "Once running, point requests at http://127.0.0.1:<port>/<path> — browsers, scripts "
+        "and other devices on your network can reach it.",
+    "已停止本地服务，但端口 {port} 仍被其它程序占用（可能是另一个 Ocelot 实例）。":
+        "Stopped, but port {port} is still taken by another process — possibly a second Ocelot.",
+    "端口 {port} 上已经有一个 Ocelot Mock 服务在响（可能是另一次启动的 Ocelot，或上次没有正常退出）。要接管请先在那边停止，或直接点「启动服务」，会自动换端口。":
+        "Another Ocelot mock server is answering on port {port} — likely a second instance or a "
+        "previous run that didn't exit cleanly. Stop it there first, or just hit Start Server "
+        "and a free port will be picked.",
+    "端口 {port} 已被其它程序占用。点「启动服务」会自动挑一个空闲端口，实际地址会显示在这里。":
+        "Port {port} is taken by another process. Start Server will pick a free one and show "
+        "the actual address here.",
+    "已复制 {path}": "Copied {path}",
+    "运行中": "Running",
+    "启动失败：{err}": "Couldn't start: {err}",
+    "已启动 · {url}": "Running · {url}",
+    "端口 {port} 已被另一个 Ocelot Mock 服务占用，本次改用 {alt}":
+        "Port {port} is used by another Ocelot mock server — using {alt} instead",
+    "端口 {port} 已被其它程序占用，本次改用 {alt}":
+        "Port {port} is taken by another program — using {alt} instead",
+
+    # 设置 / 快捷键
+    "{keys} 原来是「{action}」的，已让位":
+        "{keys} belonged to “{action}” — that one stepped aside",
+    "已改为 {keys}": "Changed to {keys}",
+    "已清除 {name} 的快捷键": "Cleared the shortcut for {name}",
+    "当前版本 {v}": "This version · {v}",
+    "已删除「{name}」": "Deleted “{name}”",
+
+    # 节点
+    "IPv4 节点 {n}": "IPv4 · {n}", "IPv6 节点 {n}": "IPv6 · {n}",
+    "{scheme} 代理": "{scheme} proxy",
+    "已载入 {n} 个节点": "Loaded {n} nodes",
+    "已测 {n} 个节点 · 速度仅供参考，不代表可用性":
+        "{n} nodes tested · latency is indicative only, not availability",
+    "测速中 {done}/{total} · 速度不代表可用性":
+        "Testing {done}/{total} · latency doesn't imply availability",
+    "在线节点请求失败：{err}": "Node request failed: {err}",
+    "节点返回无法解析：{err}": "Couldn't parse the node's reply: {err}",
+
+    # cURL / 云同步 / 文档
+    "{flag} 后面缺少参数": "{flag} is missing its value",
+    "-{flag} 后面缺少参数": "-{flag} is missing its value",
+    "连不上：{err}": "Can't connect: {err}",
+    "连接正常 · {ms} ms": "Connected · {ms} ms",
+    "连上了但没返回结果": "Connected, but nothing came back",
+    "上传失败：{err}": "Upload failed: {err}",
+    "恢复失败：{err}": "Restore failed: {err}",
+    "数据格式不对：{err}": "Unexpected data: {err}",
+    "生成失败：{err}": "Couldn't generate: {err}",
+    "状态 {code} {reason}": "Status {code} {reason}",
+    "已保存 {name}": "Saved {name}",
+    "二进制内容 · {n} 字节 · 仅显示前 8 KB":
+        "Binary · {n} bytes · first 8 KB only",
+})
+
+# 第七轮：导出的 Markdown 文档、Mock 404 说明这类「写给人看」的文案。
+_EN.update({
+    "概览": "Overview", "项目": "Item", "内容": "Value", "地址": "URL",
+    "含义": "Meaning", "名称": "Name", "说明": "Notes", "响应": "Response",
+    "Query 参数": "Query Params", "表单字段": "Form Fields",
+    "鉴权": "Auth", "响应示例": "Response Example",
+    "请求头 / 查询参数里带 API Key": "Sends the API key as a header or query param",
+    "…（已截断，完整内容请在 Ocelot 里查看）":
+        "… (truncated — open it in Ocelot for the full content)",
+    "成功，响应体里带业务数据": "OK — the body carries your payload",
+    "创建成功，通常返回新资源的 id": "Created — usually returns the new resource id",
+    "参数错误或缺少必填字段": "Bad request — wrong or missing fields",
+    "未登录 / 凭据失效": "Not signed in, or credentials expired",
+    "已登录但没有权限": "Signed in, but not allowed",
+    "资源不存在": "Not found",
+    "触发限流，需要退避重试": "Rate limited — back off and retry",
+    "服务端异常": "Server error",
+    "存在": "exists", "不存在": "missing",
+    "没有找到 {method} {path} 的 Mock 规则": "No mock route for {method} {path}",
+    "在 Ocelot「Mock 服务」里新建一条，或把路径写成 /api/users/* 做前缀匹配":
+        "Add one in Ocelot's Mock Server, or end the path with * to match by prefix.",
+    "读取失败：{err}": "Couldn't read the file: {err}",
 })
 

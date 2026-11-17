@@ -6,6 +6,8 @@ cURL 解析已统一到 app/curl_import.py（支持 -F 文件、--data-urlencode
 """
 from __future__ import annotations
 
+from . import i18n
+
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -59,7 +61,7 @@ def import_collection(store, path: str) -> Tuple[int, str]:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
     except Exception as exc:
-        return 0, f"读取失败：{exc}"
+        return 0, i18n.trf("读取失败：{err}", err=exc)
 
     if isinstance(data, dict) and data.get("format") == "reqly-collection":
         nodes = data.get("collections") or []

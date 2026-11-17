@@ -397,8 +397,8 @@ class UrlBar(QWidget):
         node = self._node_book().current()
         self.node_btn.set_node(node)
         self.node_btn.setToolTip(
-            "从本机直接发出" if node.get("kind") == "local"
-            else f"经由节点：{node.get('name')}")
+            i18n.tr("从本机直接发出") if node.get("kind") == "local"
+            else i18n.trf("经由节点：{name}", name=node.get("name")))
 
     def _on_enter(self):
         if not self._busy:
@@ -482,7 +482,8 @@ class BodyPage(QWidget):
         self.form_host = VBox(self.form, 1, self.form_hint, margins=(0, 0, 0, 0), spacing=4)
 
         # 文件
-        self.file_name = Label("未选择文件", 12, theme().text_dim, mono_font=True)
+        self._file_path = ""          # 真实路径；显示文字会被翻译，不能拿来当数据用
+        self.file_name = Label(i18n.tr("未选择文件"), 12, theme().text_dim, mono_font=True)
         self.pick_btn = Button("选择文件", "file", kind="subtle", height=28, padding=10, font_size=12)
         self.pick_btn.clicked.connect(self._pick_file)
         self.clear_file_btn = Button("清除", None, kind="ghost", height=28, padding=8, font_size=12)
@@ -573,8 +574,9 @@ class BodyPage(QWidget):
         try:
             data = json.loads(text)
             n = len(data) if isinstance(data, (dict, list)) else 1
-            self.json_status.setText(f"✓ 合法 JSON · {n} 个字段" if isinstance(data, dict)
-                                     else f"✓ 合法 JSON · {n} 项")
+            self.json_status.setText(
+                i18n.trf("✓ 合法 JSON · {n} 个字段", n=n) if isinstance(data, dict)
+                else i18n.trf("✓ 合法 JSON · {n} 项", n=n))
             self.json_status.setStyleSheet(f"color: {theme().success}; background: transparent;")
         except Exception as exc:
             msg = str(exc)
@@ -598,14 +600,17 @@ class BodyPage(QWidget):
             self.changed.emit()
 
     def _pick_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "选择请求体文件", "", "所有文件 (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, i18n.tr("选择请求体文件"), "", i18n.tr("所有文件 (*)"))
         if path:
+            self._file_path = path
             self.file_name.setText(path)
             self.file_name.setToolTip(path)
             self.changed.emit()
 
     def _clear_file(self) -> None:
-        self.file_name.setText("未选择文件")
+        self._file_path = ""
+        self.file_name.setText(i18n.tr("未选择文件"))
         self.changed.emit()
 
     # -------------------------------------------------- 数据
@@ -617,7 +622,8 @@ class BodyPage(QWidget):
         self.code.setPlainText(body.get("raw", "") or "")
         self.form.set_rows(body.get("form", []) or [])
         path = body.get("file", "")
-        self.file_name.setText(path or "未选择文件")
+        self._file_path = path or ""
+        self.file_name.setText(path or i18n.tr("未选择文件"))
         self.file_name.setToolTip(path)
         if mode in ("json", "text"):
             self.stack.set_current("code")
@@ -637,7 +643,7 @@ class BodyPage(QWidget):
             "mode": self._mode,
             "raw": self.code.toPlainText(),
             "form": self.form.rows(),
-            "file": "" if self.file_name.text() == "未选择文件" else self.file_name.text(),
+            "file": self._file_path,
         }
 
 
@@ -944,11 +950,11 @@ class RequestEditor(QWidget):
         self.tabs.set_badge("auth", 1 if self.auth.dump().get("type") != "none" else 0)
         p = len(self.params.rows())
         h = len(self.headers.rows())
-        self.count_label.setText(f"{p} 参数 · {h} 请求头" if (p or h) else "")
+        self.count_label.setText(i18n.trf("{p} 参数 · {h} 请求头", p=p, h=h) if (p or h) else "")
         if cookies:
-            self.cookies_hint.setText(f"{cookies} 条 Cookie 会合并成 Cookie 请求头")
+            self.cookies_hint.setText(i18n.trf("{n} 条 Cookie 会合并成 Cookie 请求头", n=cookies))
         else:
-            self.cookies_hint.setText("发送时合并成 Cookie 请求头")
+            self.cookies_hint.setText(i18n.tr("发送时合并成 Cookie 请求头"))
         self.cookie_import.setVisible(bool(self._last_cookies))
         final = self._final_url()
         self.params_preview.setText(final if p else "")
@@ -961,8 +967,8 @@ class RequestEditor(QWidget):
         self.cookie_import.setEnabled(bool(self._last_cookies))
         self.cookie_import.setVisible(bool(self._last_cookies))
         self.cookie_import.setToolTip(
-            f"把上一次响应的 {len(self._last_cookies)} 条 Set-Cookie 收进这张表"
-            if self._last_cookies else "上一次响应没有 Set-Cookie")
+            i18n.trf("把上一次响应的 {n} 条 Set-Cookie 收进这张表", n=len(self._last_cookies))
+            if self._last_cookies else i18n.tr("上一次响应没有 Set-Cookie"))
 
     def _import_cookies(self) -> None:
         if not self._last_cookies:

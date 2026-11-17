@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from . import i18n
 from .codegen import LANGUAGES
 from .dialogs import GlassDialog
 from .markdown_view import CodeBlock, MarkdownView
@@ -331,7 +332,7 @@ class DocDialog(GlassDialog):
             code = entry[2](self.request, self.store.env_vars() if self.store else {},
                             self.store.settings if self.store else None)
         except Exception as exc:      # noqa: BLE001 — 生成失败不能把整个文档窗口带崩
-            code = f"// 生成失败：{exc}"
+            code = "// " + i18n.trf("生成失败：{err}", err=exc)
         if self._redact:
             code = redact_text(code)
         self._code_cache[key] = code
@@ -365,9 +366,10 @@ class DocDialog(GlassDialog):
         if self.response is not None:
             # 目录底部这行原来只有「200 OK」，看着像飘出来的一段文字；加个前缀说明它是什么
             self._outline_status.setText(
-                f"状态 {self.response.status} {self.response.reason}".strip())
+                i18n.trf("状态 {code} {reason}", code=self.response.status,
+                              reason=self.response.reason).strip())
         else:
-            self._outline_status.setText("草稿")
+            self._outline_status.setText(i18n.tr("草稿"))
 
     def _on_redact(self, on: bool) -> None:
         if on == self._redact:
@@ -401,10 +403,10 @@ class DocDialog(GlassDialog):
         try:
             with open(target, "w", encoding="utf-8") as fh:
                 fh.write(self._markdown)
-            self._flash(f"已保存 {os.path.basename(target)}")
+            self._flash(i18n.trf("已保存 {name}", name=os.path.basename(target)))
         except OSError as exc:
             t = theme()
-            self._flash("保存失败")
+            self._flash(i18n.tr("保存失败"))
             self._toolbar_status.setStyleSheet(
                 f"color: {t.danger}; background: transparent;")
             self._toolbar_status.setToolTip(str(exc))

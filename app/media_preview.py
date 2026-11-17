@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from . import i18n
 from .theme import C, font, mono, theme
 from .widgets import Button, EmptyState, HBox, Label, VBox
 
@@ -392,8 +393,8 @@ def build_preview(resp, host: QWidget, layout: QVBoxLayout) -> None:
         bl = QHBoxLayout(bar)
         bl.setContentsMargins(0, 0, 0, 6)
         bl.setSpacing(6)
-        title = ("PDF 响应" if kind == "pdf"
-                 else f"二进制内容 · {len(resp.body)} 字节 · 仅显示前 8 KB")
+        title = (i18n.tr("PDF 响应") if kind == "pdf"
+                 else i18n.trf("二进制内容 · {n} 字节 · 仅显示前 8 KB", n=len(resp.body)))
         bl.addWidget(Label(title, 10.5, theme().text_faint, mono_font=True))
         bl.addStretch(1)
         save_btn = Button("保存", "download", kind="ghost", height=22, padding=7, font_size=11)

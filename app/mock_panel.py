@@ -225,19 +225,20 @@ class RouteRow(QWidget):
 
         meta = f"{item.get('status', 200)}"
         if item.get("delay"):
-            meta += f" · 延迟 {item['delay']}ms"
+            meta += " · " + i18n.trf("延迟 {ms}ms", ms=item["delay"])
         if item.get("echo"):
-            meta += " · 回显"
+            meta += " · " + i18n.tr("回显")
         rules = item.get("rules") or []
         if rules:
-            meta += f" · {len(rules)} 条规则"
+            meta += " · " + i18n.trf("{n} 条规则", n=len(rules))
+        name = i18n.tr(item.get("name") or "未命名")
         mid = VBox(ElideLabel(item.get("path") or "/", 12.0, t.text, mono_font=True),
-                   ElideLabel(f"{item.get('name') or '未命名'} · {meta}", 10.4, t.text_faint),
+                   ElideLabel(f"{name} · {meta}", 10.4, t.text_faint),
                    spacing=2)
         mid.layout().setContentsMargins(0, 0, 0, 0)
         lay.addWidget(mid, 1)
 
-        self.hit_label = Label(f"{hits} 次" if hits else "", 10.2,
+        self.hit_label = Label(i18n.trf("{n} 次", n=hits) if hits else "", 10.2,
                                t.success if hits else t.text_faint, mono_font=True)
         self.hit_label.setFixedWidth(META_W)
         self.hit_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -294,10 +295,10 @@ def rule_summary(r: Dict[str, Any]) -> str:
           }.get((r.get("op") or "eq").lower(), "等于")
     key = r.get("key") or ""
     val = r.get("value") or ""
-    cond = f"{src} {key} {op}" + (f" {val}" if val and op not in ("存在", "不存在") else "")
+    cond = f"{src} {key} {i18n.tr(op)}" + (f" {val}" if val and op not in ("存在", "不存在") else "")
     out = f"{cond} → {r.get('status', 200)}"
     if r.get("delay"):
-        out += f" · 延迟 {r['delay']}ms"
+        out += " · " + i18n.trf("延迟 {ms}ms", ms=r["delay"])
     return out
 
 
@@ -317,7 +318,7 @@ class RuleDialog(GlassDialog):
         self.name_edit = QLineEdit(self._src.get("name") or "")
         self.name_edit.setObjectName("Field")
         self.name_edit.setFixedHeight(30)
-        self.name_edit.setPlaceholderText("例如：带 token 返回 VIP 数据")
+        i18n.placeholder(self.name_edit, "例如：带 token 返回 VIP 数据")
 
         self.source_tabs = SegmentedTabs(
             [("header", "请求头"), ("query", "查询参数"), ("body", "请求体"), ("method", "方法")],
@@ -399,9 +400,10 @@ class RuleDialog(GlassDialog):
         src = self.source_tabs.current()
         op = self.op_tabs.current()
         self.key_edit.setEnabled(src != "method")
-        self.key_edit.setPlaceholderText("body 支持 a.b.c 取嵌套字段" if src == "body" else "token")
+        i18n.placeholder(self.key_edit,
+                             "body 支持 a.b.c 取嵌套字段" if src == "body" else "token")
         self.value_edit.setEnabled(op not in ("exists", "missing"))
-        self.value_edit.setPlaceholderText("GET" if src == "method" else "要比对的值")
+        i18n.placeholder(self.value_edit, "GET" if src == "method" else "要比对的值")
 
     def _format(self) -> None:
         try:
@@ -1016,9 +1018,10 @@ class MockDialog(GlassDialog):
             self.store.save()
             self.port_edit.setText(str(self.server.port))
             note = msg if msg.startswith("端口") else ""
-            self.local_hint.setText(
-                (note + "。" if note else "") +
-                f"服务运行中：{self.server.base} —— 本机浏览器、脚本、别的设备都能连。")
+            running_hint = i18n.trf(
+                "服务运行中：{url} —— 本机浏览器、脚本、别的设备都能连。",
+                url=self.server.base)
+            self.local_hint.setText((i18n.tr(msg) if note else "") + running_hint)
         else:
             self.local_hint.setText(msg)
         self._sync_local(rebuild=True)
@@ -1030,18 +1033,19 @@ class MockDialog(GlassDialog):
         # 停完再确认一次端口真的关了：否则界面说「已停止」，浏览器还能连上
         if port and self.server.port_in_use(port):
             self.local_hint.setText(
-                f"已停止本地服务，但端口 {port} 仍被其它程序占用（可能是另一个 Ocelot 实例）。")
+                i18n.trf("已停止本地服务，但端口 {port} 仍被其它程序占用"
+                         "（可能是另一个 Ocelot 实例）。", port=port))
         else:
-            self.local_hint.setText("服务已停止。已经填好的路由仍然保留，重启后继续用。")
+            self.local_hint.setText(i18n.tr("服务已停止。已经填好的路由仍然保留，重启后继续用。"))
         self._sync_local(rebuild=True)
 
     def _sync_local(self, rebuild: bool = False) -> None:
         t = theme()
         running = self.server.running
-        self.status_pill.set_text("运行中" if running else "未启动")
+        self.status_pill.set_text(i18n.tr("运行中") if running else i18n.tr("未启动"))
         self.status_pill.set_color(t.success if running else t.text_faint)
         # 按钮必须跟着真实状态走：之前固定写成「停止服务」，没启动时点一下等于什么也没做
-        self.start_btn.setText("停止服务" if running else "启动服务")
+        self.start_btn.setText(i18n.tr("停止服务") if running else i18n.tr("启动服务"))
         self.start_btn.set_icon("stop" if running else "play")
         self.start_btn.set_kind("subtle" if running else "primary")
         self.base_label.setText(self.server.base if running
@@ -1049,12 +1053,14 @@ class MockDialog(GlassDialog):
         self.port_edit.setEnabled(not running)
         if running:
             if not self.local_hint.text() or "已停止" in self.local_hint.text():
-                self.local_hint.setText(f"服务运行中：{self.server.base} —— "
-                                        "本机任何工具都能连这个地址。")
+                self.local_hint.setText(i18n.trf(
+                    "服务运行中：{url} —— 本机任何工具都能连这个地址。",
+                    url=self.server.base))
         else:
             if not self.local_hint.text() or "运行中" in self.local_hint.text():
-                self.local_hint.setText("启动后：请求发到 http://127.0.0.1:<端口>/<路径>，"
-                                        "本机的浏览器、脚本、别的设备都能连。")
+                self.local_hint.setText(i18n.tr(
+                    "启动后：请求发到 http://127.0.0.1:<端口>/<路径>，"
+                    "本机的浏览器、脚本、别的设备都能连。"))
             self._check_port_owner()
         for row in self.route_rows:
             row.setup_buttons(running)
@@ -1071,12 +1077,14 @@ class MockDialog(GlassDialog):
             return
         if MockServer._probe_ocelot(port):
             self.local_hint.setText(
-                f"端口 {port} 上已经有一个 Ocelot Mock 服务在响（可能是另一次启动的 Ocelot，"
-                "或上次没有正常退出）。要接管请先在那边停止，或直接点「启动服务」，会自动换端口。")
+                i18n.trf("端口 {port} 上已经有一个 Ocelot Mock 服务在响"
+                         "（可能是另一次启动的 Ocelot，或上次没有正常退出）。"
+                         "要接管请先在那边停止，或直接点「启动服务」，会自动换端口。",
+                         port=port))
         else:
             self.local_hint.setText(
-                f"端口 {port} 已被其它程序占用。点「启动服务」会自动挑一个空闲端口，"
-                "实际地址会显示在这里。")
+                i18n.trf("端口 {port} 已被其它程序占用。点「启动服务」会自动挑一个空闲端口，"
+                         "实际地址会显示在这里。", port=port))
 
     def _rebuild_routes(self) -> None:
         while self.routes_box.count() > 1:
@@ -1138,7 +1146,7 @@ class MockDialog(GlassDialog):
             self.local_hint.setText("先启动服务，才有地址可复制")
             return
         QGuiApplication.clipboard().setText(self.server.url_for(item.get("path") or "/"))
-        self.local_hint.setText(f"已复制 {item.get('path')}")
+        self.local_hint.setText(i18n.trf("已复制 {path}", path=item.get("path")))
 
     def _trial_route(self, item: Dict[str, Any]) -> None:
         if not self.server.running:
@@ -1178,7 +1186,7 @@ class MockDialog(GlassDialog):
 
         self.search = QLineEdit()
         self.search.setObjectName("Field")
-        self.search.setPlaceholderText("搜索接口、域名或用途，例如 登录 / json / 图片")
+        i18n.placeholder(self.search, "搜索接口、域名或用途，例如 登录 / json / 图片")
         self.search.setFont(font(12.5))
         self.search.setFixedHeight(30)
         self.search.textChanged.connect(self._on_search)
@@ -1263,7 +1271,7 @@ class MockDialog(GlassDialog):
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setFixedHeight(120)
             self.rows_box.insertWidget(0, empty)
-        self.hint.setText(f"{len(items)} 个公开接口 · 点一行新建请求")
+        self.hint.setText(i18n.trf("{n} 个公开接口 · 点一行新建请求", n=len(items)))
 
     def _pick(self, item: Dict[str, Any]) -> None:
         self.chosen.emit(item)
