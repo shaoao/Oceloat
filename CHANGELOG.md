@@ -1,5 +1,25 @@
 # What's Changed
 
+## v1.0.25 — 2026-11-17
+
+**Fixed**
+- The run status on the script page is now a single line. `console.log()` output from both
+  **Run test** and real requests is written to a read-only log panel directly below, so the
+  "see logs below" message finally points at something real.
+- Editing a pre-request or post-response script no longer wipes out the last response. Script
+  changes update the request data and the dirty flag only; the response panel keeps showing
+  what you were looking at.
+
+**Improved**
+- The auth type name **Inherit** is now always shown in English, matching Bearer, Basic,
+  API Key and JWT.
+- Params, Body, Headers, Cookies and Auth pages now each get a slim scrollbar. When their
+  content is taller than the request pane they scroll on their own instead of being clipped.
+- The collection runner uses the theme's subtle hover color for the current row instead of a
+  bright gray bar. Clicking a finished row opens that request with its captured response, so
+  you can inspect the result directly.
+- All 395 self-tests pass.
+
 ## v1.0.24 — 2026-11-17
 
 **Improved**

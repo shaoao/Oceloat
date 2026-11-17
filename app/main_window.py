@@ -691,6 +691,7 @@ class MainWindow(QWidget):
         # 防止拖竖分隔时把请求区压到只剩半行，出现「地址栏消失、描述行上浮」。
         self.editor.setMinimumHeight(180)
         self.editor.changed.connect(self._on_editor_changed)
+        self.editor.scriptsChanged.connect(self._on_scripts_changed)
         self.editor.sendRequested.connect(self.send_current)
         self.editor.cancelRequested.connect(self._abort)
         self.editor.saveRequested.connect(self.save_current)
@@ -1264,6 +1265,19 @@ class MainWindow(QWidget):
                                  dirty=True, preview=tab.get("preview", False))
         self._autosave.start()
 
+    def _on_scripts_changed(self) -> None:
+        """只改了脚本：照常标记脏并落盘，但保留上一次响应，避免脚本一改动
+        响应区就变成「请求已修改」、内容全没了。"""
+        tab = self.current_tab()
+        if tab is None:
+            return
+        tab["dirty"] = True
+        if tab.get("preview"):
+            tab["preview"] = False
+        self.tabstrip.update_tab(tab["id"], title=tab["title"], method=tab["method"],
+                                 dirty=True, preview=tab.get("preview", False))
+        self._autosave.start()
+
     def _on_store_changed(self) -> None:
         # 集合树变动时只同步「标题 / 方法」这类元数据；绝不能用 store 节点覆盖
         # tab["request"]——那会把用户在标签里的独立编辑全部抹掉，也是「两个页面
@@ -1329,6 +1343,10 @@ class MainWindow(QWidget):
         if tab is not None:
             tab["response"] = resp
             tab["view"] = self.response.view_state() if tab_id == self.tabstrip.current() else None
+            # 真实请求里的脚本输出回填到两个脚本页，用户不必再猜日志去哪了
+            logs = list(getattr(self.client, "scriptLogs", []) or [])
+            self.editor.scripts_pre.set_logs(logs)
+            self.editor.scripts_post.set_logs(logs)
             self.store.push_history(tab["request"], resp.status, resp.elapsed)
             self.sidebar.refresh_history()
             self._autosave.start()       # 落盘合并到 700ms，避免每条响应都同步写 100KB
@@ -1629,14 +1647,24 @@ class MainWindow(QWidget):
         dlg = RunnerDialog(self.store, folder, self)
         picked: List[Dict[str, Any]] = []
 
-        def _open(req: Dict[str, Any]) -> None:
-            picked.append(req)
+        def _open(payload: Dict[str, Any]) -> None:
+            picked.append(payload)
             dlg.accept()
 
         dlg.openRequested.connect(_open)
         dlg.exec()
         if picked:
-            self._open_request_obj(picked[0], node_id=picked[0].get("id"))
+            payload = picked[0]
+            req = payload.get("request") or {}
+            self._open_request_obj(req, node_id=req.get("id"))
+            # 点的是已经跑完的那一条：把那次的响应直接铺开，可以点进去看内容
+            resp = payload.get("response")
+            if resp is not None:
+                tab = self.current_tab()
+                if tab is not None:
+                    tab["response"] = resp
+                    self.response.set_response(resp)
+                    self._refresh_timeline(req)
 
     def run_selected_collection(self) -> None:
         """⌘⇧R：跑当前标签所在文件夹；没标签时跑侧栏里选中的文件夹。"""

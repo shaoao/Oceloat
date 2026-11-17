@@ -19,9 +19,25 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.24"
+VERSION = "1.0.25"
 
 CHANGELOG = [
+    {
+        "version": "1.0.25",
+        "date": "2026-11-17",
+        "items": [
+            "修复：脚本页运行结果改为单行显示；console.log 日志真正落到下方只读面板，"
+            "试运行和真实请求都能看到输出，不再只提示「查看下方日志」却无处可看",
+            "修复：修改前置 / 后置脚本不再把上一次请求的响应清空 —— 脚本属于辅助编辑，"
+            "只更新数据与脏标记，响应区保持原样",
+            "优化：认证页的 Inherit 统一用英文展示，与 Bearer / Basic / API Key / JWT 一致",
+            "优化：参数 / 请求体 / 请求头 / Cookies / 认证各页统一加细滚动条，"
+            "内容高度超出请求区时自己滚动，不再被裁掉",
+            "优化：集合运行器当前行改用主题自带的极淡悬停色，不再是一条扎眼的亮灰；"
+            "运行完点某一行会打开该请求并铺开那一次的响应，可直接查看结果",
+            "优化：自测 395 项全绿",
+        ],
+    },
     {
         "version": "1.0.24",
         "date": "2026-11-17",

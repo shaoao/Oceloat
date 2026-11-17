@@ -62,7 +62,8 @@ _MODE_ALIAS = {
     "application/json": "json", "raw": "text", "file": "binary",
 }
 
-AUTH_TYPES = [("none", "无"), ("inherit", "继承"), ("bearer", "Bearer"),
+# 认证类型英文名与主流客户端对齐；Inherit 是专有名词，中英文界面都只显示英文。
+AUTH_TYPES = [("none", "无"), ("inherit", "Inherit"), ("bearer", "Bearer"),
               ("basic", "Basic"), ("apikey", "API Key"), ("jwt", "JWT")]
 
 
@@ -731,7 +732,7 @@ class AuthPage(QWidget):
         self.inherit_detail = Label("", 11.5, theme().text_faint)
         self.inherit_detail.setWordWrap(True)
         self.inherit_box = self._group(
-            "继承", "从所属集合继承认证配置。集合未设置认证时不带任何凭据。",
+            "Inherit", "从所属集合继承认证配置。集合未设置认证时不带任何凭据。",
             self.inherit_source, self.inherit_detail)
 
         # JWT：自动生成签名令牌 / 手动粘贴，两种模式
@@ -1007,18 +1008,26 @@ class ScriptPage(QWidget):
 
         # 底部：运行结果 + 简短的「试运行」按钮（tooltip 说明用途）
         self.status = Label("", 10.5, theme().text_faint, mono_font=True)
-        self.status.setWordWrap(True)
+        # 说明必须保持一行：多行会把下方「试运行」整行顶得忽高忽低
+        self.status.setWordWrap(False)
         self.run_btn = Button(
             "试运行", "play", kind="ghost", height=26, padding=11, font_size=11.5,
             tooltip="不联网，只在临时请求上执行当前脚本，查看日志与错误。")
         self.run_btn.clicked.connect(self._run_test)
         tools = HBox(self.status, 1, self.run_btn, spacing=8)
 
+        # 日志输出：试运行 / 真实请求后的 console.log 都落在这里，默认收起不占地方
+        self.log_view = CodeView(read_only=True, highlight=False, show_gutter=False, wrap=True)
+        self.log_view.setMaximumHeight(92)
+        self.log_view.setObjectName("ScriptLog")
+        self.log_view.hide()
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 8, 0, 0)
         lay.setSpacing(8)
         lay.addLayout(body, 1)
         lay.addWidget(tools)
+        lay.addWidget(self.log_view)
 
     def _on_code_changed(self) -> None:
         if not self._loading:
@@ -1030,6 +1039,20 @@ class ScriptPage(QWidget):
         self.code.setTextCursor(cur)
         self.code.setFocus()
 
+    def _show_logs(self, lines: List[str]) -> None:
+        """把脚本日志写进下方只读视图；没有日志就收起，不占垂直空间。"""
+        text = "\n".join(str(line) for line in lines if str(line).strip())
+        if text:
+            self.log_view.setPlainText(text)
+            self.log_view.show()
+        else:
+            self.log_view.clear()
+            self.log_view.hide()
+
+    def set_logs(self, lines: List[str]) -> None:
+        """真实请求执行完脚本后由主窗口回填日志（试运行也会调用同一出口）。"""
+        self._show_logs(lines)
+
     def _run_test(self) -> None:
         """试跑：不联网，只在临时请求对象上看日志与错误。"""
         from .scripts import run_script
@@ -1039,8 +1062,13 @@ class ScriptPage(QWidget):
         source = self.code.toPlainText()
         if not source.strip():
             self.status.setText("")
+            self._show_logs([])
             return
         result = run_script(source, self.store, req)
+        lines = list(result.logs)
+        if result.error:
+            lines.append("✕ " + result.error)
+        self._show_logs(lines)
         self.status.setText(
             i18n.tr("✓ 运行成功 · 查看下方日志") if result.ok
             else "✕ " + result.error[:180])
@@ -1061,6 +1089,7 @@ class ScriptPage(QWidget):
         }
         self.code.setPlainText(self._script_drafts[self._kind])
         self.status.setText("")
+        self._show_logs([])
         self._loading = False
 
     def dump(self) -> Dict[str, str]:
@@ -1078,6 +1107,9 @@ class ScriptPage(QWidget):
 
 class RequestEditor(QWidget):
     changed = pyqtSignal()
+    # 脚本属于「辅助编辑」：改脚本不该把上一次真实请求的响应作废。
+    # 单独发一个信号，让主窗口只标记 dirty / 落盘，不清空响应区。
+    scriptsChanged = pyqtSignal()
     sendRequested = pyqtSignal()
     cancelRequested = pyqtSignal()
     saveRequested = pyqtSignal()
@@ -1157,11 +1189,14 @@ class RequestEditor(QWidget):
         self._last_cookies: List[Dict[str, Any]] = []
 
         self.pages = FadeStack()
-        self.pages.add("params", self._wrap(self.params, self.params_tools, self.params_preview))
-        self.pages.add("body", self.body)
-        self.pages.add("headers", self._wrap(self.headers, self.headers_tools))
-        self.pages.add("cookies", self._wrap(self.cookies, self.cookies_tools))
-        self.pages.add("auth", self.auth)
+        self.pages.add("params", self._scroll_page(
+            self._wrap(self.params, self.params_tools, self.params_preview)))
+        self.pages.add("body", self._scroll_page(self.body))
+        self.pages.add("headers", self._scroll_page(
+            self._wrap(self.headers, self.headers_tools)))
+        self.pages.add("cookies", self._scroll_page(
+            self._wrap(self.cookies, self.cookies_tools)))
+        self.pages.add("auth", self._scroll_page(self.auth))
         self.pages.add("pre", self.scripts_pre)
         self.pages.add("post", self.scripts_post)
         self.pages.set_current("params", animate=False)
@@ -1196,6 +1231,17 @@ class RequestEditor(QWidget):
             lay.addWidget(footer, 0)
         return w
 
+    @staticmethod
+    def _scroll_page(widget: QWidget) -> QWidget:
+        """统一的可滚动页容器：内容高度超出请求区时自己出滚动条，不再被裁掉。
+
+        KVEditor / CodeView 内部已有自己的滚动区，minimumSizeHint 很小，
+        套上这层后不会多出第二根滚动条；Auth 这类固定高度表单超出时会自动出现。
+        """
+        sc = SmoothScrollArea()
+        sc.setWidget(widget)
+        return sc
+
     # -------------------------------------------------- 加载 / 同步
     def load(self, request: Dict[str, Any]) -> None:
         # try/finally：任何一行数据有问题都不能把 _loading 卡在 True，
@@ -1218,7 +1264,7 @@ class RequestEditor(QWidget):
         self._refresh_counts()
         self.pages.set_current(self.tabs.current(), animate=False)
 
-    def _sync_request(self) -> None:
+    def _sync_request(self, *, script_only: bool = False) -> None:
         if self._loading or self._syncing or not self.request:
             return
         self.request["method"] = self.urlbar.method.method()
@@ -1235,7 +1281,11 @@ class RequestEditor(QWidget):
         if not self.request.get("name") or self.request.get("name") == "Untitled Request":
             self._auto_name()
         self._refresh_counts()
-        self.changed.emit()
+        # 脚本改动只更新数据与脏标记，不能让旁边正在看的响应被 show_stale 清掉。
+        if script_only:
+            self.scriptsChanged.emit()
+        else:
+            self.changed.emit()
 
     def _final_url(self) -> str:
         """把 base URL 与启用的查询参数拼成最终地址（与发送时同一套算法，并解析环境变量）。"""
@@ -1399,7 +1449,7 @@ class RequestEditor(QWidget):
 
     def _on_scripts(self) -> None:
         if not self._loading:
-            self._sync_request()
+            self._sync_request(script_only=True)
 
     def _on_tab(self, key: str) -> None:
         self.pages.set_current(key)

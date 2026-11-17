@@ -2,7 +2,7 @@
 
 设计要点：
 - 顺序执行（不并发），避免把被测服务打爆，也方便看「哪一条变慢了」；
-- 每条请求的响应体只保留大小，不缓存全文，跑几百条也不吃内存；
+- 每条请求保留完整响应，跑完点进去就能直接看这一条的结果；
 - 复用 ApiClient，代理 / 节点 / 超时 / 环境变量与手动发送完全一致；
 - 运行过程中可随时停止，已跑完的结果保留。
 """
@@ -120,6 +120,8 @@ class CollectionRunner(QObject):
             "ok": (not resp.error) and resp.ok,
             "error": resp.error,
             "request": req,
+            # 完整响应留下来：点这一行就能查看本次运行这一条的结果
+            "response": resp,
         }
         self.records.append(rec)
         self.progress.emit(rec["index"], rec)
@@ -177,7 +179,10 @@ class RunRow(QWidget):
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint()):
-            self.clicked.emit(self.request)
+            # 带上本次运行的记录：跑完的条目点进去能直接看到那一次的响应。
+            payload = dict(self.rec or {})
+            payload.setdefault("request", self.request)
+            self.clicked.emit(payload)
         super().mouseReleaseEvent(e)
 
     # -------------------------------------------------- 绘制
@@ -188,9 +193,9 @@ class RunRow(QWidget):
         w, h = self.width(), self.height()
         if self._hover:
             p.setPen(Qt.PenStyle.NoPen)
-            col = QColor(C(t.hover))
-            col.setAlpha(150 if t.is_dark else 110)
-            p.setBrush(col)
+            # 用主题自带的极淡 hover（深色约 14/255），不要覆写 alpha，
+            # 之前 150 的灰度在暗底上像选中的亮条，太扎眼。
+            p.setBrush(QColor(C(t.hover)))
             p.drawRoundedRect(QRectF(4, 2, w - 8, h - 4), 7, 7)
 
         rec = self.rec or {}
@@ -390,8 +395,8 @@ class RunnerDialog(GlassDialog):
         self.copy_btn.setEnabled(bool(records))
 
     # -------------------------------------------------- 结果操作
-    def _open_request(self, request: Dict[str, Any]) -> None:
-        self.openRequested.emit(request)
+    def _open_request(self, payload: Dict[str, Any]) -> None:
+        self.openRequested.emit(payload)
 
     def _copy(self) -> None:
         if not self.runner:
