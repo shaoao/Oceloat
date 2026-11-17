@@ -19,9 +19,23 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.26"
+VERSION = "1.0.27"
 
 CHANGELOG = [
+    {
+        "version": "1.0.27",
+        "date": "2026-11-18",
+        "items": [
+            "优化：脚本运行状态改为「细体对号 / 叉号图标 + 文案」，成功只显示「运行成功」；"
+            "文案与上方编辑器左对齐、紧贴下沿，出现时淡入，颜色用主题成功/危险色，图标不加粗",
+            "新增：请求体增加 Raw 模式（JSON / XML / HTML / Text 语言下拉），" 
+            "自动决定语法高亮、格式化与 Content-Type；发送端与代码生成端统一走同一套归一化逻辑",
+            "修复：历史分组标题改为绘制时按当前语言翻译，切换中英文后立即生效，不再停留在旧语言",
+            "优化：语言切换只遍历一次控件树；历史分组条数改为单遍统计；" 
+            "合并多处重复 import 与设置，减少冗余代码",
+            "优化：全面回归测试，395 项自测全绿，真实 GUI 连续启动无崩溃",
+        ],
+    },
     {
         "version": "1.0.26",
         "date": "2026-11-18",
@@ -553,6 +567,40 @@ def uid() -> str:
 
 def kv(key: str = "", value: str = "", enabled: bool = True) -> Dict[str, Any]:
     return {"key": key, "value": value, "enabled": enabled}
+
+
+# 文本类 body 的默认 Content-Type；raw 的具体语言由 raw_lang 决定。
+BODY_CONTENT_TYPES = {
+    "json": "application/json",
+    "xml": "application/xml",
+    "html": "text/html",
+    "text": "text/plain",
+    "urlencoded": "application/x-www-form-urlencoded",
+    "form": "multipart/form-data",
+    "binary": "application/octet-stream",
+}
+
+
+def body_mode(body: Optional[Dict[str, Any]]) -> str:
+    """把 body 配置归一成实际模式：raw 按 raw_lang 落到 json/xml/html/text。
+
+    UI 里 raw 是一种独立模式（带语言下拉），发送层只关心最终的内容类型，
+    所以各消费端统一走这里，避免每个文件各写一套 if mode == "raw"。
+    """
+    b = body or {}
+    mode = b.get("mode") or "none"
+    if mode == "raw":
+        lang = b.get("raw_lang") or "text"
+        return lang if lang in BODY_CONTENT_TYPES else "text"
+    return mode
+
+
+def body_content_type(body: Optional[Dict[str, Any]], charset: bool = False) -> str:
+    """按归一后的模式给出 Content-Type；charset 由调用方决定是否需要。"""
+    ct = BODY_CONTENT_TYPES.get(body_mode(body), "")
+    if ct and charset and not ct.startswith("multipart/"):
+        return ct + "; charset=utf-8"
+    return ct
 
 
 def new_request(name: str = "Untitled Request", method: str = "GET", url: str = "") -> Dict[str, Any]:

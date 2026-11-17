@@ -1,5 +1,25 @@
 # What's Changed
 
+## v1.0.27 — 2026-11-18
+
+**Improved**
+- The script run status now pairs a thin check/cross icon with the text. Success shows only
+  "Ran successfully"; the line is left-aligned with the editor above and sits right beneath
+  it, fades in when it appears, and uses the theme's success/danger colors. The icon uses a
+  light stroke weight.
+- Language switching now walks the widget tree once instead of twice; history group counts
+  are computed in a single pass. Duplicate imports and redundant calls were consolidated.
+
+**Added**
+- A **Raw** body mode with a JSON / XML / HTML / Text language selector. The selected
+  language drives syntax highlighting, formatting and `Content-Type`. All send paths and
+  code generators now share one normalization helper.
+
+**Fixed**
+- History group titles are translated at paint time, so switching between Chinese and
+  English updates them immediately instead of leaving the old language on screen.
+- All 395 self-tests pass and repeated real GUI startups are crash-free.
+
 ## v1.0.26 — 2026-11-18
 
 **Improved**

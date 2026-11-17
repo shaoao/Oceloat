@@ -6,10 +6,12 @@ from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import (QPoint, QPointF, QRectF, QSize, Qt, QTimer,
                           QUrl, QUrlQuery, pyqtSignal)
-from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QGuiApplication, QPainter, QPen
+from PyQt6.QtGui import (QColor, QFont, QFontMetricsF, QGuiApplication, QPainter,
+                         QPen, QPixmap)
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QSizePolicy,
     QVBoxLayout,
@@ -19,9 +21,9 @@ from PyQt6.QtWidgets import (
 from . import i18n, icons
 from .code_editor import CodeView, pretty_json
 from .kv_editor import COMMON_CONTENT_TYPES, COMMON_HEADERS, KVEditor
-from .store import Store, kv, resolve_vars
+from .store import BODY_CONTENT_TYPES, Store, kv, resolve_vars
 from .anim import running as _anim_running, stop as _anim_stop
-from .theme import C, method_color, font, mono, theme
+from .theme import C, S, method_color, font, mono, theme
 from .widgets import (
     Button,
     Card,
@@ -49,6 +51,7 @@ BODY_MODES = [
     ("none", "none"),
     ("form", "form-data"),
     ("urlencoded", "x-www-form-urlencoded"),
+    ("raw", "Raw"),
     ("json", "JSON"),
     ("xml", "XML"),
     ("text", "Text"),
@@ -56,11 +59,14 @@ BODY_MODES = [
 ]
 # 旧数据的 mode 值直接沿用，这里只做「截图的显示名 → 存储 key」的反向兼容说明：
 # form-data → form, x-www-form-urlencoded → urlencoded。导入器若写入长名，先归一化。
+# raw 是独立模式（带语言下拉），不能再折成 text，否则 Raw 页永远显示不出来。
 _MODE_ALIAS = {
     "form-data": "form", "multipart/form-data": "form",
     "x-www-form-urlencoded": "urlencoded", "url-encoded": "urlencoded",
-    "application/json": "json", "raw": "text", "file": "binary",
+    "application/json": "json", "file": "binary",
 }
+# Raw 模式下可选的语法语言，决定高亮 / 格式化 / Content-Type。
+RAW_LANGS = [("json", "JSON"), ("xml", "XML"), ("html", "HTML"), ("text", "Text")]
 
 # 认证类型英文名与主流客户端对齐；Inherit 是专有名词，中英文界面都只显示英文。
 AUTH_TYPES = [("none", "无"), ("inherit", "Inherit"), ("bearer", "Bearer"),
@@ -489,7 +495,13 @@ class BodyPage(QWidget):
         self.format_btn.clicked.connect(self._format)
         self.minify_btn = Button("Minify", None, kind="ghost", height=24, padding=8, font_size=11.5)
         self.minify_btn.clicked.connect(self._minify)
-        self.code_tools = HBox(4, self.json_status, 1, self.format_btn, self.minify_btn, spacing=4)
+        # Raw 的语言下拉：决定高亮 / 格式化 / Content-Type，选中即写回 body.raw_lang
+        self.raw_lang_tabs = SegmentedTabs(RAW_LANGS, style="pill", height=22,
+                                           font_size=10.5, pad_h=8)
+        self.raw_lang_tabs.changed.connect(self._on_raw_lang)
+        self._raw_lang = "json"
+        self.code_tools = HBox(self.raw_lang_tabs, 4, self.json_status, 1,
+                               self.format_btn, self.minify_btn, spacing=4)
 
         # 表单（带类型列：File 类型直接选文件上传，走 multipart/form-data）
         self.form = KVEditor("字段", "值", empty_hint="添加表单字段",
@@ -540,10 +552,14 @@ class BodyPage(QWidget):
         return w
 
     # -------------------------------------------------- 模式
+    def _code_mode(self) -> str:
+        """代码页的有效语法模式：raw 按语言下拉展开，其他模式原样返回。"""
+        return self._raw_lang if self._mode == "raw" else self._mode
+
     def _on_mode(self, mode: str) -> None:
         mode = _MODE_ALIAS.get(mode, mode)
         self._mode = mode
-        if mode in ("json", "xml", "text"):
+        if mode in ("raw", "json", "xml", "text"):
             self.stack.set_current("code")
         elif mode in ("form", "urlencoded"):
             self.stack.set_current("form")
@@ -557,43 +573,64 @@ class BodyPage(QWidget):
         else:
             self.code.setEnabled(True)
             self.code.setStyleSheet("QPlainTextEdit { background: transparent; border: none; }")
-        # 新增/切换类型时同步代码高亮语言：JSON 走 JSON 规则，XML 走通用规则
-        self.code.set_language("xml" if mode == "xml" else None)
+        self._sync_code_language()
         self._sync_tools()
         if not self._loading:
             self.changed.emit()
 
+    def _sync_code_language(self) -> None:
+        """JSON 走 JSON 规则；XML/HTML 走通用标记规则；纯文本不高亮。"""
+        lang = self._code_mode()
+        if lang == "text":
+            self.code.set_highlight(False)
+        else:
+            # set_language(None) 会按需建 JsonHighlighter；不必再调 set_highlight，
+            # 否则会先建再拆，白做一次全文档 rehighlight。
+            self.code.set_language("xml" if lang in ("xml", "html") else None)
+
+    def _on_raw_lang(self, lang: str) -> None:
+        if self._loading:
+            return
+        self._raw_lang = lang
+        self._sync_code_language()
+        self._sync_tools()
+        self._validate_json()
+        self.changed.emit()
+
     def _sync_tools(self) -> None:
         mode = self._mode
-        self.type_label.setText({
-            "json": "application/json", "xml": "application/xml",
-            "text": "text/plain",
-            "urlencoded": "x-www-form-urlencoded", "form": "multipart/form-data",
-            "binary": "application/octet-stream", "none": "",
-        }.get(mode, ""))
-        self.code_tools.setVisible(mode in ("json", "xml", "text"))
-        self.format_btn.setVisible(mode in ("json", "xml"))
-        self.minify_btn.setVisible(mode == "json")
-        self.json_status.setVisible(mode in ("json", "xml"))
+        eff = self._code_mode()
+        self.type_label.setText(
+            BODY_CONTENT_TYPES.get(eff, "") if mode == "raw" else {
+                "json": "application/json", "xml": "application/xml",
+                "text": "text/plain",
+                "urlencoded": "x-www-form-urlencoded", "form": "multipart/form-data",
+                "binary": "application/octet-stream", "none": "",
+            }.get(mode, ""))
+        self.raw_lang_tabs.setVisible(mode == "raw")
+        self.code_tools.setVisible(mode in ("raw", "json", "xml", "text"))
+        self.format_btn.setVisible(eff in ("json", "xml"))
+        self.minify_btn.setVisible(eff == "json")
+        self.json_status.setVisible(eff in ("json", "xml"))
         self.code.setVisible(mode != "none")
 
     def _on_code_changed(self) -> None:
         if self._loading:
             return
-        if self._mode in ("json", "xml"):
+        if self._code_mode() in ("json", "xml"):
             self._validate_json()
         self.changed.emit()
 
     def refresh_theme(self) -> None:
-        if self._mode in ("json", "xml") and self.code.toPlainText().strip():
+        if self._code_mode() in ("json", "xml") and self.code.toPlainText().strip():
             self._validate_json()
 
     def _validate_json(self) -> None:
         text = self.code.toPlainText().strip()
-        if not text:
+        if not text or self._code_mode() not in ("json", "xml"):
             self.json_status.setText("")
             return
-        if self._mode == "xml":
+        if self._code_mode() == "xml":
             from PyQt6.QtXml import QDomDocument
 
             doc = QDomDocument()
@@ -615,7 +652,7 @@ class BodyPage(QWidget):
             self.json_status.setStyleSheet(f"color: {theme().danger}; background: transparent;")
 
     def _format(self) -> None:
-        if self._mode == "xml":
+        if self._code_mode() == "xml":
             from ..code_editor import _format_xml
 
             out = _format_xml(self.code.toPlainText())
@@ -657,15 +694,18 @@ class BodyPage(QWidget):
         mode = body.get("mode", "none") or "none"
         mode = _MODE_ALIAS.get(mode, mode)
         self._mode = mode
+        self._raw_lang = body.get("raw_lang", "json") or "json"
+        if self._raw_lang not in dict(RAW_LANGS):
+            self._raw_lang = "json"
         self.modes.set_current(mode, emit=False)
+        self.raw_lang_tabs.set_current(self._raw_lang, emit=False)
         self.code.setPlainText(body.get("raw", "") or "")
-        self.code.set_language("xml" if mode == "xml" else None)
         self.form.set_rows(body.get("form", []) or [])
         path = body.get("file", "")
         self._file_path = path or ""
         self.file_name.setText(path or i18n.tr("未选择文件"))
         self.file_name.setToolTip(path)
-        if mode in ("json", "xml", "text"):
+        if mode in ("raw", "json", "xml", "text"):
             self.stack.set_current("code")
         elif mode in ("form", "urlencoded"):
             self.stack.set_current("form")
@@ -673,8 +713,9 @@ class BodyPage(QWidget):
             self.stack.set_current("file")
         else:
             self.stack.set_current("code")
+        self._sync_code_language()
         self._sync_tools()
-        if mode in ("json", "xml"):
+        if self._code_mode() in ("json", "xml"):
             self._validate_json()
         self._loading = False
 
@@ -682,6 +723,7 @@ class BodyPage(QWidget):
         return {
             "mode": self._mode,
             "raw": self.code.toPlainText(),
+            "raw_lang": self._raw_lang,
             "form": self.form.rows(),
             "file": self._file_path,
         }
@@ -1001,25 +1043,33 @@ class ScriptPage(QWidget):
         self.side_scroll.setWidget(side)
 
         body = QHBoxLayout()
-        body.setContentsMargins(14, 8, 14, 8)
+        body.setContentsMargins(14, 8, 14, 2)
         body.setSpacing(12)
         body.addWidget(editor, 3)
         body.addWidget(self.side_scroll, 2)
 
-        # 底部：运行状态 + 简短的「试运行」按钮。运行结果改为弹窗，这里只留一行提示。
+        # 底部：运行状态（细体图标 + 文案）与「试运行」按钮。结果走弹窗，这里只留一行。
+        # 状态行与上方编辑器左对齐、紧贴其下沿，不再留一大块空白。
+        self.status_icon = QLabel()
+        self.status_icon.setFixedSize(15, 15)
+        self.status_icon.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.status = Label("", 10.5, theme().text_faint)
-        # 说明必须保持一行；左对齐并留一点内边距，避免贴着最左边太难看
+        # 必须保持一行，否则会把下方按钮整行顶得忽高忽低
         self.status.setWordWrap(False)
-        self.status.setContentsMargins(6, 0, 0, 0)
+        self.status_row = HBox(self.status_icon, self.status, 1, spacing=5)
+        self._status_text = ""
+        self._status_kind = "ok"
         self.run_btn = Button(
             "试运行", "play", kind="ghost", height=26, padding=11, font_size=11.5,
-            tooltip="不联网，只在临时请求上执行当前脚本，弹窗查看日志与错误。")
+            tooltip="不联网，只在临时请求上执行当前脚本，查看日志与错误。")
         self.run_btn.clicked.connect(self._run_test)
-        tools = HBox(self.status, 1, self.run_btn, spacing=8)
+        tools = HBox(self.status_row, 1, self.run_btn, spacing=8,
+                     margins=(14, 0, 0, 0))
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 8, 0, 0)
-        lay.setSpacing(8)
+        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(2)
         lay.addLayout(body, 1)
         lay.addWidget(tools)
 
@@ -1033,16 +1083,30 @@ class ScriptPage(QWidget):
         self.code.setTextCursor(cur)
         self.code.setFocus()
 
-    def _set_status(self, text: str, kind: str = "ok") -> None:
-        """状态文字带淡入过渡；成功时只显示「运行成功」。"""
+    def _set_status(self, text: str, kind: str = "ok", animate: bool = True) -> None:
+        """状态行：细体对号/叉号图标 + 文案，颜色用主题成功/危险色，淡入过渡。"""
+        self._status_text = text
+        self._status_kind = kind
+        ok = kind == "ok"
+        color = S(theme().success if ok else theme().danger)
+        # 图标走矢量绘制、细笔宽 1.3（不加粗），颜色与文案严格一致
+        self.status_icon.setPixmap(
+            icons.pixmap("check" if ok else "close", color, 12, 1.3)
+            if text else QPixmap())
         self.status.setText(text)
-        self.status.setStyleSheet(
-            f"color: {theme().success if kind == 'ok' else theme().danger}; background: transparent;")
-        if text:
+        self.status.setStyleSheet(f"color: {color}; background: transparent;")
+        if text and animate:
             from .anim import animations_on
 
             if animations_on():
-                fade_in(self.status, 200)
+                fade_in(self.status_row, 200)
+
+    def _clear_status(self) -> None:
+        self._status_text = ""
+        self._status_kind = "ok"
+        self.status_icon.clear()
+        self.status.setText("")
+        self.status.setStyleSheet("")
 
     def set_logs(self, lines: List[str]) -> None:
         """真实请求执行完脚本后的日志由主窗口回填；结果走弹窗，这里不再内联展示。"""
@@ -1057,15 +1121,15 @@ class ScriptPage(QWidget):
                "params": [], "body": {"raw": ""}}
         source = self.code.toPlainText()
         if not source.strip():
-            self._set_status("", "ok")
+            self._clear_status()
             return
         result = run_script(source, self.store, req)
         lines = list(result.logs)
         if result.error:
             lines.append("✕ " + result.error)
         # 成功只显示「运行成功」，失败显示错误；完整日志进弹窗
-        self._set_status(i18n.tr("运行成功") if result.ok
-                         else "✕ " + result.error[:180],
+        # 传中文原文给 Label（它内部按当前语言 tr），切回中文时才能还原
+        self._set_status("运行成功" if result.ok else result.error[:180],
                          "ok" if result.ok else "error")
         dlg = ScriptResultDialog(result.ok, lines, "" if result.ok else result.error, self)
         dlg.exec()
@@ -1083,8 +1147,7 @@ class ScriptPage(QWidget):
             "post": str((scripts or {}).get("post") or ""),
         }
         self.code.setPlainText(self._script_drafts[self._kind])
-        self.status.setText("")
-        self.status.setStyleSheet("")
+        self._clear_status()
         self._last_logs = []
         self._loading = False
 
@@ -1094,8 +1157,11 @@ class ScriptPage(QWidget):
         return drafts
 
     def refresh_theme(self) -> None:
-        """语言切换后重译自绘控件里的动态文案（tooltip 不走 QLabel 机制）。"""
+        """语言/主题切换后重译 tooltip，并按当前主题刷新状态图标颜色。"""
         self.run_btn.setToolTip(i18n.tr("不联网，只在临时请求上执行当前脚本，查看日志与错误。"))
+        if self._status_text:
+            # 文案走 Label 的 i18n_src_text 机制自动重译；这里只刷新图标与语义色
+            self._set_status(self._status_text, self._status_kind, animate=False)
 
 
 # ---------------------------------------------------------------- 主编辑器

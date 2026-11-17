@@ -24,13 +24,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import i18n, icons
+from . import i18n, icons, shortcuts as sc
 from .anim import stop as _anim_stop
 from .code_editor import CodeView
 from .codegen import LANGUAGES
 from .kv_editor import KVEditor
-from .store import CHANGELOG, STATE_FILE, VERSION, Store, new_folder
-from .theme import C, S, font, mono, theme
+from .store import CHANGELOG, STATE_FILE, VERSION, Store, body_mode, new_folder
+from .theme import ACCENTS, C, S, font, mono, theme
 from .widgets import (
     Button,
     Card,
@@ -306,8 +306,6 @@ class SchemePicker(QWidget):
         super().resizeEvent(e)
 
     def _rects(self):
-        from PyQt6.QtCore import QRectF
-
         out = []
         cols = 3
         for i in range(len(self.schemes)):
@@ -340,8 +338,6 @@ class SchemePicker(QWidget):
             self.picked.emit(self.current)
 
     def paintEvent(self, _e):
-        from PyQt6.QtCore import QRectF
-
         from .theme import theme_by_name
 
         active = theme()
@@ -420,8 +416,6 @@ class AccentPicker(QWidget):
             self._hover = idx
             self.setToolTip("")
             if idx >= 0:
-                from .theme import ACCENTS
-
                 self.setToolTip(ACCENTS[self.keys[idx]][0])
             self.update()
 
@@ -437,9 +431,7 @@ class AccentPicker(QWidget):
             self.picked.emit(self.current)
 
     def paintEvent(self, _e):
-        from PyQt6.QtCore import QRectF
-
-        from .theme import ACCENTS, theme as _theme
+        from .theme import theme as _theme
 
         t = _theme()
         p = QPainter(self)
@@ -471,7 +463,6 @@ class AccentPicker(QWidget):
 
 def _accent_preview(key: str, t) -> tuple[str, str]:
     """设置面板里的色点取色：auto 用当前主题的反色，其余按主题明暗取。"""
-    from .theme import ACCENTS
 
     _label, d, lt = ACCENTS.get(key, ACCENTS["auto"])
     if key == "auto":
@@ -487,8 +478,6 @@ class ShortcutRecorder(GlassDialog):
 
     def __init__(self, name: str, current: str = "", parent=None):
         super().__init__(parent, 430, 226, i18n.trf("录制快捷键 · {name}", name=name))
-        from . import shortcuts as sc
-
         t = theme()
         self.value = ""
         lay = QVBoxLayout(self.body)
@@ -511,8 +500,6 @@ class ShortcutRecorder(GlassDialog):
         lay.addWidget(HBox(1, cancel, 1, spacing=6))
 
     def keyPressEvent(self, e):
-        from . import shortcuts as sc
-
         if e.key() == Qt.Key.Key_Escape:
             self.reject()
             return
@@ -531,8 +518,6 @@ class ShortcutRow(QWidget):
 
     def __init__(self, action: str, name: str, seq: str, shown: str, parent=None):
         super().__init__(parent)
-        from . import shortcuts as sc
-
         t = theme()
         self.action = action
         self._seq = seq
@@ -569,8 +554,6 @@ class ShortcutRow(QWidget):
             self.changed.emit(self.action, dlg.value)
 
     def set_key(self, seq: str) -> None:
-        from . import shortcuts as sc
-
         self._seq = seq
         self.cap.set_text(sc.display(seq))
         self.clear_btn.setEnabled(bool(seq))
@@ -675,7 +658,6 @@ class SettingsDialog(GlassDialog):
         return card
 
     def _page_general(self, s: Dict[str, Any]) -> QWidget:
-        from . import i18n
 
         self.lang_seg = SegmentedTabs([("zh", "简体中文"), ("en", "English")],
                                       style="pill", height=26, font_size=11.5, pad_h=12)
@@ -762,8 +744,6 @@ class SettingsDialog(GlassDialog):
     # -------------------------------------------------- 快捷键
     def _page_shortcuts(self) -> QWidget:
         """所有快捷键集中一页：点键帽重录，右键/按钮清除，冲突会自动接管。"""
-        from . import shortcuts as sc
-
         t = theme()
         self._key_rows: List[Tuple[str, "ShortcutRow"]] = []
 
@@ -810,8 +790,6 @@ class SettingsDialog(GlassDialog):
                                 *blocks)
 
     def _on_shortcut(self, action: str, seq: str) -> None:
-        from . import shortcuts as sc
-
         if seq:
             other = sc.conflict(sc.mapping(self.store), seq, exclude=action)
             if other:
@@ -830,8 +808,6 @@ class SettingsDialog(GlassDialog):
         self.shortcutsChanged.emit()
 
     def _refresh_shortcut_row(self, action: str) -> None:
-        from . import shortcuts as sc
-
         value = sc.mapping(self.store).get(action, "")
         for key, row in self._key_rows:
             if key == action:
@@ -839,8 +815,6 @@ class SettingsDialog(GlassDialog):
                 break
 
     def _reset_shortcuts(self) -> None:
-        from . import shortcuts as sc
-
         sc.reset(self.store)
         for action, row in self._key_rows:
             row.set_key(sc.mapping(self.store).get(action, ""))
@@ -1323,7 +1297,6 @@ class SettingsDialog(GlassDialog):
         self.accentChanged.emit(key)
 
     def _on_language(self, value: str) -> None:
-        from . import i18n
 
         self.store.settings["language"] = "en" if value == "en" else "zh"
         self.store.save()
@@ -1335,7 +1308,6 @@ class SettingsDialog(GlassDialog):
 
     def _retranslate(self) -> None:
         """设置窗口内部跟着语言切换刷新（标题、左侧导航宽度、右侧页面文案）。"""
-        from . import i18n
         from .widgets import Button, SegmentedTabs
 
         i18n.apply_language(self)
@@ -1726,9 +1698,11 @@ class ImportCurlDialog(GlassDialog):
         if req.get("headers"):
             bits.append(i18n.trf("请求头 {n} 个", n=len(req["headers"])))
         body = req.get("body") or {}
-        mode = body.get("mode", "none")
-        if mode == "json":
+        mode = body_mode(body)
+        if mode in ("json", "html"):
             bits.append(i18n.trf("JSON 请求体 {n} 字符", n=len(body.get("raw") or "")))
+        elif mode == "xml":
+            bits.append(i18n.trf("XML 请求体 {n} 字符", n=len(body.get("raw") or "")))
         elif mode == "text":
             bits.append(i18n.trf("文本请求体 {n} 字符", n=len(body.get("raw") or "")))
         elif mode == "form":

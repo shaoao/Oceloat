@@ -47,7 +47,8 @@ from PyQt6.QtWidgets import (
 )
 
 from . import i18n, icons
-from .anim import running as _anim_running, stop as _anim_stop
+from .anim import animations_on as _animations_on, running as _anim_running, stop as _anim_stop
+from .i18n import tr as _tr
 from .theme import C, S, font, mono, theme
 
 
@@ -291,7 +292,6 @@ def animate(widget: QWidget, start, end, dur: int = 180,
             on_value: Optional[Callable] = None,
             easing: QEasingCurve.Type = QEasingCurve.Type.OutCubic,
             on_done: Optional[Callable] = None) -> QVariantAnimation:
-    from .anim import animations_on
 
     anim = QVariantAnimation(widget)
     anim.setStartValue(start)
@@ -301,7 +301,7 @@ def animate(widget: QWidget, start, end, dur: int = 180,
         anim.valueChanged.connect(on_value)
     if on_done is not None:
         anim.finished.connect(on_done)
-    if not animations_on():
+    if not _animations_on():
         # 关闭动效：直接落到终值
         anim.setDuration(0)
         if on_value is not None:
@@ -333,11 +333,9 @@ def fade_window(widget: QWidget, dur: int = 160, start: float = 0.0,
     会在 Qt 渲染线程触发 SIGBUS 硬崩（崩溃日志里 <no Python frame>，抓不到
     Python 栈）。窗口透明度由窗口服务器合成，是唯一安全的方式。
     """
-    from .anim import animations_on
-    from .anim import stop as _stop
 
-    _stop(getattr(widget, "_fade_anim", None))
-    if not animations_on():
+    _anim_stop(getattr(widget, "_fade_anim", None))
+    if not _animations_on():
         widget.setWindowOpacity(1.0)
         if on_done is not None:
             on_done()
@@ -368,13 +366,11 @@ def fade_in(widget: QWidget, dur: int = 160, start: float = 0.0,
     同一控件重复触发时会先停止上一次动画，避免访问已销毁的 effect。
     顶层窗口自动改走 fade_window（原生透明度），规避 macOS 的 SIGBUS。
     """
-    from .anim import animations_on
-    from .anim import stop as _stop
 
     if widget.isWindow():
         fade_window(widget, dur, start, on_done)
         return
-    if not animations_on():
+    if not _animations_on():
         if on_done is not None:
             on_done()
         return
@@ -384,7 +380,7 @@ def fade_in(widget: QWidget, dur: int = 160, start: float = 0.0,
         if on_done is not None:
             on_done()
         return
-    _stop(getattr(widget, "_fade_anim", None))
+    _anim_stop(getattr(widget, "_fade_anim", None))
     eff = QGraphicsOpacityEffect(widget)
     eff.setOpacity(start)
     widget.setGraphicsEffect(eff)
@@ -522,8 +518,7 @@ class Button(QWidget):
         return bg, fg, bg
 
     def _title(self) -> str:
-        from .i18n import tr
-        return tr(self._text)
+        return _tr(self._text)
 
     # -------------------------------------------------- 绘制
     def sizeHint(self) -> QSize:  # noqa: N802
@@ -697,7 +692,6 @@ class ChoiceMenu(QWidget):
         所以这里在弹出前自己翻一次；hint（右侧的补充说明）同样要翻。
         原文记在 _src_items 里，来回切语言不会把英文当成原文再翻一遍。
         """
-        from .i18n import tr
 
         src = getattr(self, "_src_items", None)
         if src is None:
@@ -705,9 +699,9 @@ class ChoiceMenu(QWidget):
             self._src_items = src
         for orig, item in zip(src, self._items):
             if len(orig) >= 2 and isinstance(orig[1], str):
-                item[1] = tr(orig[1])
+                item[1] = _tr(orig[1])
             if len(orig) >= 4 and isinstance(orig[3], str):
-                item[3] = tr(orig[3])
+                item[3] = _tr(orig[3])
         self.update()
 
     def items(self) -> List[Tuple[str, str, Optional[str], Optional[str]]]:
@@ -801,8 +795,7 @@ class SegmentedTabs(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
     def _label(self, item: Dict) -> str:
-        from .i18n import tr
-        return tr(item["label"])
+        return _tr(item["label"])
 
     def sync_size(self) -> None:
         """按当前语言重新量宽度。

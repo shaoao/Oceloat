@@ -25,7 +25,7 @@ from PyQt6.QtNetwork import (
 )
 
 from . import i18n
-from .store import resolve_vars
+from .store import body_content_type, body_mode, resolve_vars
 
 
 def decompress_body(body: bytes, headers: List[Tuple[str, str]]) -> bytes:
@@ -407,21 +407,13 @@ class ApiClient(QObject):
                             "value": resolve_vars(auth.get("value", ""), env_vars)})
 
         bdata = req.get("body") or {}
-        mode = bdata.get("mode", "none")
+        mode = body_mode(bdata)
         json_raw = ""
         params: List[Dict[str, str]] = []
-        if mode == "json":
+        if mode in ("json", "text", "xml", "html"):
             json_raw = resolve_vars(bdata.get("raw", "") or "", env_vars)
             if not content_type:
-                content_type = "application/json; charset=utf-8"
-                headers.append({"name": "Content-Type", "value": content_type})
-        elif mode in ("text", "xml"):
-            # 中继接口只接受 text / json 字符串，文本按 JSON 字段外的 body 传不了，
-            # 统一塞进 json 字段并让服务端按对应 Content-Type 转发。
-            json_raw = resolve_vars(bdata.get("raw", "") or "", env_vars)
-            if not content_type:
-                content_type = ("application/xml; charset=utf-8" if mode == "xml"
-                                else "text/plain; charset=utf-8")
+                content_type = body_content_type(bdata, charset=True)
                 headers.append({"name": "Content-Type", "value": content_type})
         elif mode == "urlencoded":
             for row in bdata.get("form", []):
@@ -547,20 +539,13 @@ class ApiClient(QObject):
         payload = QByteArray()
         multipart: Optional[QHttpMultiPart] = None
         bdata = req.get("body") or {}
-        mode = bdata.get("mode", "none")
-        if mode == "json":
+        mode = body_mode(bdata)
+        if mode in ("json", "text", "xml", "html"):
             text = resolve_vars(bdata.get("raw", "") or "", env_vars)
             payload = QByteArray(text.encode("utf-8"))
             if not has_ct:
                 nreq.setHeader(QNetworkRequest.KnownHeaders.ContentTypeHeader,
-                               "application/json; charset=utf-8")
-        elif mode in ("text", "xml"):
-            text = resolve_vars(bdata.get("raw", "") or "", env_vars)
-            payload = QByteArray(text.encode("utf-8"))
-            if not has_ct:
-                nreq.setHeader(QNetworkRequest.KnownHeaders.ContentTypeHeader,
-                               ("application/xml; charset=utf-8" if mode == "xml"
-                                else "text/plain; charset=utf-8"))
+                               body_content_type(bdata, charset=True))
         elif mode == "urlencoded":
             q = QUrlQuery()
             for row in bdata.get("form", []):

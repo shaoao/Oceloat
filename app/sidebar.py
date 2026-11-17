@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 from PyQt6.QtCore import (
@@ -224,7 +225,6 @@ class CollectionsTree(QTreeWidget):
         # 隐藏 Qt 自带的展开三角（委托里已经画了一个，否则会出现两个箭头）
         self.setStyleSheet(
             "QTreeView::branch { background: transparent; image: none; border-image: none; }")
-        self.setRootIsDecorated(False)
         self.setItemDelegate(TreeDelegate(self))
         self.setFrameShape(QTreeWidget.Shape.NoFrame)
         self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
@@ -420,9 +420,11 @@ class HistoryGroupHeader(QWidget):
     clicked = pyqtSignal(str)             # 携带分组 key
 
     def __init__(self, label: str, count: int, group_key: str = "",
-                 collapsed: bool = False, parent=None):
+                 collapsed: bool = False, parent=None, label_kwargs=None):
         super().__init__(parent)
+        # label 始终存中文原文，绘制时才 tr()，语言切换后立即生效
         self.label = label
+        self._label_kwargs = label_kwargs or {}
         self.count = count
         self.group_key = group_key
         self.collapsed = collapsed
@@ -486,8 +488,11 @@ class HistoryGroupHeader(QWidget):
         p.restore()
         p.setFont(font(11.2, QFont.Weight.Medium))
         p.setPen(C(t.text_dim))
+        # 文案按中文原文存，绘制时才 tr()：这样切语言后立即生效，
+        # 不必重建列表（也避免快速路径的 _hist_header 与当前语言失配）。
         p.drawText(QRectF(26, 0, self.width() - 70, self.height()),
-                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), self.label)
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                   self.title())
         p.setFont(mono(10))
         p.setPen(C(t.text_faint))
         p.drawText(QRectF(self.width() - 40, 0, 30, self.height()),
@@ -495,39 +500,57 @@ class HistoryGroupHeader(QWidget):
                    str(self.count))
         p.end()
 
+    def title(self) -> str:
+        """当前语言的分组标题；self.label 始终是中文原文。"""
+        if self._label_kwargs:
+            return i18n.trf(self.label, **self._label_kwargs)
+        return i18n.tr(self.label)
+
+    def refresh_theme(self) -> None:
+        """语言/主题切换后重绘（文案在 paintEvent 里按当前语言实时翻译）。"""
+        self.update()
+
 
 def _within_hour(ts: float) -> bool:
     """最近 1 小时内（允许 60s 时钟误差），用于单独分组。"""
-    import time
-
     return ts > 0 and (time.time() - ts) <= 3600 + 60
 
 
 def _history_group_key(ts: float) -> str:
     """分组的稳定 key，与显示语言无关，用于持久化折叠状态。"""
-    from datetime import datetime
-
     if _within_hour(ts):
         return "1h"  # 与「今天」区分，折叠状态互不串扰
     return datetime.fromtimestamp(ts or 0).strftime("%Y-%m-%d")
 
 
 def _history_group(ts: float) -> str:
-    """最近 1 小时单独成组，其余按本地日期归到 今天 / 昨天 / N 天前。"""
-    from datetime import datetime
+    """分组的中文原文（不翻译！绘制时由 HistoryGroupHeader 按当前语言 tr）。
 
+    最近 1 小时单独成组，其余按本地日期归到 今天 / 昨天 / N 天前。
+    返回中文原文是关键：切语言后 apply_language 走 refresh_theme 重绘，
+    标题立刻变；若这里直接存译文，切语言后分组标题会一直停在旧语言。
+    """
     if _within_hour(ts):
-        return i18n.tr("1小时内")
+        return "1小时内"
     day = datetime.fromtimestamp(ts or 0).date()
     today = datetime.now().date()
     delta = (today - day).days
     if delta <= 0:
-        return i18n.tr("今天")
+        return "今天"
     if delta == 1:
-        return i18n.tr("昨天")
+        return "昨天"
     if delta < 7:
-        return i18n.trf("{n} 天前", n=delta)
+        return "{n} 天前"
     return datetime.fromtimestamp(ts or 0).strftime("%Y-%m-%d")
+
+
+def _history_group_kwargs(ts: float) -> Dict[str, int]:
+    """分组文案需要的格式化参数（目前只有「N 天前」用到 n）。"""
+    if _within_hour(ts):
+        return {}
+    day = datetime.fromtimestamp(ts or 0).date()
+    delta = (datetime.now().date() - day).days
+    return {"n": delta} if 1 < delta < 7 else {}
 
 
 # ---------------------------------------------------------------- 侧边栏
@@ -916,6 +939,7 @@ class Sidebar(QWidget):
             head_group = _history_group(entries[0].get("ts", 0))
             head_key = _history_group_key(entries[0].get("ts", 0))
             first_header = getattr(self, "_hist_header", None)
+            header_widget = getattr(self, "_hist_header_widget", None)
             if (incoming[0] not in existing
                     and (incoming[1:] == existing or incoming[1:] == existing[:-1])
                     and first_header == head_group
@@ -927,7 +951,7 @@ class Sidebar(QWidget):
                 at = 0
                 for i in range(self.history_lay.count()):
                     w = self.history_lay.itemAt(i).widget()
-                    if w is first_header or w is rows[0]:
+                    if w is header_widget or w is rows[0]:
                         at = i + 1
                         break
                 self.history_lay.insertWidget(at, row)
@@ -948,6 +972,7 @@ class Sidebar(QWidget):
                 w.deleteLater()
         self._hist_rows = []
         self._hist_header = ""
+        self._hist_header_widget = None
         if not entries:
             from .widgets import EmptyState
 
@@ -955,30 +980,39 @@ class Sidebar(QWidget):
             self.history_lay.insertWidget(0, empty)
             return
 
-        # 按日期分组：一组一个标题 + 若干条记录，标题带条数；折叠组只画标题
-        current_group = ""
-        current_key = ""
-        group_count = 0
+        # 按日期分组：先单遍统计每组条数（原来在循环里对每个组全量扫 entries，
+        # 是 O(n·组数)；240 条历史切语言/折叠时会重复算上千次），再建标题与行。
+        groups: List[Dict[str, Any]] = []
+        by_key: Dict[str, Dict[str, Any]] = {}
         for entry in entries:
-            group = _history_group(entry.get("ts", 0))
-            key = _history_group_key(entry.get("ts", 0))
-            if group != current_group:
-                current_group = group
-                current_key = key
-                group_count = sum(1 for e in entries if _history_group(e.get("ts", 0)) == group)
-                is_collapsed = key in collapsed
-                header = HistoryGroupHeader(group, group_count, key, is_collapsed)
-                header.clicked.connect(self._toggle_group)
-                self.history_lay.insertWidget(self.history_lay.count() - 1, header)
-                if not getattr(self, "_hist_header", ""):
-                    self._hist_header = group
-            if current_key in collapsed:
+            ts = entry.get("ts", 0)
+            key = _history_group_key(ts)
+            g = by_key.get(key)
+            if g is None:
+                g = {"key": key, "label": _history_group(ts),
+                     "kwargs": _history_group_kwargs(ts), "entries": []}
+                by_key[key] = g
+                groups.append(g)
+            g["entries"].append(entry)
+
+        for g in groups:
+            key = g["key"]
+            header = HistoryGroupHeader(
+                g["label"], len(g["entries"]), key, key in collapsed,
+                label_kwargs=g["kwargs"])
+            header.clicked.connect(self._toggle_group)
+            self.history_lay.insertWidget(self.history_lay.count() - 1, header)
+            if self._hist_header_widget is None:
+                self._hist_header = g["label"]   # 存中文原文，语言无关
+                self._hist_header_widget = header
+            if key in collapsed:
                 continue
-            row = HistoryRow(entry)
-            row.clicked.connect(self._restore_history)
-            row.removeRequested.connect(self._remove_history)
-            self.history_lay.insertWidget(self.history_lay.count() - 1, row)
-            self._hist_rows.append(row)
+            for entry in g["entries"]:
+                row = HistoryRow(entry)
+                row.clicked.connect(self._restore_history)
+                row.removeRequested.connect(self._remove_history)
+                self.history_lay.insertWidget(self.history_lay.count() - 1, row)
+                self._hist_rows.append(row)
 
     def _restore_history(self, entry: Dict[str, Any]) -> None:
         req = dict(entry.get("request") or {})

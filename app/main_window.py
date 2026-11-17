@@ -1,6 +1,7 @@
 """主窗口：无边框圆角窗口、交通灯、侧栏、标签、面板分割与全局快捷键。"""
 from __future__ import annotations
 
+import copy as _copy
 import json
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -615,11 +616,11 @@ class MainWindow(QWidget):
             self._retranslate("en")
 
     def _retranslate(self, _lang: str) -> None:
-        i18n.apply_language(self)
-        # 自绘控件的文案不经过 QLabel，逐个刷新
+        # 自绘控件的文案不经过 QLabel：在 apply_language 遍历时顺手刷新，
+        # 避免过去 findChildren 两遍（一遍翻译、一遍 refresh_theme）的重复开销。
         from .widgets import Button, SegmentedTabs
 
-        for w in self.findChildren(QWidget):
+        def visit(w):
             if isinstance(w, SegmentedTabs):
                 w.sync_size()
             elif isinstance(w, Button):
@@ -631,6 +632,8 @@ class MainWindow(QWidget):
                     fn()
                 except Exception:  # noqa: BLE001
                     pass
+
+        i18n.apply_language(self, visit=visit)
 
     # -------------------------------------------------- 构建
     def _build(self) -> None:
@@ -942,8 +945,6 @@ class MainWindow(QWidget):
         tab = self.current_tab()
         if tab is None:
             return
-        import copy as _copy
-
         req = _copy.deepcopy(self.editor.request or tab["request"])
         req["id"] = uid()
         req["name"] = (req.get("name") or "Request") + " 副本"
@@ -1005,8 +1006,6 @@ class MainWindow(QWidget):
         # 已有预览标签：就地换内容，不再新建
         for t in self.tabs_data:
             if t.get("preview"):
-                import copy as _copy
-
                 t["request"] = _copy.deepcopy(request)
                 t["node_id"] = node_id
                 t["title"] = request.get("name") or "Untitled Request"
@@ -1034,8 +1033,6 @@ class MainWindow(QWidget):
 
     def _open_request_obj(self, request: Dict[str, Any], node_id: Optional[str],
                           preview: bool = False) -> None:
-        import copy as _copy
-
         tab_id = f"tab_{int(time.time() * 1000)}_{len(self.tabs_data)}"
         # 每个标签持有独立快照：绝不与集合树/store 节点共享同一个 dict，
         # 否则一边编辑另一边跟着变（用户反馈的「两个页面内容一样」）。
@@ -1119,8 +1116,6 @@ class MainWindow(QWidget):
         self._autosave.start()
 
     def _duplicate_tab(self, tab_id: str) -> None:
-        import copy as _copy
-
         tab = self._tab(tab_id)
         if tab is None:
             return
@@ -1213,8 +1208,6 @@ class MainWindow(QWidget):
         meta = self.tabstrip.tab(tab_id) or {}
         node = self.store.find(meta.get("node_id") or tab_id)
         if node is not None and node.get("type") == "request":
-            import copy as _copy
-
             tab = {
                 "id": tab_id, "request": _copy.deepcopy(node), "node_id": node.get("id"),
                 "title": node.get("name") or "Untitled Request",
@@ -1379,8 +1372,6 @@ class MainWindow(QWidget):
             tab["node_id"] = node["id"]
             # 标签继续持有自己的快照，不能指向 store 里的节点对象，
             # 否则后续编辑会改到集合树，也会让其他标签跟着变。
-            import copy as _copy
-
             tab["request"] = _copy.deepcopy(node)
             self.sidebar.refresh()
             self._sync_open_ids()

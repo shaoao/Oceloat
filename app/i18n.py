@@ -138,16 +138,27 @@ def _translate_object(obj) -> None:
     # 这样「语言切完才建出来的控件」也不会漏，来回切还不会把原文覆盖成英文。
 
 
-def apply_language(root) -> None:
+def apply_language(root, visit=None) -> list:
     """遍历控件树应用当前语言。可反复调用，来回切换不失真。
 
     优先用 findChildren 递归拿控件 —— 自己顺着 children() 走会漏掉「后来才挂进布局」
     的那一支（比如堆叠页里的滚动内容），表现就是同一页一半英文一半中文。
+
+    visit(widget) 可选：翻译每个控件后顺手做自绘刷新，让调用方只需遍历一次控件树。
+    返回被翻译的控件列表，供调用方复用（原来主窗口要 findChildren 两遍）。
     """
     from PyQt6.QtCore import QObject
     from PyQt6.QtWidgets import QWidget
 
-    _translate_object(root)
+    def one(obj):
+        try:
+            _translate_object(obj)
+            if visit is not None:
+                visit(obj)
+        except RuntimeError:      # 控件已经被销毁
+            pass
+
+    one(root)
     widgets = []
     if isinstance(root, QWidget):
         try:
@@ -162,19 +173,17 @@ def apply_language(root) -> None:
             if id(obj) in seen:
                 continue
             seen.add(id(obj))
-            _translate_object(obj)
+            one(obj)
             try:
                 for child in obj.children():
                     if isinstance(child, QObject):
                         stack.append(child)
             except RuntimeError:  # noqa: BLE001
                 continue
-        return
+        return []
     for w in widgets:
-        try:
-            _translate_object(w)
-        except RuntimeError:      # 控件已经被销毁
-            continue
+        one(w)
+    return widgets
 
 
 # ------------------------------------------------------------------ 英文译文
@@ -596,6 +605,7 @@ _EN.update({
     "查询参数 {n} 个": "{n} query params",
     "请求头 {n} 个": "{n} headers",
     "JSON 请求体 {n} 字符": "JSON body · {n} chars",
+    "XML 请求体 {n} 字符": "XML body · {n} chars",
     "文本请求体 {n} 字符": "text body · {n} chars",
     "multipart {n} 字段": "multipart · {n} fields",
     "（含 {n} 个文件）": " ({n} files)",
