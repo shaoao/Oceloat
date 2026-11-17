@@ -14,11 +14,9 @@ from PyQt6.QtCore import (
     QModelIndex,
     QPoint,
     QPointF,
-    QRect,
     QRectF,
     QSize,
     Qt,
-    QTimer,
     QVariantAnimation,
     pyqtSignal,
 )
@@ -26,7 +24,6 @@ from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QScrollArea,
     QSizePolicy,
@@ -41,9 +38,9 @@ from PyQt6.QtWidgets import (
 from . import i18n, icons
 from .code_editor import human_elapsed
 from .store import Store, new_folder, new_request
-from .anim import running as _anim_running, stop as _anim_stop
+from .anim import stop as _anim_stop
 from .theme import C, method_color, status_color, font, mono, theme
-from .widgets import Button, Divider, HBox, Label, Menu, VBox, icon_button
+from .widgets import Button, HBox, Label, Menu, icon_button
 
 ROLE_ID = Qt.ItemDataRole.UserRole
 ROLE_TYPE = Qt.ItemDataRole.UserRole + 1
@@ -556,6 +553,14 @@ def _history_group_kwargs(ts: float) -> Dict[str, int]:
 # ---------------------------------------------------------------- 侧边栏
 
 
+def _count_requests(node: Dict[str, Any]) -> int:
+    """数一个文件夹底下有多少个请求（删除确认里要用）。"""
+    total = 1 if node.get("type") == "request" else 0
+    for child in node.get("children") or []:
+        total += _count_requests(child)
+    return total
+
+
 class Sidebar(QWidget):
     openRequest = pyqtSignal(dict)          # 双击：固定打开
     previewRequest = pyqtSignal(dict)       # 单击：预览
@@ -575,7 +580,6 @@ class Sidebar(QWidget):
 
     # -------------------------------------------------- 构建
     def _build(self) -> None:
-        t = theme()
         self.setMinimumWidth(200)
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 6, 10, 10)
@@ -630,10 +634,8 @@ class Sidebar(QWidget):
         self.new_btn.clicked.connect(self._new_request)
         self.folder_btn = icon_button("folder", "新建文件夹", 28, 14)
         self.folder_btn.clicked.connect(self._new_folder)
-        self.clear_btn = icon_button("trash", "清空历史", 28, 14)
-        self.clear_btn.clicked.connect(self._clear_history)
-        self.clear_btn.hide()
-        bottom = HBox(self.new_btn, 1, self.clear_btn, self.folder_btn, spacing=4,
+        # 历史模式下 new_btn 本身就是「清空历史」，不再额外放一颗图标按钮（会重复）
+        bottom = HBox(self.new_btn, 1, self.folder_btn, spacing=4,
                       margins=(0, 2, 0, 0))
         root.addWidget(bottom)
 
@@ -644,7 +646,6 @@ class Sidebar(QWidget):
         self.tree.setVisible(is_col)
         self.history_scroll.setVisible(not is_col)
         self.folder_btn.setVisible(is_col)
-        self.clear_btn.setVisible(not is_col)
         self.new_btn.setText("新建请求" if is_col else "清空历史")
         self.new_btn.set_icon("plus" if is_col else "trash")
         self.search.clear()
@@ -746,7 +747,6 @@ class Sidebar(QWidget):
         """语言 / 主题切换后：重译 tooltip 并重绘（行内文案在 paintEvent 里实时翻译）。"""
         self.transfer_btn.setToolTip(i18n.tr("导入 / 导出集合"))
         self.folder_btn.setToolTip(i18n.tr("新建文件夹"))
-        self.clear_btn.setToolTip(i18n.tr("清空历史"))
         self.tree.viewport().update()
         if self._mode == "history":
             self.refresh_history()
@@ -827,6 +827,15 @@ class Sidebar(QWidget):
         return node
 
     def _clear_history(self) -> None:
+        if not self.store.history:
+            self.notify.emit(i18n.tr("无历史记录"))
+            return
+        from .dialogs import ConfirmDialog
+
+        if not ConfirmDialog.ask(self.window(), i18n.tr("清空历史"),
+                                 i18n.tr("清空全部历史记录？集合与环境变量不受影响，但历史无法恢复。"),
+                                 i18n.tr("清空")):
+            return
         self.store.clear_history()
         self.store.save()
         self.refresh_history()
@@ -860,8 +869,12 @@ class Sidebar(QWidget):
         self.tree.viewport().update()
         self.store.save()
 
-    def delete_node(self, node_id: str) -> None:
+    def delete_node(self, node_id: str, confirm: bool = True) -> None:
         node = self.store.find(node_id)
+        if node is None:
+            return
+        if confirm and not self._confirm_delete(node):
+            return
         self.store.remove_node(node_id)
         self.store.save()
         self.refresh()
@@ -870,6 +883,22 @@ class Sidebar(QWidget):
         self.notify.emit(i18n.trf("已删除「{name}」", name=node.get("name", ""))
                          if node else i18n.tr("已删除"))
         self.changed.emit()
+
+    def _confirm_delete(self, node: Dict[str, Any]) -> bool:
+        """删除前二次确认 —— 集合树一删就没，误点一次代价太大。"""
+        from .dialogs import ConfirmDialog
+
+        name = node.get("name") or i18n.tr("未命名")
+        if node.get("type") == "folder":
+            count = _count_requests(node)
+            title = i18n.tr("删除文件夹")
+            message = i18n.trf("「{name}」里还有 {n} 个请求，删除后一起消失，且无法撤销。",
+                               name=name, n=count) if count else \
+                i18n.trf("删除文件夹「{name}」？此操作无法撤销。", name=name)
+        else:
+            title = i18n.tr("删除请求")
+            message = i18n.trf("删除请求「{name}」？此操作无法撤销。", name=name)
+        return ConfirmDialog.ask(self.window(), title, message, i18n.tr("删除"))
 
     def duplicate_node(self, node_id: str) -> None:
         self.store.duplicate_node(node_id)

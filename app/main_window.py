@@ -747,7 +747,9 @@ class MainWindow(QWidget):
         root_lay.addWidget(body, 1)
 
         self.toast = Toast(self.root)
-        self.palette = CommandPalette(self.store, self.root)
+        # 挂在主窗口本身（不是内容容器）：命令面板要盖在背景模糊遮罩之上，
+        # 同层兄弟控件才能靠 raise_() 保证顺序。
+        self.palette = CommandPalette(self.store, self)
         self.palette.execute.connect(self._on_palette_action)
         self._update_stack()
         self.response.show_empty()
@@ -829,6 +831,21 @@ class MainWindow(QWidget):
             self.close()
 
     # -------------------------------------------------- 窗口绘制 / 交互
+    CARD_RADIUS = 12
+
+    def card_rect(self) -> QRect:
+        """窗口卡片（去掉四周阴影留白）在自身坐标里的矩形。
+
+        背景遮罩按这块区域铺，才能和窗口的圆角、边框严丝合缝对齐。
+        """
+        if self.isMaximized():
+            return self.rect()
+        m = self._margin
+        return self.rect().adjusted(m, m, -m, -m)
+
+    def card_radius(self) -> int:
+        return 0 if self.isMaximized() else self.CARD_RADIUS
+
     def _round_corners(self) -> None:
         """把内容层裁成圆角。
 
@@ -1031,8 +1048,11 @@ class MainWindow(QWidget):
         if node_id:
             for t in self.tabs_data:
                 if t.get("node_id") == node_id:
-                    t["preview"] = False
-                    self.tabstrip.update_tab(t["id"], title=t.get("title"))
+                    if t.get("preview"):
+                        t["preview"] = False
+                    # 预览标签转正：标题的斜体要一起取消，否则双击了还是斜的
+                    self.tabstrip.update_tab(t["id"], title=t.get("title"),
+                                             dirty=t.get("dirty"), preview=False)
                     self.tabstrip.set_current(t["id"])
                     self._on_tab_changed(t["id"])
                     return
@@ -1366,6 +1386,10 @@ class MainWindow(QWidget):
             self.editor.focus_url()
             return
         self._inflight_tab = tab["id"]
+        # 一旦真的发了请求，这个标签就不再是「临时预览」了：斜体转正
+        if tab.get("preview"):
+            tab["preview"] = False
+            self.tabstrip.update_tab(tab["id"], title=tab.get("title"), preview=False)
         self.editor.set_busy(True)
         self.response.show_loading()
         settings = dict(self.store.settings)
@@ -2070,5 +2094,5 @@ class MainWindow(QWidget):
         if hasattr(self, "toast") and self.toast.isVisible():
             self.toast._place()
         if hasattr(self, "palette") and self.palette.isVisible():
-            self.palette.setGeometry(self.rect())
+            self.palette.setGeometry(self.card_rect())
             self.palette._layout_card()

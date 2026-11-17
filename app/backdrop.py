@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from PyQt6.QtCore import QEasingCurve, QEvent, Qt, QVariantAnimation
-from PyQt6.QtGui import QColor, QPainter, QPixmap
+from PyQt6.QtCore import QEasingCurve, QEvent, QRect, QRectF, Qt, QVariantAnimation
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPixmap
 from PyQt6.QtWidgets import QWidget
 
 from .anim import animations_on, stop as _anim_stop
@@ -60,16 +60,65 @@ class Backdrop(QWidget):
         self.hide()
 
     # -------------------------------------------------- 截图
+    def card_rect(self) -> QRect:
+        """遮罩应该铺的那块区域：宿主窗口真正的「卡片」范围。
+
+        主窗口是无边框 + 透明背景，四周留了 8px 用来画阴影、圆角 12 —— 如果遮罩
+        直接铺满 `host.rect()`，模糊就会盖到阴影上、四个角还是直角，看起来「没对齐
+        窗口」。这里问宿主要素一张卡片矩形。
+        """
+        host = self.host
+        fn = getattr(host, "card_rect", None)
+        if callable(fn):
+            try:
+                r = fn()
+                if isinstance(r, QRect) and not r.isEmpty():
+                    return r
+            except Exception:      # noqa: BLE001  宿主没实现好就当整窗
+                pass
+        return host.rect()
+
+    def card_radius(self) -> float:
+        host = self.host
+        fn = getattr(host, "card_radius", None)
+        if callable(fn):
+            try:
+                return max(0.0, float(fn()))
+            except Exception:      # noqa: BLE001
+                pass
+        return 0.0
+
     def capture(self) -> None:
         """抓主窗口当前画面（抓的时候先把自己藏起来，免得把上层的模糊图再糊一遍）。"""
         was_visible = self.isVisible()
         if was_visible:
             self.setVisible(False)
+        # 浮层（命令面板）是主窗口的子控件，抓图时会把它们一起拍进去 ——
+        # 那背景上就会出现一块面板的鬼影。带 backdropSuppress 标记的临时藏一下。
+        hidden = []
+        for child in self.host.findChildren(QWidget):
+            if child is self or not child.isVisible():
+                continue
+            if child.property("backdropSuppress"):
+                child.setVisible(False)
+                hidden.append(child)
         try:
-            self._pix = blur_pixmap(self.host.grab())
+            shot = self.host.grab()
+            card = self.card_rect()
+            dpr = shot.devicePixelRatio() or 1.0
+            if card != self.host.rect():
+                # 只取卡片那一块：阴影 / 透明边不参与模糊，边缘才不会脏
+                shot = shot.copy(int(card.x() * dpr), int(card.y() * dpr),
+                                 max(1, int(card.width() * dpr)),
+                                 max(1, int(card.height() * dpr)))
+                shot.setDevicePixelRatio(dpr)
+            self._pix = blur_pixmap(shot)
         except Exception:      # noqa: BLE001  抓图失败就只压暗，不影响可用性
             self._pix = QPixmap()
         finally:
+            for child in hidden:
+                child.setVisible(True)
+                child.raise_()
             if was_visible:
                 self.setVisible(True)
                 self.raise_()
@@ -88,8 +137,7 @@ class Backdrop(QWidget):
         return super().eventFilter(obj, ev)
 
     def sync_geometry(self) -> None:
-        if self.parentWidget() is not None:
-            self.setGeometry(self.parentWidget().rect())
+        self.setGeometry(self.card_rect())
 
     # -------------------------------------------------- 显隐
     def fade_to(self, target: float, dur: int = 150, then=None) -> None:
@@ -119,8 +167,16 @@ class Backdrop(QWidget):
     def paintEvent(self, _e):
         t = theme()
         p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         alpha = max(0.0, min(1.0, self._alpha))
+        # 按窗口卡片的圆角裁一刀：模糊图是矩形，不裁的话四个角会露出直角，
+        # 跟窗口的弧线对不上（用户看到的就是「模糊没对齐窗口」）。
+        path = QPainterPath()
+        radius = self.card_radius()
+        if radius > 0.5:
+            path.addRoundedRect(QRectF(self.rect()), radius, radius)
+            p.setClipPath(path)
         if not self._pix.isNull():
             p.setOpacity(alpha)
             p.drawPixmap(self.rect(), self._pix)
@@ -170,6 +226,9 @@ def acquire(dialog) -> Optional[Backdrop]:
         backdrop = Backdrop(host)
         _BY_HOST[key] = backdrop
     _DEPTH[key] = _DEPTH.get(key, 0) + 1
+    # 上一次关闭的淡出可能还在飞：它的 finished 回调会把遮罩藏起来，
+    # 于是「刚铺上又消失」。这里先掐掉，再重新淡入。
+    _anim_stop(backdrop._anim)
     if not backdrop.isVisible():
         backdrop.sync_geometry()
         backdrop.capture()
@@ -177,6 +236,10 @@ def acquire(dialog) -> Optional[Backdrop]:
         backdrop.raise_()
         backdrop.show()
         backdrop.fade_to(1.0, 160)
+    else:
+        backdrop.sync_geometry()
+        backdrop.raise_()
+        backdrop.fade_to(1.0, 120)
     return backdrop
 
 

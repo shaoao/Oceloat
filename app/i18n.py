@@ -276,9 +276,15 @@ _EN: Dict[str, str] = {
     "配色方案": "Color Scheme", "界面动效": "Animations",
     "关闭后页面切换、悬停与响应到达不再播放动画。": "Turn off to disable page, hover and response animations.",
     "代码字号": "Code Font Size", "响应体、请求体与代码片段的等宽字体大小。": "Monospace font size for responses, bodies and snippets.",
+    "删除文件夹": "Delete Folder", "删除请求": "Delete Request",
+    "「{name}」里还有 {n} 个请求，删除后一起消失，且无法撤销。":
+        "“{name}” still contains {n} requests — they go with it and cannot be restored.",
+    "删除文件夹「{name}」？此操作无法撤销。": "Delete the folder “{name}”? This cannot be undone.",
+    "删除请求「{name}」？此操作无法撤销。": "Delete the request “{name}”? This cannot be undone.",
+    "清空全部历史记录？集合与环境变量不受影响，但历史无法恢复。":
+        "Clear all history? Collections and environments are untouched, but history cannot be restored.",
     "所有弹窗都模糊": "Blur All Dialogs",
-    "关闭时只有设置与导入导出窗口是模糊 + 不可拖动的；开启后所有弹窗都这样。":
-        "Off: only Settings and Import/Export are blurred and fixed. On: every dialog is.",
+    "开启后所有弹窗都是模糊的。": "Every dialog is blurred when this is on.",
     "预览": "Preview", "次按钮": "Secondary", "文字按钮": "Text Button",
     "超时、跳转、证书与代理。": "Timeouts, redirects, certificates and proxies.",
     "请求超时": "Request Timeout", "单位秒，0 表示不限制。": "In seconds; 0 means no limit.",

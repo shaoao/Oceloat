@@ -121,7 +121,7 @@ app/store.py          数据和设置，存在一个 JSON 里
 跑测试和截图：
 
 ```bash
-python3 tools/smoke.py         # 467 项检查，会真的起一个本地 HTTP 服务
+python3 tools/smoke.py         # 482 项检查，会真的起一个本地 HTTP 服务
 python3 tools/readme_shots.py  # 重新生成 README 里的截图，输出到 docs/
 ```
 

@@ -238,6 +238,44 @@ class PromptDialog(GlassDialog):
         self.edit.setFocus()
 
 
+class ConfirmDialog(GlassDialog):
+    """二次确认：删除集合 / 文件夹 / 请求 / 清空历史前都要过这一关。
+
+    刻意做得很轻：一行标题、两行说明、右侧两颗按钮，回车=确认、esc=取消。
+    """
+
+    def __init__(self, title: str, message: str, confirm_text: str = "删除",
+                 parent=None, danger: bool = True):
+        super().__init__(parent, 420, 178, title)
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(18, 14, 18, 16)
+        lay.setSpacing(10)
+        body = Label(message, 12, theme().text_dim)
+        body.setWordWrap(True)
+        lay.addWidget(body)
+        lay.addStretch(1)
+        cancel = Button("取消", None, kind="ghost", height=28, padding=12, font_size=12)
+        cancel.clicked.connect(self.reject)
+        ok = Button(confirm_text, "trash" if danger else None,
+                    kind="danger" if danger else "primary", height=28, padding=14,
+                    font_size=12)
+        ok.clicked.connect(self.accept)
+        lay.addWidget(HBox(1, cancel, ok, spacing=6))
+        self.ok_btn = ok
+        self.cancel_btn = cancel
+
+    @classmethod
+    def ask(cls, parent, title: str, message: str, confirm_text: str = "删除") -> bool:
+        """title / message / confirm_text 传最终文案（调用方自己 trf 好）。"""
+        dlg = cls(title, message, confirm_text, parent)
+        return bool(dlg.exec())
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        # 焦点默认给「取消」：手快按回车不会误删
+        self.cancel_btn.setFocus()
+
+
 class ScriptResultDialog(GlassDialog):
     """脚本运行结果弹窗：状态 + console 日志，一次看清，不占编辑器高度。"""
 
@@ -813,8 +851,7 @@ class SettingsDialog(GlassDialog):
         self.font_seg.changed.connect(self._on_font_size)
         options = self._card(
             self._row("界面动效", "关闭后页面切换、悬停与响应到达不再播放动画。", self.anim_switch),
-            self._row("所有弹窗都模糊", "关闭时只有设置与导入导出窗口是模糊 + 不可拖动的；"
-                                   "开启后所有弹窗都这样。", self.glass_switch),
+            self._row("所有弹窗都模糊", "开启后所有弹窗都是模糊的。", self.glass_switch),
             self._row("代码字号", "响应体、请求体与代码片段的等宽字体大小。", self.font_seg),
         )
 
@@ -2132,6 +2169,8 @@ class CommandPalette(QWidget):
         self.hide()
         self._opacity = 0.0
         self._slide = 0.0
+        # 抓背景模糊图时把这个浮层藏起来，否则面板会被拍进模糊底图里
+        self.setProperty("backdropSuppress", True)
 
         self.card = Card(radius=13, parent=self)
         cl = QVBoxLayout(self.card)
@@ -2161,25 +2200,54 @@ class CommandPalette(QWidget):
         self._results: List[Dict[str, Any]] = []
 
     # -------------------------------------------------- 打开 / 关闭
+    def _area(self) -> QRectF:
+        """浮层该铺的范围：宿主窗口的卡片区（去掉阴影留白），和模糊遮罩一致。"""
+        parent = self.parentWidget()
+        if parent is None:
+            return QRectF()
+        fn = getattr(parent, "card_rect", None)
+        if callable(fn):
+            try:
+                r = fn()
+                if r is not None and not r.isEmpty():
+                    return QRectF(r)
+            except Exception:      # noqa: BLE001
+                pass
+        return QRectF(parent.rect())
+
     def open(self) -> None:
         parent = self.parentWidget()
         if parent is None:
             return
-        self.setGeometry(parent.rect())
-        self.show()
-        self.raise_()
-        self.card.setFixedWidth(min(620, parent.width() - 80))
+        # 上一次关闭的淡出还在飞：它的 on_done 会把面板藏起来（刚打开又消失）
+        _anim_stop(getattr(self, "_fade_anim", None))
+        self._fade_anim = None
+        area = self._area()
+        self.setGeometry(area.toRect())
+        self.card.setFixedWidth(min(620, int(area.width()) - 80))
         # 每次打开只收集一次（集合树可能有几百条），之后按键只做过滤
         self._cache = {True: self._collect(True), False: self._collect(False)}
         self.edit.clear()
+        # 关键：所有排版（列表高度、卡片高度、居中位置）都先算完再 show。
+        # 之前是先 show 再改高度 —— 打开的那一帧卡片会先矮后高，看起来「上下卡一下」。
+        self._slide = 0.0
         self._filter("")
-        self._slide = 14.0
         bar = self.scroll.verticalScrollBar()
         if bar is not None:
             bar.setValue(0)
+        self._opacity = 0.0
+        # 先铺模糊再显示浮层：反过来的话抓图会把浮层自己拍进去，背景上出现鬼影
+        if not getattr(self, "_blur_on", False):
+            self._blur_on = True
+            backdrop.acquire(self)
+        self.show()
+        self.raise_()          # 遮罩是后加的兄弟控件，浮层要再抬一次
         self.edit.setFocus()
-        animate(self, 0.0, 1.0, 130, self._set_opacity)
-        animate(self, 14.0, 0.0, 170, self._set_slide)
+        # 入场：淡入 + 从上方 10px 落下来，和弹窗同一套手感
+        self._slide = 10.0
+        self.card.move(self.card.x(), self._card_y())
+        animate(self, 0.0, 1.0, 120, self._set_opacity)
+        animate(self, 10.0, 0.0, 160, self._set_slide)
 
     def _set_slide(self, v):
         self._slide = float(v)
@@ -2198,7 +2266,14 @@ class CommandPalette(QWidget):
         # 卡片永远摆在正中间（上下左右都居中）：以前压在 16% 高度，
         # 大屏上看着像是「贴在顶上下不来」。
         max_h = max(180, self.height() - 160)
-        self.scroll.setFixedHeight(min(self.list.height(), max_h))
+        # 卡片高度落在整行上：差几个像素就会把最后一行切掉半截
+        acc = 8.0
+        for item in self.list.items:
+            step = self.list.row_height(item)
+            if acc + step > max_h:
+                break
+            acc += step
+        self.scroll.setFixedHeight(min(self.list.height(), int(acc)))
         self.card.setFixedHeight(self.card.sizeHint().height())
         self.card.move((self.width() - self.card.width()) // 2, self._card_y())
         self._scroll_to(self.list.index)
@@ -2218,10 +2293,14 @@ class CommandPalette(QWidget):
             bar.setValue(int(bottom - view) + 4)
 
     def close(self) -> None:
-        animate(self, 1.0, 0.0, 100, self._set_opacity, on_done=self.hide)
+        self._fade_anim = animate(self, 1.0, 0.0, 100, self._set_opacity,
+                                  on_done=self.hide)
 
     def hideEvent(self, e):
         self._opacity = 0.0
+        if getattr(self, "_blur_on", False):
+            self._blur_on = False
+            backdrop.release(self)
         super().hideEvent(e)
 
     def mousePressEvent(self, e):
@@ -2338,7 +2417,7 @@ class CommandPalette(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setOpacity(max(0.0, min(1.0, self._opacity)))
-        dim = QColor(0, 0, 0, 130 if t.is_dark else 70)
+        dim = QColor(0, 0, 0, 46 if t.is_dark else 26)
         path = QPainterPath()
         path.addRoundedRect(QRectF(self.rect()), 12, 12)
         p.fillPath(path, dim)
@@ -2734,6 +2813,10 @@ class TransferDialog(GlassDialog):
         self.stack.add("done", self._build_done())
         self.stack.set_current("import", animate=False)
         self.setAcceptDrops(True)
+        # 初始高度直接按来源列表的真实内容给：写死的 660 会多出一截空白
+        self.resize(self.width(),
+                    self.header.height() + 1
+                    + self.stack._pages["import"].sizeHint().height())
 
     # -------------------------------------------------- 页面 1：来源列表
     def _build_import(self) -> QWidget:
@@ -2756,7 +2839,8 @@ class TransferDialog(GlassDialog):
                               "填一个远程 JSON / YAML 地址，自动下载并识别来源")
         url_row.clicked.connect(self._import_url)
         lay.addWidget(url_row)
-        lay.addStretch(1)
+        # 不给弹簧：弹簧会把「导出全部集合」顶到最下面，中间留一大条空白
+        lay.addSpacing(8)
         lay.addWidget(Divider())
         export_row = TransferRow("download", "导出全部集合",
                                  "Ocelot JSON / Postman / OpenAPI / HAR")
@@ -3215,6 +3299,11 @@ class TransferDialog(GlassDialog):
             self._refresh_export_summary()
         height = {"import": 660, "file": 430, "export": 486,
                   "done": self._done_height}.get(key, 620)
+        if key == "import":
+            # 列表页按内容算高度：多出来的几十像素以前全堆成底部一条空白
+            page = self.stack._pages.get("import")
+            if page is not None:
+                height = page.sizeHint().height() + self.header.height() + 1
         # 小屏上别让窗口比屏幕还高（矮屏笔记本 768 高度很常见）
         screen = self.screen() or QApplication.primaryScreen()
         if screen is not None:

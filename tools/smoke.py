@@ -2663,6 +2663,85 @@ def main() -> int:
         dlg2.close()
         return 0
 
+    def step35():
+        """对齐 / 二次确认 / 预览转正 / 命令面板模糊。"""
+        from app import backdrop as bd
+        from app.dialogs import CommandPalette, ConfirmDialog, TransferDialog
+
+        # 1) 模糊遮罩必须和窗口卡片区（去掉 8px 阴影留白）严丝合缝
+        dlg = TransferDialog(w.store, w)
+        dlg.show()
+        app.processEvents()
+        layer = bd._BY_HOST.get(id(w))
+        card = w.card_rect()
+        check("模糊遮罩铺在窗口卡片区（不含阴影留白）",
+              layer is not None and layer.geometry() == card,
+              f"{layer.geometry() if layer else None} vs {card}")
+        if layer is not None:
+            dpr = layer._pix.devicePixelRatio() or 1.0
+            check("模糊底图与卡片同尺寸",
+                  abs(layer._pix.width() / dpr - card.width()) <= 1
+                  and abs(layer._pix.height() / dpr - card.height()) <= 1,
+                  f"{layer._pix.width()/dpr:.0f}x{layer._pix.height()/dpr:.0f} vs {card.width()}x{card.height()}")
+        # 导入页高度按真实内容给，底部不留空白
+        hint = dlg.stack._pages["import"].sizeHint().height()
+        check("导入页高度贴合内容",
+              abs(dlg.height() - (dlg.header.height() + 1 + hint)) <= 2,
+              f"{dlg.height()} vs {dlg.header.height() + 1 + hint}")
+        dlg.close()
+        app.processEvents()
+
+        # 2) 删除必须二次确认
+        node = w.store.collections[-1]
+        node_id = node["id"]
+        asked: list = []
+        orig = ConfirmDialog.__dict__["ask"]
+
+        def _deny(cls, parent, title, message, confirm_text="删除"):
+            asked.append(title)
+            return False
+
+        ConfirmDialog.ask = classmethod(_deny)          # type: ignore[assignment]
+        w.sidebar.delete_node(node_id)
+        check("删除前要二次确认", bool(asked) and w.store.find(node_id) is not None,
+              f"asked={asked}")
+        ConfirmDialog.ask = classmethod(lambda cls, p, t, m, c="删除": True)   # type: ignore[assignment]
+        w.sidebar.delete_node(node_id)
+        check("确认之后才真的删除", w.store.find(node_id) is None)
+        ConfirmDialog.ask = orig                        # type: ignore[assignment]
+
+        # 3) 历史模式只有一个「清空历史」入口（图标那颗已去掉）
+        check("历史模式没有重复的清空按钮", not hasattr(w.sidebar, "clear_btn"))
+
+        # 4) 单击=预览（斜体），双击=转正
+        opened = {t.get("node_id") for t in w.tabs_data}
+        req = next(n for n, _ in w.store.walk()
+                   if n.get("type") == "request" and n.get("id") not in opened)
+        w._preview_from_sidebar(req)
+        app.processEvents()
+        tab = next((t for t in w.tabs_data if t.get("node_id") == req.get("id")), None)
+        check("单击集合项是预览（斜体）",
+              tab is not None and tab.get("preview") is True
+              and (w.tabstrip.tab(tab["id"]) or {}).get("preview") is True)
+        if tab is not None:
+            w._open_from_sidebar(req)
+            app.processEvents()
+            check("双击之后标签不再斜体",
+                  tab.get("preview") is False
+                  and (w.tabstrip.tab(tab["id"]) or {}).get("preview") is False)
+
+        # 5) 命令面板：打开就有背景模糊，且盖在遮罩之上
+        w.show_palette()
+        app.processEvents()
+        layer = bd._BY_HOST.get(id(w))
+        check("命令面板打开时背景是模糊的",
+              w.palette.isVisible() and layer is not None and layer.isVisible())
+        check("命令面板与卡片区同尺寸", w.palette.geometry() == w.card_rect(),
+              f"{w.palette.geometry()} vs {w.card_rect()}")
+        w.palette.close()
+        app.processEvents()
+        return 0
+
     def finish():
         try:
             _SERVER.shutdown()
@@ -2676,7 +2755,7 @@ def main() -> int:
 
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

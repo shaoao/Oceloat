@@ -1,5 +1,31 @@
 # What's Changed
 
+## v1.0.31 — 2026-11-18
+
+**Fixed**
+- The backdrop blur was not aligned with the window: it covered the whole window rect
+  (including the 8 px shadow margin) and its corners stayed square. It now covers only the
+  window card and is clipped to the same 12 px radius, so the arcs line up.
+- The command palette had no blurred backdrop, and opening it made the card jump vertically.
+  Layout is now fully computed before the palette is shown, and it fades in from 10 px
+  above with a 120 ms animation.
+- On the failed-request page the **Clear / Copy all** buttons were too loud. They are now
+  compact and sit on the same line as the output summary, flush with the content edge.
+- History mode showed two **Clear History** buttons (a text one and an icon one); the icon
+  one is gone.
+- Preview tabs stayed italic after double-clicking a collection item or sending the request.
+  They are promoted to a normal tab now.
+- The import source list had a large gap between **Import from URL** and **Export all
+  collections**; the dialog height now follows the content.
+
+**Added**
+- Deleting a collection, folder or request (and clearing history) now asks for
+  confirmation. Deleting a folder tells you how many requests go with it.
+
+**Improved**
+- The "Blur All Dialogs" description in Settings is a single short sentence.
+- Self-test suite extended to 482 checks, all passing.
+
 ## v1.0.30 — 2026-11-18
 
 **Fixed**

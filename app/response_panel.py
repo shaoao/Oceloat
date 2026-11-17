@@ -204,14 +204,18 @@ class ConsoleLog(QWidget):
 
     MAX_ROWS = 200
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, compact: bool = False):
         super().__init__(parent)
         self.entries: List[Dict[str, str]] = []
         self._rows: List[QWidget] = []
+        # compact：嵌在错误页里时用。不要自己那套 14px 内缩（会和错误页的 24px
+        # 叠成两层），按钮也压低一号，免得两颗小按钮抢了报错的注意力。
+        self._compact = compact
 
         self.host = QWidget()
         self.lay = QVBoxLayout(self.host)
-        self.lay.setContentsMargins(14, 12, 14, 12)
+        self.lay.setContentsMargins(0 if compact else 14, 10 if compact else 12,
+                                    0 if compact else 14, 12)
         self.lay.setSpacing(6)
         self.lay.addStretch(1)
 
@@ -228,12 +232,15 @@ class ConsoleLog(QWidget):
 
         self.tools = QWidget()
         tl = QHBoxLayout(self.tools)
-        tl.setContentsMargins(14, 8, 14, 0)
-        tl.setSpacing(8)
+        tl.setContentsMargins(*((0, 0, 0, 2) if compact else (14, 8, 14, 0)))
+        tl.setSpacing(6 if compact else 8)
         self.summary = Label("", 10.5, theme().text_faint, mono_font=True)
-        self.clear_btn = Button("清空", None, kind="ghost", height=22, padding=8, font_size=11)
+        size = (20, 7, 10.8) if compact else (22, 8, 11)
+        self.clear_btn = Button("清空", None, kind="ghost", height=size[0],
+                                padding=size[1], font_size=size[2])
         self.clear_btn.clicked.connect(self.clear)
-        self.copy_btn = Button("复制全部", "copy", kind="ghost", height=22, padding=8, font_size=11)
+        self.copy_btn = Button("复制全部", "copy", kind="ghost", height=size[0],
+                               padding=size[1], font_size=size[2])
         self.copy_btn.clicked.connect(self.copy_all)
         tl.addWidget(self.summary, 1)
         tl.addWidget(self.clear_btn)
@@ -535,7 +542,7 @@ class ResponsePanel(QWidget):
         el.addWidget(self.error_title)
         el.addWidget(self.error_msg)
         # 请求失败时前置脚本的日志同样要看得到（不然报错只能靠猜）
-        self.error_console = ConsoleLog()
+        self.error_console = ConsoleLog(compact=True)
         self.error_console.hide()
         el.addWidget(self.error_console)
         el.addStretch(1)
