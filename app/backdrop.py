@@ -139,11 +139,24 @@ class Backdrop(QWidget):
 
     # -------------------------------------------------- 截图
     def capture(self) -> None:
-        """抓主窗口当前画面（此时遮罩还没显示，不会把自己拍进去）。"""
+        """抓主窗口当前画面（抓的时候先把自己藏起来，免得把上层的模糊图再糊一遍）。"""
+        was_visible = self.isVisible()
+        if was_visible:
+            self.setVisible(False)
         try:
             self._pix = blur_pixmap(self.host.grab())
         except Exception:      # noqa: BLE001  抓图失败就只压暗，不影响可用性
             self._pix = QPixmap()
+        finally:
+            if was_visible:
+                self.setVisible(True)
+                self.raise_()
+
+    def refresh_theme(self) -> None:
+        """主题 / 语言切换时重抓一次，否则遮罩还留着上一套配色。"""
+        if self.isVisible():
+            self.capture()
+            self.update()
 
     def eventFilter(self, obj, ev):      # noqa: N802
         if obj is self.host and ev.type() == QEvent.Type.Resize and self.isVisible():
@@ -190,9 +203,13 @@ class Backdrop(QWidget):
             p.setOpacity(alpha)
             p.drawPixmap(self.rect(), self._pix)
             p.setOpacity(1.0)
-        # 压暗：深色主题压得更狠一点，保证前景对话框的边界清楚
-        scrim = QColor(C(t.window))
-        scrim.setAlpha(int((104 if not t.is_dark else 118) * alpha))
+        # 压暗：深色主题用窗口色加暗；浅色主题用一点黑，否则整个背景会发白糊成一片
+        if t.is_dark:
+            scrim = QColor(C(t.window))
+            scrim.setAlpha(int(118 * alpha))
+        else:
+            scrim = QColor(0, 0, 0)
+            scrim.setAlpha(int(46 * alpha))
         p.fillRect(self.rect(), scrim)
         p.end()
 
