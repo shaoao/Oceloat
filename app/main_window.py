@@ -53,7 +53,8 @@ from .store import Store, kv, new_request, uid
 from .tabs import TabStrip
 from .anim import running as _anim_running, set_animations, stop as _anim_stop
 from .theme import C, S, apply_theme, font, mono, set_accent, theme, theme_by_name
-from .widgets import Button, Divider, HBox, Label, Menu, VBox, animate, fade_in, icon_button
+from .widgets import (Button, Divider, HBox, Label, Menu, VBox, animate, fade_in,
+                      fade_window, icon_button)
 
 APP_NAME = "Ocelot"
 
@@ -1880,7 +1881,10 @@ class MainWindow(QWidget):
 
     def showEvent(self, e):
         super().showEvent(e)
-        fade_in(self.root, 180)
+        # 用窗口原生透明度淡入整个窗口，绝不给承载整棵控件树的 root 挂
+        # QGraphicsOpacityEffect —— 那是 macOS 上 Qt 渲染层 SIGBUS 的直接诱因
+        # （崩溃日志 <no Python frame>）。窗口透明度由系统合成，安全等价。
+        fade_window(self, 180)
         if not getattr(self, "_split_applied", False):
             self._split_applied = True
             QTimer.singleShot(0, self._apply_split)

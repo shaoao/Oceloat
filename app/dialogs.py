@@ -153,6 +153,36 @@ class PromptDialog(GlassDialog):
         self.edit.setFocus()
 
 
+class ScriptResultDialog(GlassDialog):
+    """脚本运行结果弹窗：状态 + console 日志，一次看清，不占编辑器高度。"""
+
+    def __init__(self, ok: bool, lines: Optional[List[str]] = None,
+                 error: str = "", parent=None):
+        super().__init__(parent, 560, 380, i18n.tr("运行结果"))
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(18, 14, 18, 18)
+        lay.setSpacing(10)
+
+        status_text = i18n.tr("✓ 运行成功") if ok else "✕ " + (error or i18n.tr("运行失败"))[:200]
+        head = Label(status_text, 12.5,
+                     theme().success if ok else theme().danger,
+                     weight=QFont.Weight.DemiBold)
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        lay.addWidget(Divider())
+
+        self.log = CodeView(read_only=True, highlight=False, show_gutter=False, wrap=True)
+        self.log.setObjectName("Field")
+        self.log.setMinimumHeight(210)
+        text = "\n".join(str(x) for x in (lines or []) if str(x).strip())
+        self.log.setPlainText(text or i18n.tr("（脚本没有输出日志）"))
+        lay.addWidget(self.log, 1)
+
+        close = Button(i18n.tr("关闭"), None, kind="primary", height=28, padding=16, font_size=12)
+        close.clicked.connect(self.accept)
+        lay.addWidget(HBox(1, close, spacing=6))
+
+
 # ---------------------------------------------------------------- 设置
 
 

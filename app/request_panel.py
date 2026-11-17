@@ -1006,28 +1006,22 @@ class ScriptPage(QWidget):
         body.addWidget(editor, 3)
         body.addWidget(self.side_scroll, 2)
 
-        # 底部：运行结果 + 简短的「试运行」按钮（tooltip 说明用途）
-        self.status = Label("", 10.5, theme().text_faint, mono_font=True)
-        # 说明必须保持一行：多行会把下方「试运行」整行顶得忽高忽低
+        # 底部：运行状态 + 简短的「试运行」按钮。运行结果改为弹窗，这里只留一行提示。
+        self.status = Label("", 10.5, theme().text_faint)
+        # 说明必须保持一行；左对齐并留一点内边距，避免贴着最左边太难看
         self.status.setWordWrap(False)
+        self.status.setContentsMargins(6, 0, 0, 0)
         self.run_btn = Button(
             "试运行", "play", kind="ghost", height=26, padding=11, font_size=11.5,
-            tooltip="不联网，只在临时请求上执行当前脚本，查看日志与错误。")
+            tooltip="不联网，只在临时请求上执行当前脚本，弹窗查看日志与错误。")
         self.run_btn.clicked.connect(self._run_test)
         tools = HBox(self.status, 1, self.run_btn, spacing=8)
-
-        # 日志输出：试运行 / 真实请求后的 console.log 都落在这里，默认收起不占地方
-        self.log_view = CodeView(read_only=True, highlight=False, show_gutter=False, wrap=True)
-        self.log_view.setMaximumHeight(92)
-        self.log_view.setObjectName("ScriptLog")
-        self.log_view.hide()
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 8, 0, 0)
         lay.setSpacing(8)
         lay.addLayout(body, 1)
         lay.addWidget(tools)
-        lay.addWidget(self.log_view)
 
     def _on_code_changed(self) -> None:
         if not self._loading:
@@ -1039,41 +1033,42 @@ class ScriptPage(QWidget):
         self.code.setTextCursor(cur)
         self.code.setFocus()
 
-    def _show_logs(self, lines: List[str]) -> None:
-        """把脚本日志写进下方只读视图；没有日志就收起，不占垂直空间。"""
-        text = "\n".join(str(line) for line in lines if str(line).strip())
+    def _set_status(self, text: str, kind: str = "ok") -> None:
+        """状态文字带淡入过渡；成功时只显示「运行成功」。"""
+        self.status.setText(text)
+        self.status.setStyleSheet(
+            f"color: {theme().success if kind == 'ok' else theme().danger}; background: transparent;")
         if text:
-            self.log_view.setPlainText(text)
-            self.log_view.show()
-        else:
-            self.log_view.clear()
-            self.log_view.hide()
+            from .anim import animations_on
+
+            if animations_on():
+                fade_in(self.status, 200)
 
     def set_logs(self, lines: List[str]) -> None:
-        """真实请求执行完脚本后由主窗口回填日志（试运行也会调用同一出口）。"""
-        self._show_logs(lines)
+        """真实请求执行完脚本后的日志由主窗口回填；结果走弹窗，这里不再内联展示。"""
+        self._last_logs = list(lines or [])
 
     def _run_test(self) -> None:
-        """试跑：不联网，只在临时请求对象上看日志与错误。"""
+        """试跑：不联网，只在临时请求上执行当前脚本，结果用弹窗一次看清。"""
+        from .dialogs import ScriptResultDialog
         from .scripts import run_script
 
         req = {"method": "GET", "url": "https://example.com", "headers": [],
                "params": [], "body": {"raw": ""}}
         source = self.code.toPlainText()
         if not source.strip():
-            self.status.setText("")
-            self._show_logs([])
+            self._set_status("", "ok")
             return
         result = run_script(source, self.store, req)
         lines = list(result.logs)
         if result.error:
             lines.append("✕ " + result.error)
-        self._show_logs(lines)
-        self.status.setText(
-            i18n.tr("✓ 运行成功 · 查看下方日志") if result.ok
-            else "✕ " + result.error[:180])
-        self.status.setStyleSheet(
-            f"color: {theme().success if result.ok else theme().danger}; background: transparent;")
+        # 成功只显示「运行成功」，失败显示错误；完整日志进弹窗
+        self._set_status(i18n.tr("运行成功") if result.ok
+                         else "✕ " + result.error[:180],
+                         "ok" if result.ok else "error")
+        dlg = ScriptResultDialog(result.ok, lines, "" if result.ok else result.error, self)
+        dlg.exec()
 
     @property
     def _drafts(self) -> Dict[str, str]:
@@ -1089,7 +1084,8 @@ class ScriptPage(QWidget):
         }
         self.code.setPlainText(self._script_drafts[self._kind])
         self.status.setText("")
-        self._show_logs([])
+        self.status.setStyleSheet("")
+        self._last_logs = []
         self._loading = False
 
     def dump(self) -> Dict[str, str]:
@@ -1153,7 +1149,10 @@ class RequestEditor(QWidget):
         self.paste_btn = Button("粘贴", None, kind="ghost", height=24, padding=8, font_size=11.5,
                                 tooltip="从剪贴板批量导入：a=1&b=2 / 多行 key: value / JSON")
         self.paste_btn.clicked.connect(self._paste_params)
-        self.params_tools = HBox(1, self.paste_btn, spacing=4)
+        self.params_bulk_btn = Button("批量编辑", None, kind="ghost", height=24, padding=8, font_size=11.5,
+                                      tooltip="以 key: value 文本一次编辑全部参数")
+        self.params_bulk_btn.clicked.connect(self._toggle_params_bulk)
+        self.params_tools = HBox(1, self.paste_btn, self.params_bulk_btn, spacing=4)
         self.params_preview = Label("", 10.5, theme().text_faint, mono_font=True)
         self.params_preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.params_preview.setToolTip("最终发送的完整地址")
@@ -1457,6 +1456,10 @@ class RequestEditor(QWidget):
     def _toggle_bulk(self) -> None:
         self.headers.set_bulk(not self.headers.is_bulk())
         self.bulk_btn.setText("退出批量" if self.headers.is_bulk() else "批量编辑")
+
+    def _toggle_params_bulk(self) -> None:
+        self.params.set_bulk(not self.params.is_bulk())
+        self.params_bulk_btn.setText("退出批量" if self.params.is_bulk() else "批量编辑")
 
     def _quick_content_type(self) -> None:
         rows = self.headers.rows()

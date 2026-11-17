@@ -1,5 +1,25 @@
 # What's Changed
 
+## v1.0.26 — 2026-11-18
+
+**Improved**
+- Script **Run test** results now appear in a dedicated dialog. The status line shows only
+  "Ran successfully", left-aligned with comfortable padding and a subtle fade-in when the
+  text appears. The inline log panel at the bottom of the page is gone.
+
+**Added**
+- Params now has a **Bulk Edit** button, so you can edit all query parameters at once as
+  `key: value` text.
+- History is grouped into **Within the last hour / Today / Yesterday**, with each group's
+  collapsed state remembered independently. Group headers now share the same subtle hover
+  animation as the other buttons.
+
+**Fixed**
+- Fixed an intermittent startup `bus error` crash. The frameless translucent window now fades
+  in using native window opacity instead of a graphics effect, and pages hosting native video
+  views no longer get a `QGraphicsOpacityEffect` applied.
+- All 395 self-tests pass.
+
 ## v1.0.25 — 2026-11-17
 
 **Fixed**

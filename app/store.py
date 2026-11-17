@@ -19,9 +19,23 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.25"
+VERSION = "1.0.26"
 
 CHANGELOG = [
+    {
+        "version": "1.0.26",
+        "date": "2026-11-18",
+        "items": [
+            "优化：脚本「试运行」结果改为弹窗展示，状态只保留一行「运行成功」，" 
+            "文字左对齐并留内边距、出现时淡入过渡；页面底部不再占用日志面板",
+            "新增：参数页增加「批量编辑」，支持一次用 key: value 文本编辑全部参数",
+            "新增：历史按「1 小时内 / 今天 / 昨天」分组，折叠状态各自记忆；" 
+            "分组标题增加与其他按钮一致的浅色悬停动效",
+            "修复：解决启动时偶发的 bus error 硬崩溃 —— 无边框透明窗口改用原生透明度淡入，" 
+            "含原生视频控件的页面不再套图形特效",
+            "优化：全面回归测试，395 项自测全绿",
+        ],
+    },
     {
         "version": "1.0.25",
         "date": "2026-11-17",

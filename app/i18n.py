@@ -1023,5 +1023,10 @@ _EN.update({
         "Paste an existing JWT to be sent as Authorization: Bearer <token>.",
     "Payload 不是合法 JSON": "Payload is not valid JSON",
     "已生成 · {n} 字符": "Generated · {n} chars",
+    "运行结果": "Run Result", "✓ 运行成功": "✓ Ran successfully",
+    "运行成功": "Ran successfully",
+    "运行失败": "Run failed", "（脚本没有输出日志）": "(No logs from the script)",
+    "1小时内": "Within the last hour",
+    "退出批量": "Exit Bulk Edit",
 })
 

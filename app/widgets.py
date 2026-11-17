@@ -314,16 +314,73 @@ def animate(widget: QWidget, start, end, dur: int = 180,
     return anim
 
 
+def _has_native_child(widget: QWidget) -> bool:
+    """子树里是否存在带原生窗口句柄的控件（QVideoWidget / QOpenGLWidget 等）。"""
+    try:
+        for child in widget.findChildren(QWidget):
+            if child.testAttribute(Qt.WidgetAttribute.WA_NativeWindow):
+                return True
+    except RuntimeError:
+        return False
+    return False
+
+
+def fade_window(widget: QWidget, dur: int = 160, start: float = 0.0,
+                on_done: Optional[Callable] = None) -> None:
+    """顶层窗口的淡入：走窗口原生透明度，绝不使用 QGraphicsOpacityEffect。
+
+    macOS 上给「无边框 + WA_TranslucentBackground」的顶层窗口挂图形特效，
+    会在 Qt 渲染线程触发 SIGBUS 硬崩（崩溃日志里 <no Python frame>，抓不到
+    Python 栈）。窗口透明度由窗口服务器合成，是唯一安全的方式。
+    """
+    from .anim import animations_on
+    from .anim import stop as _stop
+
+    _stop(getattr(widget, "_fade_anim", None))
+    if not animations_on():
+        widget.setWindowOpacity(1.0)
+        if on_done is not None:
+            on_done()
+        return
+    widget.setWindowOpacity(max(0.0, min(1.0, start)))
+
+    def step(v):
+        try:
+            widget.setWindowOpacity(max(0.0, min(1.0, float(v))))
+        except RuntimeError:
+            pass
+
+    def done():
+        try:
+            widget.setWindowOpacity(1.0)
+        except RuntimeError:
+            pass
+        if on_done:
+            on_done()
+
+    widget._fade_anim = animate(widget, start, 1.0, dur, step, on_done=done)
+
+
 def fade_in(widget: QWidget, dur: int = 160, start: float = 0.0,
             on_done: Optional[Callable] = None) -> None:
     """给控件做一次淡入，结束后移除 effect 避免影响子控件渲染质量。
 
     同一控件重复触发时会先停止上一次动画，避免访问已销毁的 effect。
+    顶层窗口自动改走 fade_window（原生透明度），规避 macOS 的 SIGBUS。
     """
     from .anim import animations_on
     from .anim import stop as _stop
 
+    if widget.isWindow():
+        fade_window(widget, dur, start, on_done)
+        return
     if not animations_on():
+        if on_done is not None:
+            on_done()
+        return
+    # 子树里若有原生窗口（音视频预览的 QVideoWidget 等），QGraphicsOpacityEffect
+    # 会在 macOS 上令渲染层 SIGBUS；这种页面只淡入普通控件，含原生的直接跳过。
+    if _has_native_child(widget):
         if on_done is not None:
             on_done()
         return

@@ -818,9 +818,13 @@ class ResponsePanel(QWidget):
             return
         self.center.setCurrentWidget(self.content)
         self.tabs_row.show()
-        from .widgets import fade_in as _fade
+        # content 里可能挂着原生视频视图（QVideoWidget）；给它套
+        # QGraphicsOpacityEffect 会在 macOS 上触发 Qt 渲染层 SIGBUS。
+        # 图片/文本用淡入，音视频响应直接跳过特效保证稳定。
+        if resp.kind not in ("audio", "video"):
+            from .widgets import fade_in as _fade
 
-        _fade(self.content, 170)
+            _fade(self.content, 170)
         self._set_actions_enabled(True)
         self._set_head_visible(True)
         self.meta.show()

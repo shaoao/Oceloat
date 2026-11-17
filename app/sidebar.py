@@ -428,7 +428,36 @@ class HistoryGroupHeader(QWidget):
         self.collapsed = collapsed
         self.setFixedHeight(30)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._hover = False
+        self._hover_v = 0.0
+        self._anim = QVariantAnimation(self)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.setDuration(130)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.valueChanged.connect(self._on_hover)
+
+    def _on_hover(self, v) -> None:
+        self._hover_v = float(v)
+        self.update()
+
+    def enterEvent(self, e):  # noqa: N802
+        self._hover = True
+        _anim_stop(self._anim)
+        self._anim.setStartValue(self._hover_v)
+        self._anim.setEndValue(1.0)
+        self._anim.start()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):  # noqa: N802
+        self._hover = False
+        _anim_stop(self._anim)
+        self._anim.setStartValue(self._hover_v)
+        self._anim.setEndValue(0.0)
+        self._anim.start()
+        super().leaveEvent(e)
 
     def mousePressEvent(self, e):  # noqa: N802
         if e.button() == Qt.MouseButton.LeftButton:
@@ -439,6 +468,13 @@ class HistoryGroupHeader(QWidget):
         t = theme()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        # 悬停浅色底色，和历史行 / 集合树同一套 hover 色
+        if self._hover_v > 0.01:
+            c = C(t.hover)
+            c.setAlpha(int(c.alpha() * self._hover_v))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(c)
+            p.drawRoundedRect(QRectF(3, 2, self.width() - 6, self.height() - 4), 7, 7)
         # 与集合树同款 chevron_right：收起朝右，展开旋转 90° 朝下
         icon_col = C(t.text_faint)
         pm = icons.pixmap("chevron_right", icon_col.name(QColor.NameFormat.HexArgb), 11, 2.0)
@@ -460,17 +496,28 @@ class HistoryGroupHeader(QWidget):
         p.end()
 
 
+def _within_hour(ts: float) -> bool:
+    """最近 1 小时内（允许 60s 时钟误差），用于单独分组。"""
+    import time
+
+    return ts > 0 and (time.time() - ts) <= 3600 + 60
+
+
 def _history_group_key(ts: float) -> str:
-    """分组的稳定 key（本地日期），与显示语言无关，用于持久化折叠状态。"""
+    """分组的稳定 key，与显示语言无关，用于持久化折叠状态。"""
     from datetime import datetime
 
+    if _within_hour(ts):
+        return "1h"  # 与「今天」区分，折叠状态互不串扰
     return datetime.fromtimestamp(ts or 0).strftime("%Y-%m-%d")
 
 
 def _history_group(ts: float) -> str:
-    """按本地日期把时间戳归到 Today / Yesterday / N days ago。"""
+    """最近 1 小时单独成组，其余按本地日期归到 今天 / 昨天 / N 天前。"""
     from datetime import datetime
 
+    if _within_hour(ts):
+        return i18n.tr("1小时内")
     day = datetime.fromtimestamp(ts or 0).date()
     today = datetime.now().date()
     delta = (today - day).days
