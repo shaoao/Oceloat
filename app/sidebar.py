@@ -561,6 +561,7 @@ class Sidebar(QWidget):
     previewRequest = pyqtSignal(dict)       # 单击：预览
     requestDeleted = pyqtSignal(str)
     runFolder = pyqtSignal(str)             # 右键「运行集合」：folder node id
+    transferRequested = pyqtSignal()        # 搜索框右侧的导入 / 导出按钮
     changed = pyqtSignal()
     notify = pyqtSignal(str)
 
@@ -590,7 +591,10 @@ class Sidebar(QWidget):
 
         self.search = SearchField("搜索请求、URL 或方法")
         self.search.changed.connect(self._apply_filter)
-        root.addWidget(self.search)
+        # 搜索框右侧：导入 / 导出（一个按钮，一个对话框，导入导出都在里面切换）
+        self.transfer_btn = icon_button("transfer", "导入 / 导出集合", 28, 14)
+        self.transfer_btn.clicked.connect(self.transferRequested.emit)
+        root.addWidget(HBox(self.search, 1, self.transfer_btn, spacing=6))
 
         # 集合树
         self.tree = CollectionsTree()
@@ -737,6 +741,54 @@ class Sidebar(QWidget):
         self.tree.open_ids = ids
         self.tree.viewport().update()
 
+    def refresh_theme(self) -> None:
+        """语言 / 主题切换后：重译 tooltip 并重绘（行内文案在 paintEvent 里实时翻译）。"""
+        self.transfer_btn.setToolTip(i18n.tr("导入 / 导出集合"))
+        self.folder_btn.setToolTip(i18n.tr("新建文件夹"))
+        self.clear_btn.setToolTip(i18n.tr("清空历史"))
+        self.tree.viewport().update()
+        if self._mode == "history":
+            self.refresh_history()
+
+    def _find_item(self, node_id: str) -> Optional[QTreeWidgetItem]:
+        """按 node id 在树里找条目（深度优先，命中即返回）。"""
+        def walk(parent) -> Optional[QTreeWidgetItem]:
+            count = parent.childCount() if parent is not None else self.tree.topLevelItemCount()
+            for i in range(count):
+                item = parent.child(i) if parent is not None else self.tree.topLevelItem(i)
+                if item.data(0, ROLE_ID) == node_id:
+                    return item
+                hit = walk(item)
+                if hit is not None:
+                    return hit
+            return None
+
+        return walk(None)
+
+    def reveal(self, node_id: Optional[str]) -> None:
+        """把左侧列表定位到某条请求：切回集合页、展开父级、滚动到位并高亮。
+
+        点上面的标签页时调用 —— 用户不用再去树里自己找是哪一条。
+        """
+        if not node_id:
+            return
+        if self._mode != "collections":
+            self.seg.set_current("collections", emit=False)
+            self._on_mode("collections")
+        # 搜索把目标过滤掉了就先清空过滤，否则 scrollToItem 落在隐藏行上没反应
+        item = self._find_item(node_id)
+        if item is None:
+            return
+        if item.isHidden():
+            self.search.clear()
+            self._apply_filter("")
+        parent = item.parent()
+        while parent is not None:
+            parent.setExpanded(True)
+            parent = parent.parent()
+        self.tree.setCurrentItem(item)
+        self.tree.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+
     # -------------------------------------------------- 增删改
     def _new_request(self) -> None:
         if self._mode == "history":
@@ -808,21 +860,24 @@ class Sidebar(QWidget):
         t = theme()
         menu = Menu(self)
         is_folder = node.get("type") == "folder"
-        act_new = menu.addAction(icons.icon("plus", t.text, 14), "新建请求")
-        act_folder = menu.addAction(icons.icon("folder", t.text, 14), "新建文件夹") if is_folder else None
+        act_new = menu.addAction(icons.icon("plus", t.text, 14), i18n.tr("新建请求"))
+        act_folder = (menu.addAction(icons.icon("folder", t.text, 14), i18n.tr("新建文件夹"))
+                      if is_folder else None)
         menu.addSeparator()
-        act_run = menu.addAction(icons.icon("play", t.text, 14), "运行集合") if is_folder else None
+        act_run = (menu.addAction(icons.icon("play", t.text, 14), i18n.tr("运行集合"))
+                   if is_folder else None)
         if act_run is not None:
             menu.addSeparator()
-        act_auth = menu.addAction(icons.icon("lock", t.text, 14), "设置认证…") if is_folder else None
-        act_rename = menu.addAction(icons.icon("pencil", t.text, 14), "重命名…")
-        act_dup = menu.addAction(icons.icon("copy", t.text, 14), "创建副本")
+        act_auth = (menu.addAction(icons.icon("lock", t.text, 14), i18n.tr("设置认证…"))
+                    if is_folder else None)
+        act_rename = menu.addAction(icons.icon("pencil", t.text, 14), i18n.tr("重命名…"))
+        act_dup = menu.addAction(icons.icon("copy", t.text, 14), i18n.tr("创建副本"))
         if not is_folder:
-            act_curl = menu.addAction(icons.icon("code", t.text, 14), "复制为 cURL")
+            act_curl = menu.addAction(icons.icon("code", t.text, 14), i18n.tr("复制为 cURL"))
         else:
             act_curl = None
         menu.addSeparator()
-        act_del = menu.addAction(icons.icon("trash", t.danger, 14), "删除")
+        act_del = menu.addAction(icons.icon("trash", t.danger, 14), i18n.tr("删除"))
 
         chosen = menu.exec(global_pos)
         if chosen is None:

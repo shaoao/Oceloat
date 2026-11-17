@@ -2239,6 +2239,153 @@ def main() -> int:
         _i18n.set_language("zh", notify=False)
         return 0
 
+
+    def step33():
+        print("[30] 控制台 / 脚本加固 / 导入导出 / 标签重命名 / 侧栏跳转")
+        import json as _json_mod
+
+        from app import transfer
+        from app.http_client import Response
+        from app.store import new_folder, new_request
+        from app.scripts import run_script
+        from app.store import dynamic_var, kv
+
+        # 1) 响应面板新增「控制台」页，能吃下分级条目
+        keys = [i["key"] for i in w.response.tabs._items]
+        check("响应面板新增控制台页", "console" in keys, str(keys))
+        entries = [{"level": "log", "text": "hello", "phase": "pre"},
+                   {"level": "error", "text": "boom", "phase": "post"}]
+        w.response.set_console(entries)
+        app.processEvents()
+        check("控制台条目已渲染", len(w.response.console_host.entries) == 2,
+              str(len(w.response.console_host.entries)))
+        badge = [i["badge"] for i in w.response.tabs._items if i["key"] == "console"]
+        check("控制台徽标是条数", badge and badge[0] == 2, str(badge))
+        w.response._on_tab("console")
+        check("控制台页能切换", w.response.body_stack.current() == "console")
+
+        # 2) 脚本：日志级别 / 断言 / 环境变量 / res.json / 行号
+        req = new_request("S", "POST", "https://s.test/x")
+        req["headers"] = [kv("A", "1"), kv("B", "2", False)]
+        res = run_script(
+            'console.warn("w");\n'
+            'req.setHeader("C", "3");\n'
+            'pw.env.set("sv_smoke", "42");\n'
+            'test("ok", function () { if (1 !== 1) throw new Error("x"); });\n',
+            store, req)
+        check("脚本正常执行", res.ok, res.error)
+        check("日志带级别", [e["level"] for e in res.entries][:2] == ["warn", "ok"],
+              str([e["level"] for e in res.entries]))
+        check("脚本写环境变量", store.env_vars().get("sv_smoke") == "42")
+        check("setHeader 保留停用状态",
+              any(h["key"] == "B" and h["enabled"] is False for h in req["headers"]),
+              str(req["headers"]))
+        resp_obj = Response(status=201, reason="Created", elapsed=8,
+                            headers=[("Content-Type", "application/json")],
+                            body=b'{"token":"t1"}', size=14, url="u")
+        r2 = run_script('var d = res.json(); console.log(d ? d.token : "no");'
+                        'res.setHeader("X-A", "1");', store, req, res=resp_obj)
+        check("后置脚本能解析响应体", r2.ok and r2.logs and r2.logs[0] == "t1",
+              str(r2.logs))
+        check("res.setHeader 生效", resp_obj.header("X-A") == "1")
+        r3 = run_script("bad call(", store, req)
+        check("语法错误行号是用户看到的行", r3.error.startswith("第 1 行"), r3.error)
+        r4 = run_script("while (true) {}", store, req, timeout_ms=300)
+        check("死循环能被中止", not r4.ok and r4.timed_out, r4.error)
+        check("动态变量集中实现", dynamic_var("$timestamp").isdigit())
+
+        # 3) 导入导出：五种格式都能来回
+        folder = new_folder("T")
+        one = new_request("R", "GET", "https://t.test/a?x=1")
+        one["scripts"] = {"pre": "console.log(1);", "post": ""}
+        one["auth"] = {"type": "bearer", "token": "tk"}
+        folder["children"] = [one]
+        store.data["collections"].append(folder)
+        store.save()
+        for fn, label in (
+                (lambda: _json_mod.dumps(transfer.to_ocelot(store), ensure_ascii=False), "ocelot"),
+                (lambda: _json_mod.dumps(transfer.to_postman(store), ensure_ascii=False), "postman"),
+                (lambda: _json_mod.dumps(transfer.to_openapi(store), ensure_ascii=False), "openapi"),
+                (lambda: transfer.to_yaml(transfer.to_openapi(store)), "openapi-yaml"),
+                (lambda: _json_mod.dumps(transfer.to_har(store), ensure_ascii=False), "har")):
+            text = fn()
+            nodes, fmt, err = transfer.parse_text(text)
+            check(f"{label} 导出后可再导入", bool(nodes) and not err,
+                  f"{fmt} {err}")
+        text = _json_mod.dumps(transfer.to_ocelot(store), ensure_ascii=False)
+        nodes, _fmt, _err = transfer.parse_text(text)
+        flat = []
+        def walk(ns):
+            for n in ns:
+                if n.get("type") == "folder":
+                    walk(n.get("children") or [])
+                else:
+                    flat.append(n)
+        walk(nodes)
+        got = [n for n in flat if n["name"] == "R"]
+        check("Ocelot JSON 保留脚本与认证",
+              bool(got) and got[0]["scripts"]["pre"] == "console.log(1);"
+              and got[0]["auth"]["type"] == "bearer", str(got[:1]))
+        check("Ocelot JSON 结构是 Postman v2.1 兼容",
+              "schema" in _json_mod.dumps(transfer.to_ocelot(store)) and
+              "x-ocelot" in _json_mod.dumps(transfer.to_ocelot(store)))
+        check("YAML 解析能读 OpenAPI", isinstance(transfer._yaml_load(
+            "openapi: 3.1.0\ninfo:\n  title: t\n"), dict))
+        # 清理测试用的集合
+        store.data["collections"] = [c for c in store.data["collections"] if c.get("name") != "T"]
+        store.save()
+
+        # 4) 导入导出对话框
+        from app.dialogs import TransferDialog
+        dlg = TransferDialog(store, w)
+        check("默认停在导入页", dlg.stack.current() == "import")
+        dlg._choose_source("postman")
+        check("选来源后进到选文件页", dlg.stack.current() == "file")
+        check("选文件页可返回", not dlg.back_btn.isHidden())
+        dlg._go_back()
+        check("返回后回到导入页", dlg.stack.current() == "import")
+        dlg._show_page("export")
+        check("导出页能打开", dlg.stack.current() == "export")
+        dlg.close()
+
+        # 5) 侧栏跳转 + 标签重命名同步
+        node = None
+        for n, _siblings in store.walk():
+            if n.get("type") == "request":
+                node = n
+                break
+        check("集合里有请求可定位", node is not None)
+        if node is not None:
+            w.sidebar.seg.set_current("history", emit=False)
+            w.sidebar._on_mode("history")
+            w.sidebar.search._edit.setText("zzz")
+            w.sidebar._apply_filter("zzz")
+            w.sidebar.reveal(node["id"])
+            item = w.sidebar.tree.currentItem()
+            check("跳转会切回集合页", w.sidebar._mode == "collections")
+            check("跳转会清掉过滤并选中目标",
+                  item is not None and item.data(0, 0x100 + 2).get("id") == node["id"])
+            w.sidebar.rename_node(node["id"], "同步改名")
+            w._on_store_changed()
+            same = [t for t in w.tabs_data if t.get("node_id") == node["id"]]
+            check("重命名同步到标签标题", all(t["title"] == "同步改名" for t in same) if same else True)
+            check("重命名同步到请求内容",
+                  all(t["request"]["name"] == "同步改名" for t in same) if same else True)
+            check("重命名已落盘", Store.load(TMP).find(node["id"])["name"] == "同步改名")
+
+        # 6) 脚本片段从新的一行插入
+        page = w.editor.scripts_post
+        page.code.setPlainText("var a = 1;")
+        cur = page.code.textCursor()
+        cur.movePosition(cur.MoveOperation.EndOfBlock)
+        page.code.setTextCursor(cur)
+        page._insert('console.log("x");')
+        check("片段从新行插入", page.code.toPlainText() == 'var a = 1;\nconsole.log("x");\n',
+              repr(page.code.toPlainText()))
+        check("后置脚本有专属片段",
+              any("res" in s for _t, s in page.POST_SNIPPETS))
+        return 0
+
     def finish():
         try:
             _SERVER.shutdown()
@@ -2252,7 +2399,7 @@ def main() -> int:
 
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

@@ -1040,3 +1040,105 @@ _EN.update({
     "退出批量": "Exit Bulk Edit",
 })
 
+
+# 1.0.28：控制台、导入导出、标签重命名
+_EN.update({
+    # ---- 控制台
+    "控制台": "Console",
+    "{n} 条输出": "{n} lines",
+    " · {w} 条警告": " · {w} warnings",
+    "复制全部": "Copy all",
+    "脚本里用 console.log() 打印的内容会显示在这里":
+        "Anything logged with console.log() shows up here",
+    "前置": "Pre", "后置": "Post",
+    "脚本执行超过 {ms} 毫秒，已中止（检查是否有死循环）":
+        "Script ran longer than {ms} ms and was stopped (check for an endless loop)",
+    "第 {n} 行：{msg}": "Line {n}: {msg}",
+    # ---- 脚本片段
+    "环境变量：设置一个变量": "Env var: set a value",
+    "环境变量：设置时间戳": "Env var: set a timestamp",
+    "环境变量：设置随机数": "Env var: set a random number",
+    "请求：添加一个请求头": "Request: add a header",
+    "控制台：打印一条消息": "Console: log a message",
+    "响应：打印状态与耗时": "Response: log status and time",
+    "响应：解析 JSON 并取字段": "Response: parse JSON and read fields",
+    "响应：把 token 存进环境": "Response: save a token to the environment",
+    "断言：状态码为 200": "Test: status is 200",
+    "断言：响应包含字段": "Test: response has a field",
+    "代码片段": "Snippets",
+    # ---- 导入 / 导出
+    "返回": "Back", "导出": "Export",
+    "导入 / 导出集合": "Import / Export Collections",
+    "导出集合": "Export Collections",
+    "从 Ocelot JSON 导入": "Import from Ocelot JSON",
+    "Ocelot / Postman v2.1 兼容格式，保留脚本与认证":
+        "Ocelot / Postman v2.1 compatible, keeps scripts and auth",
+    "从 Postman 导入": "Import from Postman",
+    "Collection v2.0 / v2.1 导出的 JSON": "JSON exported from Collection v2.0 / v2.1",
+    "从 Apifox 导入": "Import from Apifox",
+    "Apifox 导出的 JSON（Postman 兼容）": "JSON exported from Apifox (Postman compatible)",
+    "从 Hoppscotch 导入": "Import from Hoppscotch",
+    "Hoppscotch 集合导出的 JSON": "JSON exported from a Hoppscotch collection",
+    "从 Insomnia 导入": "Import from Insomnia",
+    "Insomnia 导出的 JSON（v4）": "JSON exported from Insomnia (v4)",
+    "从 OpenAPI 导入": "Import from OpenAPI",
+    "OpenAPI 3.x / Swagger 2.0，JSON 或 YAML": "OpenAPI 3.x / Swagger 2.0, JSON or YAML",
+    "从 HAR 导入": "Import from HAR",
+    "浏览器开发者工具导出的 .har": ".har exported from browser dev tools",
+    "从剪贴板导入": "Import from clipboard",
+    "自动识别 JSON 集合或 cURL 命令，直接粘过来":
+        "Detects a JSON collection or a cURL command, right from the clipboard",
+    "导出全部集合": "Export all collections",
+    "Ocelot JSON / Postman / OpenAPI / HAR": "Ocelot JSON / Postman / OpenAPI / HAR",
+    "导出为 Ocelot JSON": "Export as Ocelot JSON",
+    "Postman v2.1 兼容，附 x-ocelot 元数据；保留脚本、认证、环境变量":
+        "Postman v2.1 compatible, plus x-ocelot metadata; keeps scripts, auth and environments",
+    "导出为 Postman v2.1": "Export as Postman v2.1",
+    "最通用的集合格式，Postman / Apifox 可直接导入":
+        "The most portable collection format; Postman / Apifox import it directly",
+    "导出为 OpenAPI 3.1 (JSON)": "Export as OpenAPI 3.1 (JSON)",
+    "接口文档格式，只保留路径、方法、参数与示例":
+        "API documentation format: paths, methods, parameters and examples",
+    "导出为 OpenAPI 3.1 (YAML)": "Export as OpenAPI 3.1 (YAML)",
+    "同上，YAML 写法，适合放进代码仓库": "Same content in YAML, handy for a repository",
+    "导出为 HAR": "Export as HAR",
+    "抓包归档格式，适合给同事复现问题":
+        "Network archive format, handy for reproducing an issue",
+    "把文件拖到这里，或点击选择": "Drop a file here, or click to choose",
+    "支持 .json / .yaml / .har，自动识别来源":
+        "Supports .json / .yaml / .har; the source is detected automatically",
+    "选择要导入的文件": "Choose a file to import",
+    "集合文件 (*.json *.yaml *.yml *.har);;所有文件 (*)":
+        "Collection files (*.json *.yaml *.yml *.har);;All files (*)",
+    "导入": "Import",
+    "✓ 已解析：{n} 个请求 · {size} 字节 {note}":
+        "✓ Parsed: {n} requests · {size} bytes {note}",
+    "（识别为 {fmt} 格式，已按实际格式解析）":
+        " (detected as {fmt}, parsed accordingly)",
+    "✓ 已导入 {n} 个请求": "✓ Imported {n} requests",
+    "已导入 {n} 个请求": "Imported {n} requests",
+    "已从剪贴板导入 {n} 个请求": "Imported {n} requests from the clipboard",
+    "已从剪贴板导入 1 个请求": "Imported 1 request from the clipboard",
+    "剪贴板是空的": "The clipboard is empty",
+    "剪贴板内容不是可识别的集合": "The clipboard does not contain a known collection",
+    "cURL 解析失败": "Could not parse the cURL command",
+    "读取失败：{err}": "Read failed: {err}",
+    "文件里没有可导入的请求": "No importable request found in the file",
+    "导入只会新增集合，不会覆盖现有内容；重复导入会产生新的副本。":
+        "Importing only adds collections; nothing is overwritten, repeated imports "
+        "create duplicates.",
+    "Ocelot JSON 与 Postman v2.1 是通用格式，别的工具可以直接导入；"
+    "OpenAPI 导出会丢失脚本、认证凭据、未启用的请求项、重复路径与重复响应码。":
+        "Ocelot JSON and Postman v2.1 are portable formats other tools can import. "
+        "OpenAPI export drops scripts, auth credentials, disabled items, duplicate "
+        "paths and duplicate response codes.",
+    "✓ 已导出到 {path} · {size} 字节": "✓ Exported to {path} · {size} bytes",
+    "✕ 导出失败：{err}": "✕ Export failed: {err}",
+    # ---- 标签重命名
+    "重命名": "Rename", "重命名…": "Rename…", "已重命名": "Renamed",
+    "新建请求": "New Request",
+    "复制为 cURL": "Copy as cURL",
+    "关闭全部": "Close all",
+    "删除": "Delete",
+    "新建文件夹": "New Folder",
+})

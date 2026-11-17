@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy as _copy
 import json
+import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -595,7 +596,8 @@ class MainWindow(QWidget):
         self.resize(1320, 840)
         self._margin = 8
 
-        set_animations(bool(store.settings.get("animations", True)))
+        set_animations(bool(store.settings.get("animations", True))
+                       and not os.environ.get("OCELOT_NO_ANIM"))
         CodeView.set_global_size(float(store.settings.get("code_font_size", 11.8)))
         QApplication.instance().setAttribute(
             Qt.ApplicationAttribute.AA_DontShowIconsInMenus, False)
@@ -666,6 +668,7 @@ class MainWindow(QWidget):
         self.sidebar.requestDeleted.connect(self._on_request_deleted)
         self.sidebar.changed.connect(self._on_store_changed)
         self.sidebar.runFolder.connect(self.run_collection)
+        self.sidebar.transferRequested.connect(self.open_transfer)
         self.sidebar.notify.connect(lambda msg: self.toast.show_message(msg, "success"))
 
         content = ContentSurface()
@@ -1032,7 +1035,7 @@ class MainWindow(QWidget):
         self._open_request_obj(request, node_id=node_id)
 
     def _open_request_obj(self, request: Dict[str, Any], node_id: Optional[str],
-                          preview: bool = False) -> None:
+                          preview: bool = False, activate: bool = True) -> None:
         tab_id = f"tab_{int(time.time() * 1000)}_{len(self.tabs_data)}"
         # 每个标签持有独立快照：绝不与集合树/store 节点共享同一个 dict，
         # 否则一边编辑另一边跟着变（用户反馈的「两个页面内容一样」）。
@@ -1044,10 +1047,12 @@ class MainWindow(QWidget):
         }
         self.tabs_data.append(tab)
         self.tabstrip.add_tab({"id": tab_id, "title": tab["title"], "method": tab["method"],
-                               "preview": preview})
+                               "preview": preview}, activate=activate)
         self._sync_open_ids()
-        self._on_tab_changed(tab_id)
-        self._update_stack()
+        # 恢复会话时先只建标签，最后统一加载一次 —— 否则开 8 个标签要跑 8 遍编辑器装载
+        if activate:
+            self._on_tab_changed(tab_id)
+            self._update_stack()
 
     def close_tab(self, tab_id: str) -> None:
         tab = self._tab(tab_id)
@@ -1078,15 +1083,16 @@ class MainWindow(QWidget):
         t = theme()
         menu = Menu(self)
         if tab_id:
-            a_close = menu.addAction(icons.icon("close", t.text, 13), "关闭")
-            a_others = menu.addAction(icons.icon("layers", t.text, 13), "关闭其他")
-            a_dup = menu.addAction(icons.icon("copy", t.text, 13), "复制标签")
-            a_curl = menu.addAction(icons.icon("code", t.text, 13), "复制为 cURL")
-            a_doc = menu.addAction(icons.icon("file", t.text, 13), "查看接口文档…")
+            a_close = menu.addAction(icons.icon("close", t.text, 13), i18n.tr("关闭"))
+            a_others = menu.addAction(icons.icon("layers", t.text, 13), i18n.tr("关闭其他"))
+            a_rename = menu.addAction(icons.icon("pencil", t.text, 13), i18n.tr("重命名…"))
+            a_dup = menu.addAction(icons.icon("copy", t.text, 13), i18n.tr("复制标签"))
+            a_curl = menu.addAction(icons.icon("code", t.text, 13), i18n.tr("复制为 cURL"))
+            a_doc = menu.addAction(icons.icon("file", t.text, 13), i18n.tr("查看接口文档…"))
             menu.addSeparator()
         else:
-            a_close = a_others = a_dup = a_curl = a_doc = None
-        a_all = menu.addAction(icons.icon("trash", t.danger, 13), "关闭全部")
+            a_close = a_others = a_rename = a_dup = a_curl = a_doc = None
+        a_all = menu.addAction(icons.icon("trash", t.danger, 13), i18n.tr("关闭全部"))
         chosen = menu.exec(global_pos)
         if chosen is None:
             return
@@ -1095,6 +1101,8 @@ class MainWindow(QWidget):
         elif chosen is a_others and tab_id:
             for other in [x["id"] for x in self.tabs_data if x["id"] != tab_id]:
                 self.close_tab(other)
+        elif chosen is a_rename and tab_id:
+            self._rename_tab(tab_id)
         elif chosen is a_dup and tab_id:
             self._duplicate_tab(tab_id)
         elif chosen is a_curl and tab_id:
@@ -1104,6 +1112,35 @@ class MainWindow(QWidget):
         elif chosen is a_all:
             for other in [x["id"] for x in self.tabs_data]:
                 self.close_tab(other)
+
+    def _rename_tab(self, tab_id: str) -> None:
+        """重命名当前标签：同时改集合节点、标签标题与请求内容，并同步落盘 / 云端。
+
+        改名只改一处最容易被忽略 —— 集合树里还是旧名字、重开又是旧名字。
+        这里统一走 store + tab 双向同步，再把当前编辑器里的标题一并刷新。
+        """
+        from .dialogs import PromptDialog
+
+        tab = self._tab(tab_id)
+        if tab is None:
+            return
+        dlg = PromptDialog("重命名", "名称", tab.get("title") or "Untitled Request", self)
+        if not dlg.exec():
+            return
+        name = dlg.value().strip()
+        if not name:
+            return
+        tab["title"] = name
+        tab["request"]["name"] = name
+        node_id = tab.get("node_id")
+        if node_id:
+            self.sidebar.rename_node(node_id, name)     # 落盘 + 刷新集合树 + 发 changed
+        self.tabstrip.update_tab(tab_id, title=name, dirty=tab.get("dirty", False))
+        self.store.save()
+        if tab_id == self.tabstrip.current():
+            self.editor.request["name"] = name
+        self._cloud_autosync()
+        self.toast.show_message("已重命名", "success")
 
     def _pin_tab(self, tab_id: str) -> None:
         """双击标签栏里的预览标签 → 固定下来（标题不再斜体）。"""
@@ -1186,6 +1223,8 @@ class MainWindow(QWidget):
         self._active_tab_id = tab_id
 
         self.tabstrip.set_current(tab_id)
+        # 点标签时让左侧列表跳到对应条目（用户不用再自己翻树找位置）
+        self.sidebar.reveal(tab.get("node_id"))
         try:
             self.editor.load(tab["request"])
             if tab.get("response") is not None:
@@ -1195,6 +1234,7 @@ class MainWindow(QWidget):
             else:
                 self.response.show_empty()
                 self.response.restore_state(tab.get("view"))
+            self.response.set_console(tab.get("console"))
         except Exception:          # noqa: BLE001  单条脏数据不应把整个界面卡死
             import traceback
             traceback.print_exc()
@@ -1282,10 +1322,14 @@ class MainWindow(QWidget):
                 node = self.store.find(node_id)
                 if node:
                     tab["title"] = node.get("name", tab["title"])
+                    # 集合里改了名，标签里的请求内容也要跟着改 —— 否则保存时又写回旧名
+                    if isinstance(tab.get("request"), dict) and node.get("type") == "request":
+                        tab["request"]["name"] = tab["title"]
                     self.tabstrip.update_tab(tab["id"], title=tab["title"],
                                              method=node.get("method", "GET"))
         self.env_pill.updateGeometry()
         self.env_pill.update()
+        self._cloud_autosync()
 
     def _on_request_deleted(self, node_id: str) -> None:
         for tab in list(self.tabs_data):
@@ -1339,6 +1383,7 @@ class MainWindow(QWidget):
             tab["view"] = self.response.view_state() if tab_id == self.tabstrip.current() else None
             # 真实请求里的脚本输出回填到两个脚本页，用户不必再猜日志去哪了
             logs = list(getattr(self.client, "scriptLogs", []) or [])
+            tab["console"] = list(getattr(self.client, "console", []) or [])
             self.editor.scripts_pre.set_logs(logs)
             self.editor.scripts_post.set_logs(logs)
             self.store.push_history(tab["request"], resp.status, resp.elapsed)
@@ -1346,6 +1391,7 @@ class MainWindow(QWidget):
             self._autosave.start()       # 落盘合并到 700ms，避免每条响应都同步写 100KB
         if tab_id is None or tab_id == self.tabstrip.current():
             self.response.set_response(resp)
+            self.response.set_console(tab.get("console") if tab is not None else None)
             self._refresh_timeline(tab["request"] if tab is not None else None)
             # 把 Set-Cookie 递给 Cookie 页，登录类请求可以一键收进来
             self.editor.set_last_cookies(resp.cookies)
@@ -1405,7 +1451,68 @@ class MainWindow(QWidget):
         if sizes and sum(sizes) > 200:
             self.store.settings["split_ratio"] = round(sizes[0] / sum(sizes), 4)
         self.store.data["open_tabs"] = [t["node_id"] for t in self.tabs_data if t.get("node_id")]
+        self._sync_tabs_to_store()
         self.store.save()
+        self._cloud_autosync()
+
+    def _sync_tabs_to_store(self) -> None:
+        """把标签里的编辑写回集合节点。
+
+        标签持有的是自己的快照（避免两个标签互相串内容），所以保存时必须显式
+        回写 —— 否则「改完关掉再打开还是旧内容」，重命名之类的改动也同步不出去。
+        """
+        for tab in self.tabs_data:
+            node_id = tab.get("node_id")
+            req = tab.get("request")
+            if not node_id or not isinstance(req, dict):
+                continue
+            node = self.store.find(node_id)
+            if node is None or node.get("type") != "request":
+                continue
+            for key, value in req.items():
+                if key in ("id", "type", "children"):
+                    continue
+                node[key] = _copy.deepcopy(value)
+            node["id"] = node_id
+            node["type"] = "request"
+
+    def _cloud_autosync(self) -> None:
+        """开了「云同步 + 自动上传」时，改动后延迟合并上传一次（不打断操作）。"""
+        settings = self.store.settings
+        if not (settings.get("cloud_enabled") and settings.get("cloud_auto")):
+            return
+        if not (settings.get("turso_url") and settings.get("turso_token")):
+            return
+        timer = getattr(self, "_cloud_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(1500)
+            timer.timeout.connect(self._cloud_push_now)
+            self._cloud_timer = timer
+        timer.start()
+
+    def _cloud_push_now(self) -> None:
+        from .cloud import CloudWorker, client_for
+
+        old = getattr(self, "_cloud_worker", None)
+        if old is not None and old.isRunning():
+            return                     # 上一轮还没传完，不叠线程
+        text = json.dumps(self.store.data, ensure_ascii=False)
+        client = client_for(self.store.settings)
+        worker = CloudWorker(lambda: client.push(text), self)
+        worker.done.connect(lambda ok, msg, _data: None)   # 失败不打扰，设置页可见
+        worker.start()
+        self._cloud_worker = worker
+
+    def _wait_cloud(self) -> None:
+        """退出前等一次性上传收尾，避免线程还在跑时窗口先被销毁。"""
+        worker = getattr(self, "_cloud_worker", None)
+        if worker is not None and worker.isRunning():
+            try:
+                worker.wait(1200)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _delete_current(self) -> None:
         tab = self.current_tab()
@@ -1593,30 +1700,25 @@ class MainWindow(QWidget):
             self.toast.show_message("已从 cURL 导入，⌘S 可保存到集合", "success")
 
     def import_collection(self) -> None:
-        from .importer import import_collection
-
-        path, _ = QFileDialog.getOpenFileName(self, "导入集合", "", "JSON (*.json);;所有文件 (*)")
-        if not path:
-            return
-        count, err = import_collection(self.store, path)
-        if err:
-            self.toast.show_message(err, "error")
-            return
-        self.sidebar.refresh()
-        self.toast.show_message(i18n.trf("已导入 {n} 个集合节点", n=count), "success")
+        self.open_transfer("import")
 
     def export_collection(self) -> None:
-        from .importer import export_collection
+        self.open_transfer("export")
 
-        path, _ = QFileDialog.getSaveFileName(self, "导出集合", "ocelot-collection.json",
-                                              "JSON (*.json)")
-        if not path:
-            return
-        try:
-            count = export_collection(self.store, path)
-            self.toast.show_message(i18n.trf("已导出 {n} 个集合", n=count), "success")
-        except Exception as exc:
-            self.toast.show_message(i18n.trf("导出失败：{err}", err=exc), "error")
+    def open_transfer(self, page: str = "import") -> None:
+        """集合的导入 / 导出：一个对话框里切换来源、选文件、导出。"""
+        from .dialogs import TransferDialog
+
+        dlg = TransferDialog(self.store, self)
+        dlg.imported.connect(self._on_imported)
+        dlg.exec()
+
+    def _on_imported(self, count: int) -> None:
+        self.sidebar.refresh()
+        self._on_store_changed()
+        self._persist()
+        self.toast.show_message(i18n.trf("已导入 {n} 个请求", n=count), "success")
+        self._cloud_autosync()
 
     def show_code(self) -> None:
         tab = self.current_tab()
@@ -1860,7 +1962,7 @@ class MainWindow(QWidget):
             for node_id in self.store.data.get("open_tabs", [])[:8]:
                 node = self.store.find(node_id)
                 if node and node.get("type") == "request":
-                    self._open_request_obj(node, node_id=node_id)
+                    self._open_request_obj(node, node_id=node_id, activate=False)
                     opened = True
         if opened:
             tabs = [t for t in self.tabs_data]
@@ -1879,6 +1981,10 @@ class MainWindow(QWidget):
         if not getattr(self, "_split_applied", False):
             self._split_applied = True
             QTimer.singleShot(0, self._apply_split)
+        if getattr(self, "safe_mode", False) and not getattr(self, "_safe_notified", False):
+            self._safe_notified = True
+            QTimer.singleShot(700, lambda: self.toast.show_message(
+                "上次异常退出，本次已临时关闭动画", "info"))
 
     def _reset_split(self) -> None:
         total = max(300, self.splitter.height() - self.splitter.handleWidth())
@@ -1902,12 +2008,21 @@ class MainWindow(QWidget):
     def closeEvent(self, e):
         if self._autosave.isActive():
             self._autosave.stop()
+        # 关窗前先收掉输入焦点：macOS 上输入法还挂在正在销毁的输入框上时，
+        # 退出瞬间容易在 IMK 里硬崩（终端只看到 bus error）。
+        try:
+            focus = QApplication.focusWidget()
+            if focus is not None:
+                focus.clearFocus()
+        except Exception:             # noqa: BLE001
+            pass
         try:
             self.mock.stop()          # 本地 Mock 服务不留后台线程
         except Exception:             # noqa: BLE001
             pass
         self._persist()
         self._cloud_upload_on_exit()
+        self._wait_cloud()
         super().closeEvent(e)
 
     def _cloud_upload_on_exit(self) -> None:

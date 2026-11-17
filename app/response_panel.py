@@ -142,6 +142,144 @@ class HeaderRows(QWidget):
 VIEW_LIMIT = 600_000      # 单个响应在代码区里最多渲染 600KB，超出部分截断并说明
 
 
+# ---------------------------------------------------------------- 控制台
+LEVEL_META = {
+    "log": ("dot", "text_dim"),
+    "info": ("dot", "info"),
+    "debug": ("dot", "text_faint"),
+    "warn": ("alert", "warning"),
+    "error": ("alert", "danger"),
+    "ok": ("check", "success"),
+}
+
+
+class ConsoleLog(QWidget):
+    """控制台：脚本的 console.* / test() 输出，按级别配色并带阶段标签。
+
+    和响应体分开渲染 —— 只有几行文本，用 Label 排而不是塞进代码编辑器，
+    这样换行、选中复制、长文本折行都更自然，也不会被语法高亮染色。
+    """
+
+    MAX_ROWS = 200
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.entries: List[Dict[str, str]] = []
+        self._rows: List[QWidget] = []
+
+        self.host = QWidget()
+        self.lay = QVBoxLayout(self.host)
+        self.lay.setContentsMargins(14, 12, 14, 12)
+        self.lay.setSpacing(6)
+        self.lay.addStretch(1)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setWidget(self.host)
+
+        # 空状态：没有输出时也别是一片空白
+        self.empty = Label("脚本里用 console.log() 打印的内容会显示在这里",
+                           11.5, theme().text_faint)
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.tools = QWidget()
+        tl = QHBoxLayout(self.tools)
+        tl.setContentsMargins(14, 8, 14, 0)
+        tl.setSpacing(8)
+        self.summary = Label("", 10.5, theme().text_faint, mono_font=True)
+        self.clear_btn = Button("清空", None, kind="ghost", height=22, padding=8, font_size=11)
+        self.clear_btn.clicked.connect(self.clear)
+        self.copy_btn = Button("复制全部", "copy", kind="ghost", height=22, padding=8, font_size=11)
+        self.copy_btn.clicked.connect(self.copy_all)
+        tl.addWidget(self.summary, 1)
+        tl.addWidget(self.clear_btn)
+        tl.addWidget(self.copy_btn)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self.tools)
+        lay.addWidget(self.empty, 1)
+        lay.addWidget(self.scroll, 1)
+        self.scroll.hide()
+
+    # -------------------------------------------------- 数据
+    def set_entries(self, entries: List[Dict[str, str]]) -> None:
+        self.entries = [dict(e) for e in (entries or [])][-self.MAX_ROWS:]
+        self._rebuild()
+
+    def clear(self) -> None:
+        self.entries = []
+        self._rebuild()
+
+    def has_entries(self) -> bool:
+        return bool(self.entries)
+
+    def _rebuild(self) -> None:
+        while self.lay.count() > 1:
+            item = self.lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._rows = []
+        t = theme()
+        for entry in self.entries:
+            level = str(entry.get("level") or "log")
+            icon_name, token = LEVEL_META.get(level, ("dot", "text_dim"))
+            color = getattr(t, token, t.text_dim)
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(8)
+            badge = QLabel()
+            badge.setFixedSize(14, 14)
+            badge.setPixmap(icons.pixmap(icon_name, color, 12, 1.4))
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            rl.addWidget(badge, 0, Qt.AlignmentFlag.AlignTop)
+            phase = str(entry.get("phase") or "")
+            if phase in ("pre", "post"):
+                chip = Pill("前置" if phase == "pre" else "后置", t.text_faint, font_size=9.5)
+                rl.addWidget(chip, 0, Qt.AlignmentFlag.AlignTop)
+            text = Label(str(entry.get("text") or ""), 11.5,
+                         color if level in ("error", "warn", "ok") else t.text_dim,
+                         mono_font=True)
+            text.setWordWrap(True)
+            text.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+                | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+            rl.addWidget(text, 1)
+            self.lay.insertWidget(self.lay.count() - 1, row)
+            self._rows.append(row)
+
+        n = len(self.entries)
+        warns = sum(1 for e in self.entries if e.get("level") in ("warn", "error"))
+        self.empty.setVisible(n == 0)
+        self.scroll.setVisible(n > 0)
+        self.summary.setText(
+            i18n.trf("{n} 条输出", n=n) + (i18n.trf(" · {w} 条警告", w=warns) if warns else "")
+            if n else "")
+        self.clear_btn.setVisible(n > 0)
+        self.copy_btn.setVisible(n > 0)
+
+    def copy_all(self) -> None:
+        if not self.entries:
+            return
+        QApplication.clipboard().setText(
+            "\n".join(self._line(e) for e in self.entries))
+
+    @staticmethod
+    def _line(entry: Dict[str, str]) -> str:
+        phase = str(entry.get("phase") or "")
+        prefix = f"[{phase}] " if phase else ""
+        return prefix + str(entry.get("text") or "")
+
+    def refresh_theme(self) -> None:
+        self.empty.setStyleSheet(f"color: {theme().text_faint}; background: transparent;")
+        self._rebuild()
+
+
 class ResponsePanel(QWidget):
     requestSaveBody = pyqtSignal(bytes, str)
     saveVariable = pyqtSignal(str, str)      # 名字, 值：把提取结果存进环境变量
@@ -212,7 +350,8 @@ class ResponsePanel(QWidget):
         # ---------- 标签
         self.tabs = SegmentedTabs(
             [("pretty", "美化"), ("tree", "树形"), ("raw", "原始"),
-             ("headers", "响应头"), ("cookies", "Cookies"), ("preview", "预览"),
+             ("headers", "响应头"), ("cookies", "Cookies"), ("console", "控制台"),
+             ("preview", "预览"),
              ("diff", "对比"), ("extract", "提取"), ("timeline", "时间线")],
             style="underline", height=30, pad_h=9, font_size=12)
         self.tabs.changed.connect(self._on_tab)
@@ -262,6 +401,7 @@ class ResponsePanel(QWidget):
         th.addWidget(self.json_tree)
         self.headers_host = HeaderRows()
         self.cookies_host = HeaderRows()
+        self.console_host = ConsoleLog()
         self.preview_host = QWidget()
         self.preview_lay = QVBoxLayout(self.preview_host)
         self.preview_lay.setContentsMargins(16, 16, 16, 16)
@@ -316,6 +456,7 @@ class ResponsePanel(QWidget):
         self.body_stack.add("raw", self._scrollable(self.raw))
         self.body_stack.add("headers", self._scrollable(self.headers_host))
         self.body_stack.add("cookies", self._scrollable(self.cookies_host))
+        self.body_stack.add("console", self.console_host)
         self.body_stack.add("preview", self.preview_host)
         self.body_stack.add("diff", diff_host)
         self.body_stack.add("extract", ext_host)
@@ -350,6 +491,10 @@ class ResponsePanel(QWidget):
         self.error_msg.setWordWrap(True)
         el.addWidget(self.error_title)
         el.addWidget(self.error_msg)
+        # 请求失败时前置脚本的日志同样要看得到（不然报错只能靠猜）
+        self.error_console = ConsoleLog()
+        self.error_console.hide()
+        el.addWidget(self.error_console)
         el.addStretch(1)
 
         self.center = QStackedWidget()
@@ -456,8 +601,8 @@ class ResponsePanel(QWidget):
         self.fmt_btn.set_checked(self._fmt != "auto")
         self.enc_btn.set_checked(self._enc != "utf8")
         key = state.get("tab")
-        if key in {"pretty", "tree", "raw", "headers", "cookies",
-                   "preview", "diff", "extract"}:
+        if key in {"pretty", "tree", "raw", "headers", "cookies", "console",
+                   "preview", "diff", "extract", "timeline"}:
             self.tabs.set_current(key, emit=False)
             if key == "raw" and getattr(self, "_raw_pending", False):
                 self._flush_raw()
@@ -742,6 +887,10 @@ class ResponsePanel(QWidget):
     def show_empty(self) -> None:
         self.response = None
         self._body_text = ""
+        self.console_host.clear()
+        self.error_console.clear()
+        self.error_console.hide()
+        self.tabs.set_badge("console", 0)
         if getattr(self, "spinner", None) is not None:
             self.spinner.stop()
         self.empty.set_text("准备就绪", "填写请求地址后发送，响应会显示在这里", "⌘ ↵ 发送")
@@ -950,6 +1099,24 @@ class ResponsePanel(QWidget):
         self._sync_view_tools()
 
     # -------------------------------------------------- 对比
+    # -------------------------------------------------- 控制台
+    def set_console(self, entries: Optional[List[Dict[str, str]]]) -> None:
+        """喂入本次请求的脚本控制台输出（前置 + 后置）。
+
+        有输出时「控制台」页带条数徽标；请求失败时错误页里也内联一份，
+        这样前置脚本的报错不会因为「没有响应」而看不到。
+        """
+        items = list(entries or [])
+        self.console_host.set_entries(items)
+        n = len(items)
+        self.tabs.set_badge("console", n)
+        if self.center.currentWidget() is self.error:
+            self.error_console.set_entries(items)
+            self.error_console.setVisible(bool(items))
+        else:
+            self.error_console.clear()
+            self.error_console.hide()
+
     def _set_diff_base(self) -> None:
         if self.response is None:
             return

@@ -728,6 +728,16 @@ class BodyPage(QWidget):
             "file": self._file_path,
         }
 
+    def has_content(self) -> bool:
+        """有没有内容（给徽标用）。不复制整段正文 —— 大请求体每次敲键都 toPlainText 很贵。"""
+        if self._mode == "none":
+            return False
+        if self._mode == "binary":
+            return bool(self._file_path)
+        if self._mode in ("form", "urlencoded"):
+            return bool(self.form.rows())
+        return self.code.document().characterCount() > 1
+
 
 def icons_icon_label(name: str) -> Label:
     lbl = Label("", 12)
@@ -995,11 +1005,22 @@ class ScriptPage(QWidget):
         ("控制台：打印一条消息", 'console.log("hello", req.method);'),
     ]
 
+    # 后置脚本专属片段：读响应、取字段、做断言
+    POST_SNIPPETS = [
+        ("响应：打印状态与耗时", 'console.log("status", res.status, "time", res.time + "ms");'),
+        ("响应：解析 JSON 并取字段", 'var data = res.json();\nif (data) console.log("keys", Object.keys(data).join(", "));'),
+        ("响应：把 token 存进环境", 'var d = res.json();\nif (d && d.token) pw.env.set("token", d.token);'),
+        ("断言：状态码为 200", 'test("状态码 200", function () {\n  if (res.status !== 200) throw new Error("got " + res.status);\n});'),
+        ("断言：响应包含字段", 'var d = res.json();\ntest("包含 token", function () {\n  if (!d || !d.token) throw new Error("missing token");\n});'),
+    ]
+
     DOCS = {
         "pre": "前置脚本在请求发送前用 JavaScript 运行。\n"
-               "可修改 req.url、req.headers 和 req.params，或用 pw.env.set() 把值存入当前环境。",
+               "可修改 req.url、req.headers 和 req.params，或用 pw.env.set() 把值存入当前环境。\n"
+               "console.log() 的输出会出现在响应面板的「控制台」页。",
         "post": "后置脚本在收到响应后用 JavaScript 运行。\n"
-                "可读取 res.status / res.body，解析结果，并用 pw.env.set() 把值存回当前环境。",
+                "可读取 res.status / res.json()，用 test() 写断言，或用 pw.env.set() 把值存回当前环境。\n"
+                "console.log() 与断言结果都会出现在响应面板的「控制台」页。",
     }
 
     def __init__(self, store: Store, kind: str = "pre", parent=None):
@@ -1024,7 +1045,10 @@ class ScriptPage(QWidget):
         sh = QVBoxLayout(snippets)
         sh.setContentsMargins(0, 0, 0, 0)
         sh.setSpacing(6)
-        for title, snippet in self.SNIPPETS:
+        items = list(self.SNIPPETS)
+        if self._kind == "post":
+            items = list(self.POST_SNIPPETS) + items[-2:]
+        for title, snippet in items:
             b = Button(title, "plus", kind="subtle", height=25, padding=8, font_size=11)
             b.clicked.connect(lambda _c=False, s=snippet: self._insert(s))
             sh.addWidget(b)
@@ -1078,9 +1102,26 @@ class ScriptPage(QWidget):
             self.changed.emit()
 
     def _insert(self, snippet: str) -> None:
+        """把片段插到**新的一行**：当前行有代码就换行再插，插完再留一行空行。
+
+        以前是直接在光标处插入，粘在 `}` 后面或行中间，粘两次就成一行乱码，
+        用户还得手工整理。现在每次点都从独立一行开始。
+        """
+        from PyQt6.QtGui import QTextCursor
+
         cur = self.code.textCursor()
+        cur.beginEditBlock()
+        if self.code.document().characterCount() > 1:
+            line_before = cur.block().text()[:cur.positionInBlock()]
+            if line_before.strip():
+                cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+                cur.insertText("\n")
         cur.insertText(snippet)
+        if not snippet.endswith("\n"):
+            cur.insertText("\n")
+        cur.endEditBlock()
         self.code.setTextCursor(cur)
+        self.code.ensureCursorVisible()
         self.code.setFocus()
 
     def _set_status(self, text: str, kind: str = "ok", animate: bool = True) -> None:
@@ -1115,17 +1156,26 @@ class ScriptPage(QWidget):
     def _run_test(self) -> None:
         """试跑：不联网，只在临时请求上执行当前脚本，结果用弹窗一次看清。"""
         from .dialogs import ScriptResultDialog
+        from .http_client import Response
         from .scripts import run_script
 
-        req = {"method": "GET", "url": "https://example.com", "headers": [],
-               "params": [], "body": {"raw": ""}}
         source = self.code.toPlainText()
         if not source.strip():
             self._clear_status()
             return
-        result = run_script(source, self.store, req)
+        req = {"method": "GET", "url": "https://example.com", "headers": [],
+               "params": [], "cookies": [], "body": {"raw": ""}}
+        # 后置脚本要能碰到 res，否则一上来就 ReferenceError；给一份示例响应
+        res = None
+        if self._kind == "post":
+            sample = '{"token": "demo-token", "ok": true}'
+            res = Response(status=200, reason="OK", elapsed=42,
+                           headers=[("Content-Type", "application/json")],
+                           body=sample.encode("utf-8"), size=len(sample),
+                           url="https://example.com", content_type="application/json")
+        result = run_script(source, self.store, req, res=res)
         lines = list(result.logs)
-        if result.error:
+        if result.error and not any(l == result.error for l in lines):
             lines.append("✕ " + result.error)
         # 成功只显示「运行成功」，失败显示错误；完整日志进弹窗
         # 传中文原文给 Label（它内部按当前语言 tr），切回中文时才能还原
@@ -1386,9 +1436,8 @@ class RequestEditor(QWidget):
         self.tabs.set_badge("headers", len(self.headers.rows()))
         cookies = len(self.cookies.rows())
         self.tabs.set_badge("cookies", cookies)
-        body = self.body.dump()
-        has_body = bool(body.get("raw") or body.get("form") or body.get("file")) and body.get("mode") != "none"
-        self.tabs.set_badge("body", 1 if has_body else 0)
+        # 不再 dump 整段请求体：只问「有没有内容」，避免每次按键复制一遍大正文
+        self.tabs.set_badge("body", 1 if self.body.has_content() else 0)
         self.tabs.set_badge("auth", 1 if self.auth.dump().get("type") != "none" else 0)
         pre_script = self.scripts_pre.dump().get("pre", "").strip() if hasattr(self, "scripts_pre") else ""
         post_script = self.scripts_post.dump().get("post", "").strip() if hasattr(self, "scripts_post") else ""

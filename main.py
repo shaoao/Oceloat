@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -89,7 +90,24 @@ def main() -> int:
     set_accent(store.settings.get("accent", "auto"))
     apply_theme(app, theme_by_name(store.settings.get("theme", "dark")))
 
+    # 上次没正常退出（硬崩 / 强杀）时，本次先关掉动画再启动。
+    # macOS 上无边框透明窗口 + 图形特效是 SIGBUS 的主要诱因，动画关掉基本绕开；
+    # 只是本次生效，不写进设置，下次正常启动会恢复。
+    from app.store import APP_DIR
+
+    session = APP_DIR / ".session"
+    crashed = session.exists()
+    if crashed:
+        os.environ["OCELOT_NO_ANIM"] = "1"
+        print("[Ocelot] 上次没有正常退出，本次已临时关闭动画以保证稳定。", flush=True)
+    try:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        session.write_text(str(time.time()), "utf-8")
+    except Exception:                                  # noqa: BLE001
+        pass
+
     window = MainWindow(store)
+    window.safe_mode = crashed
     window.show()
     window.raise_()
     window.activateWindow()  # 从 IDE 运行面板启动时也能到最前
@@ -100,7 +118,12 @@ def main() -> int:
 
         QTimer.singleShot(int(autoquit), app.quit)
 
-    return app.exec()
+    code = app.exec()
+    try:
+        session.unlink()
+    except Exception:                                  # noqa: BLE001
+        pass
+    return code
 
 
 if __name__ == "__main__":

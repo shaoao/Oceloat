@@ -1,5 +1,43 @@
 # What's Changed
 
+## v1.0.28 — 2026-11-18
+
+**Added**
+- A **Console** tab in the response panel: `console.log / warn / error` output and `test()`
+  assertions from pre-request and post-response scripts, color-coded by level with Pre/Post
+  badges, one-click copy, and inline output on the error page so a failing pre-request script
+  is still visible when no response arrives. The console also records the outgoing request
+  and the final status line.
+- An **Import / Export** button next to the collection search field. A single dialog handles
+  both directions with a back arrow: import from Ocelot JSON, Postman, Apifox, Hoppscotch,
+  Insomnia, OpenAPI 3.x (JSON or YAML) and HAR, plus clipboard import; export as Ocelot JSON,
+  Postman v2.1, OpenAPI 3.1 (JSON / YAML) or HAR. Files can be dropped onto the dialog, and
+  the chosen file is parsed and summarized before importing.
+- **Ocelot JSON** uses Postman v2.1 plus an `x-ocelot` block, so Postman / Apifox can import
+  it directly while a round trip through Ocelot keeps scripts, auth and cookies.
+- **Rename** in the tab context menu: updates the collection node, the tab title and the
+  request itself, saves immediately, and pushes to the cloud when auto-sync is on.
+- Clicking a tab now reveals the matching request in the sidebar: switches back to
+  collections, expands the parents, clears a hiding filter and scrolls the row into view.
+
+**Improved**
+- Script engine hardened: `res.body` / `res.text` now return real text instead of a bound
+  method, `req.setHeader` keeps existing rows disabled as before, and `res.json()`,
+  `res.setHeader()`, `pw.env.has()`, `pw.env.toObject()` and `test()` were added. Syntax
+  errors report the line number the user sees, and endless loops are stopped after 2 seconds
+  by a deadline check injected into loop bodies (no background thread, so the process can
+  never be aborted by a leftover thread at exit).
+- Snippet buttons insert on a fresh line instead of mid-line; post-response scripts get
+  response-reading and assertion snippets.
+- Body badge no longer copies the whole body on every keystroke.
+
+**Fixed**
+- Editing a request and saving never wrote the changes back to the collection node, so
+  reopening showed the old content. Tabs now sync into their node on every save.
+- After an unclean exit, the next launch starts with animations temporarily disabled to
+  avoid the macOS graphics-layer hard crash; focus is released before the window closes.
+- All 429 self-tests pass.
+
 ## v1.0.27 — 2026-11-18
 
 **Improved**

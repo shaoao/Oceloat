@@ -59,6 +59,10 @@ def _chevron_right(p):
     _line(p, 9.5, 5.5, 15.5, 12, 9.5, 18.5)
 
 
+def _chevron_left(p):
+    _line(p, 14.5, 5.5, 8.5, 12, 14.5, 18.5)
+
+
 def _chevron_down(p):
     _line(p, 5.5, 9.5, 12, 15.5, 18.5, 9.5)
 
@@ -261,6 +265,21 @@ def _play(p):
     p.drawPolygon(poly)
 
 
+def _alert(p):
+    """警告三角：圆角三角 + 竖杠 + 点，用作控制台里的 warn / error 图标。"""
+    path = QPainterPath()
+    path.moveTo(12, 4.4)
+    path.lineTo(20.4, 19.0)
+    path.quadTo(20.8, 19.9, 19.7, 19.9)
+    path.lineTo(4.3, 19.9)
+    path.quadTo(3.2, 19.9, 3.6, 19.0)
+    path.closeSubpath()
+    p.drawPath(path)
+    _line(p, 12, 9.6, 12, 14.4)
+    p.setBrush(p.pen().color())
+    p.drawEllipse(QRectF(11.1, 16.2, 1.8, 1.8))
+
+
 def _stop(p):
     p.setBrush(p.pen().color())
     p.drawRoundedRect(QRectF(7.4, 7.4, 9.2, 9.2), 1.8, 1.8)
@@ -428,6 +447,14 @@ def _cloud(p):
     p.drawPath(path)
 
 
+def _transfer(p):
+    """导入 / 导出：一进一出两支箭头（上箭头往右进、下箭头往左出）。"""
+    _line(p, 4.6, 8.6, 16.4, 8.6)
+    _line(p, 13.2, 5.4, 16.4, 8.6, 13.2, 11.8)
+    _line(p, 19.4, 15.4, 7.6, 15.4)
+    _line(p, 10.8, 12.2, 7.6, 15.4, 10.8, 18.6)
+
+
 def _sync(p):
     """两个首尾相接的弧 + 箭头，读作「同步」。"""
     path = QPainterPath()
@@ -445,12 +472,14 @@ def _sync(p):
 ICONS: Dict[str, Callable[[QPainter], None]] = {
     "plus": _plus, "minus": _minus, "close": _close, "search": _search,
     "chevron_right": _chevron_right, "chevron_down": _chevron_down, "chevron_up": _chevron_up,
+    "chevron_left": _chevron_left,
     "folder": _folder, "trash": _trash, "copy": _copy, "download": _download,
     "gear": _gear, "code": _code, "send": _send, "clock": _clock, "more": _more_h,
     "check": _check, "layers": _layers, "globe": _globe, "lock": _lock, "file": _file,
     "table": _table, "pencil": _pencil, "sliders": _sliders, "keyboard": _keyboard, "book": _book,
     "dot": _dot, "play": _play, "stop": _stop, "refresh": _refresh, "moon": _moon,
     "grid": _grid, "broom": _broom, "external": _external,
+    "alert": _alert, "transfer": _transfer,
     "undo": _undo, "redo": _redo, "cut": _cut, "paste": _paste,
     "panel_left": _panel_left, "image": _image, "audio": _audio, "node": _node,
     "cloud": _cloud, "sync": _sync,

@@ -6,7 +6,8 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QEasingCurve, QPoint, QPointF, QRectF, QSize, Qt, QVariantAnimation, pyqtSignal
+from PyQt6.QtCore import (QEasingCurve, QPoint, QPointF, QRectF, QSize, Qt, QTimer,
+                          QVariantAnimation, pyqtSignal)
 from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QGuiApplication, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QApplication,
@@ -19,22 +20,26 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QPlainTextEdit,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
+
+from PyQt6.QtWidgets import QFileDialog
 
 from . import i18n, icons, shortcuts as sc
 from .anim import stop as _anim_stop
 from .code_editor import CodeView
 from .codegen import LANGUAGES
 from .kv_editor import KVEditor
-from .store import CHANGELOG, STATE_FILE, VERSION, Store, body_mode, new_folder
+from .store import CHANGELOG, STATE_FILE, VERSION, Store, body_mode, new_folder, uid
 from .theme import ACCENTS, C, S, font, mono, theme
 from .widgets import (
     Button,
     Card,
     Divider,
+    FadeStack,
     SmoothScrollArea,
     HBox,
     KeyCap,
@@ -2169,3 +2174,517 @@ class CommandPalette(QWidget):
         path.addRoundedRect(QRectF(self.rect()), 12, 12)
         p.fillPath(path, dim)
         p.end()
+
+
+# ---------------------------------------------------------------- 导入 / 导出
+
+
+class TransferRow(QWidget):
+    """一行可点条目：图标 + 标题 + 说明 + 右箭头，悬停时底下一层浅色。"""
+
+    clicked = pyqtSignal()
+
+    def __init__(self, icon_name: str, title: str, subtitle: str = "",
+                 parent=None, height: int = 54, danger: bool = False):
+        super().__init__(parent)
+        self._icon = icon_name
+        self._title = title
+        self._subtitle = subtitle
+        self._danger = danger
+        self._hover = 0.0
+        self._anim: Optional[QVariantAnimation] = None
+        self.setFixedHeight(height)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def _animate_to(self, target: float) -> None:
+        from .anim import animations_on, stop as _stop
+
+        if not animations_on():
+            self._hover = target
+            self.update()
+            return
+        if self._anim is not None:
+            _stop(self._anim)
+        anim = QVariantAnimation(self)
+        anim.setStartValue(float(self._hover))
+        anim.setEndValue(float(target))
+        anim.setDuration(120)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.valueChanged.connect(self._on_v)
+        self._anim = anim
+        anim.start()
+
+    def _on_v(self, value) -> None:
+        self._hover = float(value)
+        self.update()
+
+    def enterEvent(self, e):  # noqa: N802
+        self._animate_to(1.0)
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):  # noqa: N802
+        self._animate_to(0.0)
+        super().leaveEvent(e)
+
+    def mouseReleaseEvent(self, e):  # noqa: N802
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(
+                e.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(e)
+
+    def refresh_theme(self) -> None:
+        self.update()
+
+    def paintEvent(self, _e):
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        r = QRectF(self.rect()).adjusted(2, 1, -2, -1)
+        if self._hover > 0.01:
+            bg = C(t.hover)
+            bg.setAlpha(int(bg.alpha() * self._hover))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(bg)
+            p.drawRoundedRect(r, 8, 8)
+        col = t.danger if self._danger else t.text_dim
+        pm = icons.pixmap(self._icon, col, 17, 1.5)
+        p.drawPixmap(QPointF(12, (self.height() - 17) / 2), pm)
+        left = 40
+        if self._subtitle:
+            p.setFont(font(12.6))
+            p.setPen(C(t.text))
+            p.drawText(QRectF(left, 9, self.width() - left - 30, 20),
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                       i18n.tr(self._title))
+            p.setFont(font(10.8))
+            p.setPen(C(t.text_faint))
+            p.drawText(QRectF(left, 28, self.width() - left - 30, 18),
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                       i18n.tr(self._subtitle))
+        else:
+            p.setFont(font(12.6))
+            p.setPen(C(t.text))
+            p.drawText(QRectF(left, 0, self.width() - left - 30, self.height()),
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                       i18n.tr(self._title))
+        arrow = icons.pixmap("chevron_right", t.text_faint, 13, 1.6)
+        p.drawPixmap(QPointF(self.width() - 22, (self.height() - 13) / 2), arrow)
+        p.end()
+
+
+class DropZone(QWidget):
+    """虚线圈起来的投放区：既能点开系统选文件，也能把文件拖进来。"""
+
+    dropped = pyqtSignal(str)
+    clicked = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setFixedHeight(132)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._hover = False
+        self.filename = ""
+
+    def dragEnterEvent(self, e):  # noqa: N802
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+            self._hover = True
+            self.update()
+
+    def dragLeaveEvent(self, e):  # noqa: N802
+        self._hover = False
+        self.update()
+
+    def dropEvent(self, e):  # noqa: N802
+        self._hover = False
+        self.update()
+        for url in e.mimeData().urls():
+            path = url.toLocalFile()
+            if path:
+                self.dropped.emit(path)
+                break
+
+    def mouseReleaseEvent(self, e):  # noqa: N802
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+
+    def paintEvent(self, _e):
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        r = QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
+        pen = QPen(C(t.border_strong if not self._hover else t.accent), 1.4)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        pen.setDashPattern([4, 4])
+        p.setPen(pen)
+        p.setBrush(C(t.panel_alt if not self._hover else t.elevated))
+        p.drawRoundedRect(r, 10, 10)
+        pm = icons.pixmap("download" if not self.filename else "file",
+                          t.text_dim if not self._hover else t.accent, 22, 1.4)
+        p.drawPixmap(QPointF((self.width() - 22) / 2, 26), pm)
+        p.setFont(font(12.4))
+        p.setPen(C(t.text))
+        title = self.filename or i18n.tr("把文件拖到这里，或点击选择")
+        p.drawText(QRectF(14, 58, self.width() - 28, 22),
+                   int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter), title)
+        p.setFont(font(10.8))
+        p.setPen(C(t.text_faint))
+        p.drawText(QRectF(14, 80, self.width() - 28, 20),
+                   int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+                   i18n.tr("支持 .json / .yaml / .har，自动识别来源"))
+        p.end()
+
+
+class TransferDialog(GlassDialog):
+    """集合的导入 / 导出：一个对话框里完成选择来源、选文件、导出。
+
+    头部左侧的返回箭头只在第二层出现；所有操作都在这个框里，不会一层层弹新窗口。
+    """
+
+    imported = pyqtSignal(int)      # 导入的请求条数
+
+    def __init__(self, store: Store, parent=None):
+        from .transfer import EXPORT_TARGETS, IMPORT_SOURCES
+
+        super().__init__(parent, 580, 640, i18n.tr("集合"))
+        self.store = store
+        self._source = ""
+        self._pending: Optional[Tuple[List[Dict[str, Any]], str, str]] = None
+        self._import_sources = IMPORT_SOURCES
+        self._export_targets = EXPORT_TARGETS
+
+        # 头部：返回 + 标题
+        self.back_btn = icon_button("chevron_left", "返回", 24, 13)
+        self.back_btn.clicked.connect(self._go_back)
+        hl = self.header.layout()
+        hl.insertWidget(0, self.back_btn)
+        self.back_btn.hide()
+
+        self.stack = FadeStack()
+        self.stack.setContentsMargins(0, 0, 0, 0)
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self.stack)
+        self.stack.add("import", self._build_import())
+        self.stack.add("file", self._build_file())
+        self.stack.add("export", self._build_export())
+        self.stack.set_current("import", animate=False)
+        self.setAcceptDrops(True)
+
+    # -------------------------------------------------- 页面 1：来源列表
+    def _build_import(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(14, 10, 14, 12)
+        lay.setSpacing(2)
+        self.import_rows = []
+        for key, title, desc in self._import_sources:
+            row = TransferRow(self._source_icon(key), title, desc)
+            row.clicked.connect(lambda k=key: self._choose_source(k))
+            lay.addWidget(row)
+            self.import_rows.append(row)
+        lay.addWidget(Divider())
+        clip = TransferRow("paste", "从剪贴板导入",
+                           "自动识别 JSON 集合或 cURL 命令，直接粘过来")
+        clip.clicked.connect(self._import_clipboard)
+        lay.addWidget(clip)
+        lay.addStretch(1)
+        lay.addWidget(Divider())
+        export_row = TransferRow("download", "导出全部集合",
+                                 "Ocelot JSON / Postman / OpenAPI / HAR")
+        export_row.clicked.connect(lambda: self._show_page("export"))
+        lay.addWidget(export_row)
+        return page
+
+    @staticmethod
+    def _source_icon(key: str) -> str:
+        return {"ocelot": "grid", "postman": "send", "apifox": "layers",
+                "hoppscotch": "file", "insomnia": "moon", "openapi": "book",
+                "har": "table"}.get(key, "file")
+
+    # -------------------------------------------------- 页面 2：选择文件
+    def _build_file(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(18, 10, 18, 16)
+        lay.setSpacing(10)
+        self.file_title = Label("", 13.5, theme().text, weight=QFont.Weight.DemiBold)
+        self.file_desc = Label("", 11.4, theme().text_faint)
+        self.file_desc.setWordWrap(True)
+        lay.addWidget(self.file_title)
+        lay.addWidget(self.file_desc)
+        self.zone = DropZone()
+        self.zone.clicked.connect(self._pick_file)
+        self.zone.dropped.connect(self._load_path)
+        lay.addWidget(self.zone)
+        self.file_status = Label("", 11.2, theme().text_faint)
+        self.file_status.setWordWrap(True)
+        lay.addWidget(self.file_status)
+        lay.addStretch(1)
+        self.file_hint = Label(
+            "导入只会新增集合，不会覆盖现有内容；重复导入会产生新的副本。",
+            10.8, theme().text_faint)
+        self.file_hint.setWordWrap(True)
+        lay.addWidget(self.file_hint)
+        back = Button("返回", "chevron_left", kind="ghost", height=30, padding=12, font_size=12)
+        back.clicked.connect(self._go_back)
+        self.import_btn = Button("导入", "download", kind="primary", height=30,
+                                 padding=18, font_size=12)
+        self.import_btn.clicked.connect(self._do_import)
+        self.import_btn.setEnabled(False)
+        lay.addWidget(HBox(1, back, self.import_btn, spacing=6))
+        return page
+
+    def _choose_source(self, key: str) -> None:
+        titles = {k: t for k, t, _d in self._import_sources}
+        descs = {k: d for k, _t, d in self._import_sources}
+        self._source = key
+        self._pending = None
+        self.zone.filename = ""
+        self.zone.update()
+        self.file_title.setText(i18n.tr(titles.get(key, "导入")))
+        self.file_desc.setText(i18n.tr(descs.get(key, "")))
+        self.file_status.setText("")
+        self.import_btn.setEnabled(False)
+        self._show_page("file")
+
+    def _pick_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, i18n.tr("选择要导入的文件"), "",
+            "集合文件 (*.json *.yaml *.yml *.har);;所有文件 (*)")
+        if path:
+            self._load_path(path)
+
+    def _load_path(self, path: str) -> None:
+        from pathlib import Path
+
+        from .transfer import count_requests, parse_text
+
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            self._fail(i18n.trf("读取失败：{err}", err=exc))
+            return
+        nodes, fmt, err = parse_text(text)
+        if err or not nodes:
+            self._fail(err or i18n.tr("文件里没有可导入的请求"))
+            return
+        total = count_requests(nodes)
+        self._pending = (nodes, fmt, text)
+        self.zone.filename = Path(path).name
+        self.zone.update()
+        expected = self._source
+        note = ""
+        if expected in ("ocelot", "postman", "apifox", "hoppscotch", "insomnia",
+                        "openapi", "har") and fmt != expected:
+            note = i18n.trf("（识别为 {fmt} 格式，已按实际格式解析）", fmt=fmt)
+        self.file_status.setText(i18n.trf(
+            "✓ 已解析：{n} 个请求 · {size} 字节 {note}",
+            n=total, size=len(text.encode("utf-8")), note=note))
+        self.file_status.setStyleSheet(f"color: {theme().success}; background: transparent;")
+        self.import_btn.setEnabled(True)
+
+    def _fail(self, message: str) -> None:
+        self._pending = None
+        self.import_btn.setEnabled(False)
+        self.file_status.setText("✕ " + message)
+        self.file_status.setStyleSheet(f"color: {theme().danger}; background: transparent;")
+
+    def _do_import(self) -> None:
+        if self._pending is None:
+            return
+        from .transfer import count_requests, environments_of
+
+        nodes, fmt, text = self._pending
+        self.store.collections.extend(nodes)
+        # Ocelot JSON 里带的环境变量也一起还原（同名环境跳过，不覆盖现有配置）
+        if fmt == "ocelot":
+            existing = {e.get("name") for e in self.store.environments}
+            for env in environments_of(text):
+                if env.get("name") in existing:
+                    continue
+                env["id"] = uid()
+                self.store.environments.append(env)
+        self._pending = None
+        self.store.save()
+        total = count_requests(nodes)
+        self.imported.emit(total)
+        self.file_status.setText(i18n.trf("✓ 已导入 {n} 个请求", n=total))
+        self.file_status.setStyleSheet(f"color: {theme().success}; background: transparent;")
+        self.import_btn.setEnabled(False)
+        self.zone.filename = ""
+        self.zone.update()
+
+    def _import_clipboard(self) -> None:
+        """剪贴板里的 JSON / cURL 直接导入，省掉存文件这一步。"""
+        from .importer import parse_curl
+        from .transfer import count_requests, parse_text
+
+        text = QApplication.clipboard().text() or ""
+        if not text.strip():
+            self.toast_hint(i18n.tr("剪贴板是空的"))
+            return
+        if text.strip().lower().startswith("curl"):
+            req, err = parse_curl(text)
+            if err or req is None:
+                self.toast_hint(err or i18n.tr("cURL 解析失败"))
+                return
+            self.store.collections.append(req)
+            self.store.save()
+            self.imported.emit(1)
+            self.toast_hint(i18n.tr("已从剪贴板导入 1 个请求"))
+            return
+        nodes, _fmt, err = parse_text(text)
+        if err or not nodes:
+            self.toast_hint(err or i18n.tr("剪贴板内容不是可识别的集合"))
+            return
+        self.store.collections.extend(nodes)
+        self.store.save()
+        total = count_requests(nodes)
+        self.imported.emit(total)
+        self.toast_hint(i18n.trf("已从剪贴板导入 {n} 个请求", n=total))
+
+    def toast_hint(self, text: str) -> None:
+        """就地反馈：对话框自己太小，不弹全局 toast，直接显示在列表下方。"""
+        self.file_title.setText(i18n.tr("从剪贴板导入"))
+        self.file_desc.setText(text)
+        self.file_status.setText("")
+        self._show_page("file")
+        self.zone.hide()
+        self.file_hint.hide()
+        self.import_btn.hide()
+        QTimer.singleShot(1200, self._restore_clipboard_page)
+
+    def _restore_clipboard_page(self) -> None:
+        try:
+            self.zone.show()
+            self.file_hint.show()
+            self.import_btn.show()
+            self._show_page("import")
+        except RuntimeError:      # 对话框已经被关掉
+            return
+
+    # -------------------------------------------------- 页面 3：导出
+    def _build_export(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(14, 10, 14, 12)
+        lay.setSpacing(2)
+        for key, title, desc in self._export_targets:
+            row = TransferRow("grid" if key == "ocelot" else
+                              ("code" if key.startswith("openapi") else "download"),
+                              title, desc)
+            row.clicked.connect(lambda k=key: self._do_export(k))
+            lay.addWidget(row)
+        lay.addStretch(1)
+        scroll = SmoothScrollArea()
+        scroll.setWidget(host)
+        outer.addWidget(scroll, 1)
+
+        note = QWidget()
+        note.setObjectName("NoteBox")
+        note.setStyleSheet(
+            f"#NoteBox {{ border: 1px solid {theme().warning}; border-radius: 9px; }}")
+        nl = QHBoxLayout(note)
+        nl.setContentsMargins(12, 10, 12, 10)
+        nl.setSpacing(10)
+        icon = QLabel()
+        icon.setFixedSize(16, 16)
+        icon.setPixmap(icons.pixmap("alert", theme().warning, 15, 1.4))
+        text = Label(
+            "Ocelot JSON 与 Postman v2.1 是通用格式，别的工具可以直接导入；"
+            "OpenAPI 导出会丢失脚本、认证凭据、未启用的请求项、重复路径与重复响应码。",
+            10.8, theme().text_dim)
+        text.setWordWrap(True)
+        nl.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+        nl.addWidget(text, 1)
+        bottom = QWidget()
+        bl = QVBoxLayout(bottom)
+        bl.setContentsMargins(14, 0, 14, 14)
+        bl.setSpacing(8)
+        self.export_status = Label("", 10.8, theme().text_faint, mono_font=True)
+        self.export_status.setWordWrap(True)
+        bl.addWidget(self.export_status)
+        bl.addWidget(note)
+        back = Button("返回", "chevron_left", kind="ghost", height=30, padding=12, font_size=12)
+        back.clicked.connect(self._go_back)
+        bl.addWidget(HBox(1, back, spacing=6))
+        outer.addWidget(bottom)
+        return page
+
+    def _do_export(self, key: str) -> None:
+        from .transfer import EXT, to_har, to_ocelot, to_openapi, to_postman, to_yaml
+
+        default = "ocelot-collection" + EXT.get(key, ".json")
+        suffix = "YAML (*.yaml)" if key == "openapi-yaml" else (
+            "HAR (*.har)" if key == "har" else "JSON (*.json)")
+        path, _ = QFileDialog.getSaveFileName(self, i18n.tr("导出集合"), default, suffix)
+        if not path:
+            return
+        if key == "openapi-yaml" and not path.lower().endswith((".yaml", ".yml")):
+            path += ".yaml"
+        try:
+            if key == "ocelot":
+                text = json.dumps(to_ocelot(self.store), ensure_ascii=False, indent=2)
+            elif key == "postman":
+                text = json.dumps(to_postman(self.store), ensure_ascii=False, indent=2)
+            elif key == "openapi-json":
+                text = json.dumps(to_openapi(self.store), ensure_ascii=False, indent=2)
+            elif key == "openapi-yaml":
+                text = to_yaml(to_openapi(self.store))
+            else:
+                text = json.dumps(to_har(self.store), ensure_ascii=False, indent=2)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except Exception as exc:  # noqa: BLE001
+            self.export_status.setText(i18n.trf("✕ 导出失败：{err}", err=exc))
+            self.export_status.setStyleSheet(f"color: {theme().danger}; background: transparent;")
+            return
+        self.export_status.setText(i18n.trf("✓ 已导出到 {path} · {size} 字节",
+                                            path=path, size=len(text.encode("utf-8"))))
+        self.export_status.setStyleSheet(f"color: {theme().success}; background: transparent;")
+
+    # -------------------------------------------------- 导航
+    def _show_page(self, key: str) -> None:
+        self.stack.set_current(key)
+        self.back_btn.setVisible(key != "import")
+        titles = {"import": "集合", "file": "导入集合", "export": "导出集合"}
+        self._title_label.setText(i18n.tr(titles.get(key, "集合")))
+        # 高度跟着内容走：列表页最高，选文件 / 导出页短一些，免得中间空一大块
+        height = {"import": 640, "file": 470, "export": 480}.get(key, 620)
+        if self.height() != height:
+            self.resize(self.width(), height)
+
+    def _go_back(self) -> None:
+        self._show_page("import")
+
+    # -------------------------------------------------- 拖放
+    def dragEnterEvent(self, e):  # noqa: N802
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):  # noqa: N802
+        for url in e.mimeData().urls():
+            path = url.toLocalFile()
+            if path:
+                if self.stack.current() != "file":
+                    self._choose_source("ocelot")
+                self._load_path(path)
+                break
+
+    def refresh_theme(self) -> None:
+        for row in self.findChildren(TransferRow):
+            row.refresh_theme()
+        note = self.findChild(QWidget, "NoteBox")
+        if note is not None:
+            note.setStyleSheet(
+                f"#NoteBox {{ border: 1px solid {theme().warning}; border-radius: 9px; }}")

@@ -28,6 +28,16 @@ from . import i18n
 from .store import body_content_type, body_mode, resolve_vars
 
 
+def _human_size(n: int) -> str:
+    """控制台里用的体积文案（不引 UI 模块，避免循环 import）。"""
+    size = float(max(0, n))
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{int(size)} B" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{int(size)} B"
+
+
 def decompress_body(body: bytes, headers: List[Tuple[str, str]]) -> bytes:
     """解掉 Content-Encoding 压缩体。
 
@@ -208,8 +218,10 @@ class ApiClient(QObject):
         self._request_size = 0
         self._request_header_size = 0
         self.scriptLogs = []          # 最近一次请求的脚本日志，供 UI 展示
+        self.console: List[Dict[str, str]] = []   # 控制台条目（含级别 / 阶段）
         self._active_scripts: Dict[str, Any] = {}
         self._active_env_vars: Dict[str, str] = {}
+        self._active_req: Dict[str, Any] = {}
 
     def set_store(self, store) -> None:
         """注入 Store：前置 / 后置脚本要读写环境变量。"""
@@ -257,10 +269,23 @@ class ApiClient(QObject):
 
         result = run_script(source, self._store, req, env_vars=env_vars)
         self.scriptLogs = [("[pre] " + line) for line in result.logs]
-        if result.error:
-            self.scriptLogs.append("[pre] " + result.error)
+        self.console.extend(self._entries("pre", result))
         # 脚本可能新增/修改了环境变量：把快照同步给本次请求
         env_vars.update(self._store.env_vars())
+
+    @staticmethod
+    def _entries(phase: str, result) -> List[Dict[str, str]]:
+        """把脚本结果摊成控制台条目，级别决定图标与配色。"""
+        out: List[Dict[str, str]] = []
+        for item in getattr(result, "entries", []) or []:
+            level = str(item.get("level") or "log")
+            if level == "_unset":
+                continue
+            out.append({"level": level, "text": str(item.get("text") or ""),
+                        "phase": phase})
+        if result.error and not any(e["level"] == "error" for e in out):
+            out.append({"level": "error", "text": result.error, "phase": phase})
+        return out
 
     def _run_post_script(self, resp: "Response", env_vars: Dict[str, Any]) -> None:
         scripts = getattr(self, "_active_scripts", None) or {}
@@ -269,12 +294,12 @@ class ApiClient(QObject):
             return
         from .scripts import run_script
 
-        result = run_script(source, self._store,
-                            {"method": "GET", "url": "", "headers": [], "params": [],
-                             "body": {"raw": ""}}, res=resp, env_vars=env_vars)
+        # 后置脚本要能读到真实请求（req.url / req.headers），不能塞空壳
+        req = self._active_req or {"method": "GET", "url": "", "headers": [],
+                                   "params": [], "body": {"raw": ""}}
+        result = run_script(source, self._store, req, res=resp, env_vars=env_vars)
         self.scriptLogs.extend(("[post] " + line) for line in result.logs)
-        if result.error:
-            self.scriptLogs.append("[post] " + result.error)
+        self.console.extend(self._entries("post", result))
 
     # ------------------------------------------------------------ 代理
     def _configure_proxy(self, settings: Dict[str, Any], host: str = "") -> None:
@@ -445,11 +470,20 @@ class ApiClient(QObject):
         self._cancelled = False
         self._keepalive = []
         self.scriptLogs = []
+        self.console = []
+        self._active_req = req
 
         # 前置脚本：在中继分支之前执行，覆盖所有发送路径
         self._active_scripts = req.get("scripts") or {}
         self._active_env_vars = dict(env_vars)
         self._run_pre_script(req, env_vars)
+        # 控制台第一条：这次到底发了什么（前置脚本改过的 URL / 方法都算数）
+        url_text = str(req.get("url") or "")
+        for row in req.get("params") or []:
+            if row.get("key") and row.get("enabled", True):
+                url_text += ("&" if "?" in url_text else "?") + f"{row['key']}={row.get('value', '')}"
+        self.console.insert(0, {"level": "info", "phase": "request",
+                                "text": f"→ {str(req.get('method') or 'GET').upper()} {url_text}"})
 
         if settings.get("relay_node"):
             try:
@@ -767,5 +801,14 @@ class ApiClient(QObject):
             self._run_post_script(resp, dict(self._active_env_vars or {}))
         except Exception:  # noqa: BLE001 — 脚本失败不能影响响应展示
             pass
+        # 控制台里补一条收尾记录，和 ApiFox 一样能一眼看到这次请求的结局
+        if resp.error:
+            self.console.append({"level": "error", "phase": "response",
+                                 "text": "← " + resp.error})
+        else:
+            self.console.append({
+                "level": "ok" if 200 <= status < 400 else "warn", "phase": "response",
+                "text": f"← {status} {reason}".strip()
+                        + f" · {elapsed} ms · {_human_size(len(body))}"})
         reply.deleteLater()
         self.finished.emit(resp)

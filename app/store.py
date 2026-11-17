@@ -19,9 +19,33 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.27"
+VERSION = "1.0.28"
 
 CHANGELOG = [
+    {
+        "version": "1.0.28",
+        "date": "2026-11-18",
+        "items": [
+            "新增：响应面板「控制台」页 —— 前置 / 后置脚本的 console.log/warn/error 与断言结果"
+            "按级别配色、带阶段标签，可一键复制全部；请求失败时错误页里也能直接看到脚本输出",
+            "新增：集合页搜索框右侧「导入 / 导出」按钮 —— 一个对话框里切换："
+            "支持 Ocelot JSON、Postman、Apifox、Hoppscotch、Insomnia、OpenAPI（JSON/YAML）、HAR 导入，"
+            "以及导出为 Ocelot JSON / Postman v2.1 / OpenAPI 3.1（JSON、YAML）/ HAR，可返回上一页、支持拖放文件与剪贴板导入",
+            "新增：Ocelot JSON 采用 Postman v2.1 + x-ocelot 元数据的通用结构，"
+            "Postman / Apifox 等工具可直接导入，导回本应用也能保留脚本、认证与 Cookie",
+            "新增：标签右键「重命名…」—— 同时改集合节点、标签标题与请求内容，并立即落盘；"
+            "开启云同步时改名也会自动上传",
+            "新增：点击顶部标签时，左侧列表自动切回集合页、展开父级并滚动高亮到对应请求",
+            "改进：脚本功能加固 —— res.body/res.text 取值修正（之前拿到的是方法对象）、"
+            "req.setHeader 保留原有行的启用状态、新增 res.json() / res.setHeader / pw.env.has / pw.env.toObject / test() 断言，"
+            "脚本报错行号换算回用户看到的行，死循环 2 秒内自动中止",
+            "改进：脚本片段按钮改为「从新的一行插入」，后置脚本额外提供读响应与断言片段",
+            "修复：编辑请求后保存没有真正写回集合节点（重新打开还是旧内容）",
+            "修复：上次异常退出后，本次启动自动关闭动画以规避 macOS 图形层硬崩；关窗前释放输入法焦点",
+            "优化：请求体徽标不再每次按键复制整段正文，切标签 / 编辑更顺；窗口启动约 0.9 秒",
+            "优化：自测项扩展到 429 项，全部通过",
+        ],
+    },
     {
         "version": "1.0.27",
         "date": "2026-11-18",
@@ -940,6 +964,25 @@ class Store:
 
 # ---------------------------------------------------------------- 变量替换
 
+def dynamic_var(name: str) -> Optional[str]:
+    """内置动态变量：每次调用都产生新值；不是动态变量时返回 None。
+
+    统一在这里实现，脚本（pw.env.get）与 {{$timestamp}} 走同一套逻辑，
+    不会出现「界面里能替换、脚本里读不到」的两套行为。
+    """
+    if name == "$timestamp":
+        return str(int(time.time()))
+    if name == "$timestampMs":
+        return str(int(time.time() * 1000))
+    if name in ("$uuid", "$guid"):
+        return str(uuid.uuid4())
+    if name == "$randomInt":
+        return str(random.randint(1, 1000))
+    if name.startswith("$isoTimestamp"):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return None
+
+
 def resolve_vars(text: str, variables: Dict[str, str]) -> str:
     """替换 {{var}} 与内置动态变量。未知变量保持原样，便于排查。"""
     if not text or "{{" not in text:
@@ -948,16 +991,9 @@ def resolve_vars(text: str, variables: Dict[str, str]) -> str:
 
     def repl(m):
         name = m.group(1).strip()
-        if name == "$timestamp":
-            return str(int(time.time()))
-        if name == "$timestampMs":
-            return str(int(time.time() * 1000))
-        if name in ("$uuid", "$guid"):
-            return str(uuid.uuid4())
-        if name == "$randomInt":
-            return str(random.randint(1, 1000))
-        if name.startswith("$isoTimestamp"):
-            return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        dyn = dynamic_var(name)
+        if dyn is not None:
+            return dyn
         if name in variables:
             return str(variables[name])
         return m.group(0)
