@@ -14,6 +14,7 @@ from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QFontMetricsF, QPainter, QPen
 from PyQt6.QtWidgets import QWidget
 
+from . import i18n
 from .theme import C, font, mono, status_color, theme
 
 PAD_L, PAD_R, PAD_T, PAD_B = 44, 16, 74, 26
@@ -33,6 +34,10 @@ class TimelineView(QWidget):
     def set_entries(self, entries: List[Dict[str, Any]]) -> None:
         self.entries = list(entries or [])
         self._hover = -1
+        self.update()
+
+    def refresh_theme(self) -> None:
+        """语言切换后统计标签要重画 —— 这里的文案是手绘的，不走 QLabel。"""
         self.update()
 
     def _stats(self) -> Dict[str, Any]:
@@ -145,17 +150,17 @@ class TimelineView(QWidget):
         p.setPen(C(t.text_faint))
         p.drawText(QRectF(0, 0, self.width(), self.height()),
                    int(Qt.AlignmentFlag.AlignCenter),
-                   "这个地址还没有足够的历史记录\n再发几次，就能看到耗时趋势了")
+                   i18n.tr("这个地址还没有足够的历史记录\n再发几次，就能看到耗时趋势了"))
 
     def _paint_stats(self, p: QPainter, stats: Dict[str, Any]) -> None:
         t = theme()
         items = [
-            ("次数", str(stats["n"]), t.text),
-            ("成功率", f"{stats['ok'] / stats['n'] * 100:.0f}%",
+            (i18n.tr("次数"), str(stats["n"]), t.text),
+            (i18n.tr("成功率"), f"{stats['ok'] / stats['n'] * 100:.0f}%",
              t.text if stats["ok"] == stats["n"] else t.warning),
-            ("平均", f"{stats['avg']:.0f}ms", t.text_dim),
+            (i18n.tr("平均"), f"{stats['avg']:.0f}ms", t.text_dim),
             ("P95", f"{stats['p95']}ms", t.text_dim),
-            ("最慢", f"{stats['max']}ms",
+            (i18n.tr("最慢"), f"{stats['max']}ms",
              t.danger if stats["max"] > stats["avg"] * 3 else t.text_dim),
         ]
         x = 16.0

@@ -367,7 +367,10 @@ class ResponsePanel(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(head)
-        lay.addWidget(Divider())
+        # head 下的分隔线要跟着 head 一起隐藏：head 藏起来时这条线会跟
+        # 分割手柄的线叠在一起，看着像多了一套横线。
+        self.head_divider = Divider()
+        lay.addWidget(self.head_divider)
         lay.addWidget(self.center, 1)
         lay.addWidget(self.find_bar)
 
@@ -379,6 +382,13 @@ class ResponsePanel(QWidget):
         self._detail = DetailController(self)
         self._detail.bind(self.time_label, self._timing_card)
         self._detail.bind(self.size_label, self._size_card)
+
+    def _set_head_visible(self, visible: bool) -> None:
+        """指标条与其下的分隔线一起显隐，避免空态时多出一条孤零零的横线。"""
+        self.head.setVisible(visible)
+        div = getattr(self, "head_divider", None)
+        if div is not None:
+            div.setVisible(visible)
 
     def _dot(self) -> QLabel:
         lbl = Label("·", 12, theme().text_faint)
@@ -726,7 +736,7 @@ class ResponsePanel(QWidget):
         self.center.setCurrentWidget(self.empty)
         self.tabs_row.hide()
         self.meta.hide()
-        self.head.hide()
+        self._set_head_visible(False)
         self.url_label.hide()
         self.time_label.setText("")
         self.size_label.setText("")
@@ -746,7 +756,7 @@ class ResponsePanel(QWidget):
         self.empty.set_text("请求已修改", "发送后这里会显示本次请求的新响应", "⌘ ↵ 发送")
         self.tabs_row.hide()
         self.meta.hide()
-        self.head.hide()
+        self._set_head_visible(False)
         self._set_actions_enabled(False)
         self._sync_view_tools()
         self.find_bar.hide()
@@ -756,7 +766,7 @@ class ResponsePanel(QWidget):
         self.tabs_row.hide()
         self.spinner.start()          # 关键：不启动定时器就只是一个静止的弧线
         self.shimmer.start()
-        self.head.show()
+        self._set_head_visible(True)
         self.meta.show()
         self.pill.set_text("请求中")
         self.pill.set_color(theme().info)
@@ -775,7 +785,7 @@ class ResponsePanel(QWidget):
         self.center.setCurrentWidget(self.error)
         self.tabs_row.hide()
         self.error_msg.setText(message)
-        self.head.show()
+        self._set_head_visible(True)
         self.meta.show()
         self.pill.set_text("失败")
         self.pill.set_color(theme().danger)
@@ -800,7 +810,7 @@ class ResponsePanel(QWidget):
 
         _fade(self.content, 170)
         self._set_actions_enabled(True)
-        self.head.show()
+        self._set_head_visible(True)
         self.meta.show()
         self._set_dots(True)
         self.url_label.show()
@@ -943,7 +953,7 @@ class ResponsePanel(QWidget):
             cur = QTextCursor(view.document())
             fmt = QTextCharFormat()
             fmt.setForeground(C(t.text_faint))
-            cur.insertText("（同一地址的第二次响应会自动与上一次逐行对比）", fmt)
+            cur.insertText(i18n.tr("（同一地址的第二次响应会自动与上一次逐行对比）"), fmt)
             return
 
         prev_lines = (prev.get("body") or "").splitlines()

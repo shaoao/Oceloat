@@ -235,6 +235,7 @@ _EN: Dict[str, str] = {
     # 响应
     "美化": "Pretty", "树形": "Tree", "原始": "Raw", "响应头": "Headers",
     "预览": "Preview", "对比": "Compare", "提取": "Extract",
+    "时间线": "Timeline",
     "全部展开": "Expand All", "全部折叠": "Collapse All", "自动换行": "Word Wrap",
     "准备就绪": "Ready to go", "填写请求地址后发送，响应会显示在这里": "Enter a URL and send — the response will appear here",
     "⌘ ↵ 发送": "⌘ ↵ to send", "正在等待响应…": "Waiting for response…",
@@ -505,6 +506,7 @@ _EN.update({
     "用这条路由新建请求": "New request from this route",
     "新建环境": "New environment", "删除环境": "Delete environment",
     "… 还有 {n} 项": "… {n} more", "共": "total", "次": "hits", "平均": "avg", "最近一条": "last",
+    "次数": "Count", "成功率": "Success", "最慢": "Slowest", "关闭换行": "No Wrap",
     "cURL 命令已复制到剪贴板": "cURL command copied to clipboard",
     "先打开一条请求": "Open a request first",
     "先选中一个集合文件夹，或打开集合里的请求":
@@ -766,6 +768,8 @@ _EN.update({
     "存为环境变量": "Save as Environment Variable",
 
     # Mock 路由编辑
+    "新建 Mock 路由": "New Mock Route", "编辑 Mock 路由": "Edit Mock Route",
+    "新建条件规则": "New Condition Rule", "编辑条件规则": "Edit Condition Rule",
     "规则名称": "Rule name", "只是给自己看的备注，可以空着":
         "Just a note for yourself — can be empty",
     "条件来源": "Condition source", "比较方式": "Comparison",

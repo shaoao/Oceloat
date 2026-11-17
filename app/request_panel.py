@@ -794,8 +794,8 @@ class RequestEditor(QWidget):
         self.node_btn = self.urlbar.node_btn
 
         self.tabs = SegmentedTabs(
-            [("params", "参数"), ("headers", "请求头"), ("cookies", "Cookies"),
-             ("body", "请求体"), ("auth", "认证")],
+            [("params", "参数"), ("body", "请求体"), ("headers", "请求头"),
+             ("cookies", "Cookies"), ("auth", "认证")],
             style="underline", height=32, pad_h=10, font_size=12.2)
         self.tabs.changed.connect(self._on_tab)
         self.count_label = Label("", 10.5, theme().text_faint, mono_font=True)
@@ -840,9 +840,9 @@ class RequestEditor(QWidget):
 
         self.pages = FadeStack()
         self.pages.add("params", self._wrap(self.params, self.params_tools, self.params_preview))
+        self.pages.add("body", self.body)
         self.pages.add("headers", self._wrap(self.headers, self.headers_tools))
         self.pages.add("cookies", self._wrap(self.cookies, self.cookies_tools))
-        self.pages.add("body", self.body)
         self.pages.add("auth", self.auth)
         self.pages.set_current("params", animate=False)
 

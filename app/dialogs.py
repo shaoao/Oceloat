@@ -118,6 +118,7 @@ class GlassDialog(QDialog):
             nav = getattr(self, "nav", None)
             if nav is not None:
                 nav.sync_width()
+                nav.update()
         fade_in(self, 140)
 
 
@@ -1297,7 +1298,36 @@ class SettingsDialog(GlassDialog):
         self.store.settings["language"] = "en" if value == "en" else "zh"
         self.store.save()
         i18n.set_language(self.store.settings["language"])   # 立即刷新主界面
+        # 设置窗口是独立的顶层窗口，不在主窗口的 findChildren 覆盖范围内，
+        # 这里自己再翻一遍，否则右侧页面还停在旧语言。
+        self._retranslate()
         self.settingsChanged.emit()
+
+    def _retranslate(self) -> None:
+        """设置窗口内部跟着语言切换刷新（标题、左侧导航宽度、右侧页面文案）。"""
+        from . import i18n
+        from .widgets import Button, SegmentedTabs
+
+        i18n.apply_language(self)
+        try:
+            nav = getattr(self, "nav", None)
+            if nav is not None:
+                nav.sync_width()
+                nav.update()
+        except RuntimeError:  # noqa: BLE001
+            pass
+        for w in self.findChildren(QWidget):
+            if isinstance(w, SegmentedTabs):
+                w.sync_size()
+            elif isinstance(w, Button):
+                w.updateGeometry()
+                w.update()
+        # 页面标题（自绘 Label 之外的标题条）也要跟着变
+        try:
+            self._apply_page_title()
+        except RuntimeError:  # noqa: BLE001
+            pass
+        self.update()
 
     def _on_anim(self, on: bool) -> None:
         self.store.settings["animations"] = bool(on)

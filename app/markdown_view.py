@@ -189,7 +189,7 @@ class CodeBlock(Card):
     HEAD_H = 30
 
     def __init__(self, code: str, lang: str = "", parent=None, max_height: int = 300,
-                 show_header: bool = True):
+                 show_header: bool = True, fixed_height: Optional[int] = None):
         super().__init__(radius=9, parent=parent)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -227,8 +227,12 @@ class CodeBlock(Card):
         self._code = code
         self._lh = max(1, view.fontMetrics().lineSpacing())
         self._cap = max(max_height, self._lh * 2)
+        # fixed_height：所有类目共用同一个高度，切换语言时不再忽高忽低。
+        # 超过的部分交给内部滚动条。
+        self._fixed_height = fixed_height
         view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        view.setFixedHeight(self._lh * min(max(code.count("\n") + 1, 1), 12))
+        view.setFixedHeight(self._lh * min(max(code.count("\n") + 1, 1), 12)
+                            if fixed_height is None else int(fixed_height))
 
         pad = QWidget()
         pl = QVBoxLayout(pad)
@@ -253,6 +257,13 @@ class CodeBlock(Card):
         if width < 48:
             return
         from PyQt6.QtGui import QFontMetricsF
+
+        if self._fixed_height is not None:
+            height = int(self._fixed_height)
+            if self._view.height() != height:
+                self._view.setFixedHeight(height)
+                self.updateGeometry()
+            return
 
         fm = QFontMetricsF(self._view.font())
         total = 0

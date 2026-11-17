@@ -101,6 +101,9 @@ class OutlineItem(QWidget):
 class DocDialog(GlassDialog):
     """接口文档查看器：渲染 / 大纲 / 代码示例 / 复制 / 保存。"""
 
+    # 代码示例视口的统一高度：十种语言共用一个值，切换时不再忽高忽低。
+    CODE_VIEW_H = 182
+
     def __init__(self, store, request: Dict[str, Any], response: Optional[Any] = None,
                  parent=None):
         super().__init__(parent, 1080, 764, "接口文档")
@@ -296,10 +299,11 @@ class DocDialog(GlassDialog):
     def _build_code_panel(self) -> QWidget:
         t = theme()
         host = QWidget()
-        # 高度跟着代码块走：短示例不留一大片空白，长示例到上限就内部滚动
-        host.setMinimumHeight(168)
-        host.setMaximumHeight(300)
-        host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        # 高度固定：代码块视口对所有语言一样高，外层面板也跟着固定，
+        # 切换语言时整块区域不会忽高忽低。
+        host.setMinimumHeight(self.CODE_VIEW_H + 101)
+        host.setMaximumHeight(self.CODE_VIEW_H + 101)
+        host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         lay = QVBoxLayout(host)
         lay.setContentsMargins(22, 10, 22, 12)
         lay.setSpacing(9)
@@ -348,7 +352,9 @@ class DocDialog(GlassDialog):
         entry = next((x for x in LANGUAGES if x[0] == self._lang), LANGUAGES[0])
         # 代码块自己贴顶，剩余高度留给下面的空白：之前没有 stretch，Qt 会把
         # 固定高的代码视图在剩余空间里居中，看起来就像「代码悬在半空」
-        block = CodeBlock(self._code_for(entry), entry[3], max_height=182)
+        # 高度固定：所有类目用同一个值，切换语言时不再忽高忽低地跳。
+        block = CodeBlock(self._code_for(entry), entry[3], max_height=self.CODE_VIEW_H,
+                          fixed_height=self.CODE_VIEW_H)
         block.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self._code_lay.addWidget(block)
         self._code_lay.addStretch(1)
