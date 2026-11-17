@@ -567,6 +567,9 @@ class MainWindow(QWidget):
     def __init__(self, store: Store):
         super().__init__()
         self.store = store
+        # 运行期「当前 Store」以主窗口为准：别的地方临时 Store.load() 读一份快照做校验时，
+        # 不会把弹窗读取设置用的引用换掉（否则设置项在弹窗里不生效）。
+        Store._active = store
         self.client = ApiClient(self)
         self.client.set_store(store)
         self.client.started.connect(lambda: None)

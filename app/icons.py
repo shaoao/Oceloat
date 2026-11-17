@@ -322,6 +322,17 @@ def _broom(p):
     _line(p, 5.6, 17.6, 8.4, 19.2)
 
 
+def _link(p):
+    """链条：两个斜置的圆角环（先移到画布中心再旋转，否则会转出画布）。"""
+    p.save()
+    p.translate(12.0, 12.0)
+    p.rotate(-45)
+    p.drawRoundedRect(QRectF(-8.4, -3.1, 7.6, 6.2), 3.0, 3.0)
+    p.drawRoundedRect(QRectF(0.8, -3.1, 7.6, 6.2), 3.0, 3.0)
+    p.restore()
+    _line(p, 9.8, 14.2, 14.2, 9.8)
+
+
 def _external(p):
     _line(p, 13.4, 4.6, 19.4, 4.6, 19.4, 10.6)
     _line(p, 19.0, 5.0, 11.6, 12.4)
@@ -479,7 +490,7 @@ ICONS: Dict[str, Callable[[QPainter], None]] = {
     "table": _table, "pencil": _pencil, "sliders": _sliders, "keyboard": _keyboard, "book": _book,
     "dot": _dot, "play": _play, "stop": _stop, "refresh": _refresh, "moon": _moon,
     "grid": _grid, "broom": _broom, "external": _external,
-    "alert": _alert, "transfer": _transfer,
+    "alert": _alert, "transfer": _transfer, "link": _link,
     "undo": _undo, "redo": _redo, "cut": _cut, "paste": _paste,
     "panel_left": _panel_left, "image": _image, "audio": _audio, "node": _node,
     "cloud": _cloud, "sync": _sync,

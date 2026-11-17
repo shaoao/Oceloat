@@ -276,6 +276,9 @@ _EN: Dict[str, str] = {
     "配色方案": "Color Scheme", "界面动效": "Animations",
     "关闭后页面切换、悬停与响应到达不再播放动画。": "Turn off to disable page, hover and response animations.",
     "代码字号": "Code Font Size", "响应体、请求体与代码片段的等宽字体大小。": "Monospace font size for responses, bodies and snippets.",
+    "所有弹窗都模糊": "Blur All Dialogs",
+    "关闭时只有设置与导入导出窗口是模糊 + 不可拖动的；开启后所有弹窗都这样。":
+        "Off: only Settings and Import/Export are blurred and fixed. On: every dialog is.",
     "预览": "Preview", "次按钮": "Secondary", "文字按钮": "Text Button",
     "超时、跳转、证书与代理。": "Timeouts, redirects, certificates and proxies.",
     "请求超时": "Request Timeout", "单位秒，0 表示不限制。": "In seconds; 0 means no limit.",
@@ -1088,6 +1091,15 @@ _EN.update({
     "从剪贴板导入": "Import from clipboard",
     "自动识别 JSON 集合或 cURL 命令，直接粘过来":
         "Detects a JSON collection or a cURL command, right from the clipboard",
+    "从 URL 导入": "Import from URL",
+    "填一个远程 JSON / YAML 地址，自动下载并识别来源":
+        "Paste a remote JSON / YAML link; it downloads and detects the source",
+    "集合 JSON / YAML 的地址": "URL of the collection JSON / YAML",
+    "正在下载…": "Downloading…",
+    "下载失败：{err}": "Download failed: {err}",
+    "地址要以 http:// 或 https:// 开头": "The URL must start with http:// or https://",
+    "远程集合": "Remote collection",
+    "集合名「{name}」": "Collection “{name}”",
     "导出全部集合": "Export all collections",
     "Ocelot JSON / Postman / OpenAPI / HAR": "Ocelot JSON / Postman / OpenAPI / HAR",
     "导出为 Ocelot JSON": "Export as Ocelot JSON",
@@ -1150,6 +1162,10 @@ _EN.update({
     "请求已修改 · 下面是上一次的响应": "Request changed · showing the previous response",
     "已导入 {n} 个请求": "Imported {n} requests",
     "来自 {fmt} · 已追加到集合列表末尾": "From {fmt} · appended to the end of your collections",
+    "集合「{name}」来自 {fmt}，已追加到侧栏末尾":
+        "Collection “{name}” from {fmt}, appended to the end of the sidebar",
+    "常用": "Frequently used",
+    "全部命令": "All commands",
     "已导出 {name}": "Exported {name}",
     "文件名": "File",
     "大小": "Size",

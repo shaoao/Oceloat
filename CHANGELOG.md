@@ -1,5 +1,43 @@
 # What's Changed
 
+## v1.0.30 — 2026-11-18
+
+**Fixed**
+- The tab pill slide had disappeared: clicking a tab calls `set_current` twice (once from
+  the click, once from the selection callback) and the second call snapped the animation
+  that had just started. The pill now slides with a subtle velocity stretch, and the
+  outgoing/incoming tab labels and method badges cross-fade.
+- The modal backdrop was only blurred on the left-hand side. Replaced the Qt blur render
+  with a two-stage downsample blur that is uniform across the whole window (about 3.5 ms
+  for 1600×1000, a few hundred KB peak memory).
+- The success check on the import result page sat left of centre: its icon was centred
+  using device pixels, which is 2× off on Retina. It is now centred in logical pixels and
+  gets a small expanding halo when it appears.
+- Imported collections had the wrong name. The name now comes from the file
+  (`info.name`, Apifox collection name, Insomnia workspace, OpenAPI title) or the file
+  name, and the collection is created as a folder with that name — inner folders keep
+  their hierarchy. A single-request JSON still imports as one request.
+
+**Added**
+- `Collections / History` segmented control: the selected pill slides between the two
+  labels and the text colour cross-fades.
+- Every dialog is centred on its parent window, including when a page change resizes it.
+  Only Settings and Import/Export are blurred and immovable by default; other dialogs
+  stay unblurred and can be dragged by their title bar.
+- New setting **Appearance → Blur All Dialogs**: turn it on and every dialog becomes
+  blurred and immovable.
+- Command palette: the five most-used commands are pinned under a **Frequently used**
+  heading (ordered by real usage, so the list adapts), followed by **All commands**. The
+  card is centred and slides down as it fades in.
+- **Import from URL**: paste a remote JSON / YAML link (8 MB limit); it downloads and runs
+  through the same detection pipeline as a local file.
+
+**Improved**
+- Export file names default to the collection (folder) name instead of
+  `ocelot-collection`.
+- Removed a batch of unused imports and redundant work; the self-test suite now covers
+  467 checks and passes.
+
 ## v1.0.29 — 2026-11-18
 
 **Fixed**

@@ -3,16 +3,27 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import QEasingCurve, QPoint, QPointF, QRectF, QSize, Qt, QVariantAnimation, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
+from PyQt6.QtCore import QEasingCurve, QPoint, QPointF, QRectF, Qt, QVariantAnimation, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from . import icons
-from .anim import running as _anim_running, stop as _anim_stop
+from .anim import animations_on, running as _anim_running, stop as _anim_stop
 from .theme import C, font, method_color, mono, theme
 
 TAB_H = 27
 MARGIN_Y = 6
+
+
+def _mix(a: QColor, b: QColor, t: float) -> QColor:
+    """两个颜色按 t 线性混合（t=0 → a，t=1 → b），用于高亮淡入淡出。"""
+    t = max(0.0, min(1.0, t))
+    return QColor(
+        int(a.red() + (b.red() - a.red()) * t),
+        int(a.green() + (b.green() - a.green()) * t),
+        int(a.blue() + (b.blue() - a.blue()) * t),
+        int(a.alpha() + (b.alpha() - a.alpha()) * t),
+    )
 
 
 class TabStrip(QWidget):
@@ -35,7 +46,13 @@ class TabStrip(QWidget):
         self._dragging = False
         self._font = font(12.2, weight=QFont.Weight.Medium)
         self._indicator = QRectF()
+        self._ind_from = QRectF()
+        self._ind_to = QRectF()
         self._ind_anim: Optional[QVariantAnimation] = None
+        # 切换过渡：旧标签的高亮在 _switch_t 里淡出，新标签淡入（0→1）
+        self._prev_id: Optional[str] = None
+        self._switch_t = 1.0
+        self._switch_anim: Optional[QVariantAnimation] = None
         self._scroll = 0.0
         self.setFixedHeight(TAB_H + MARGIN_Y * 2)
         self.setMouseTracking(True)
@@ -97,7 +114,9 @@ class TabStrip(QWidget):
     def add_tab(self, tab: Dict, activate: bool = True, animate: bool = True) -> None:
         self.tabs.append(dict(tab))
         if activate or self._current is None:
+            prev = self._current
             self._current = tab["id"]
+            self._begin_switch(prev)
             if animate:
                 self._animate_indicator()
             else:
@@ -108,6 +127,7 @@ class TabStrip(QWidget):
         self.tabs = [t for t in self.tabs if t["id"] != tab_id]
         if self._current == tab_id:
             self._current = self.tabs[-1]["id"] if self.tabs else None
+            self._begin_switch(None)
         self._normalize_scroll()
         self._animate_indicator()
         self.update()
@@ -135,13 +155,39 @@ class TabStrip(QWidget):
 
     def set_current(self, tab_id: str, animate: bool = True) -> None:
         if tab_id == self._current:
-            self._snap_indicator()
+            # 关键：同 id 只补一次对齐，且绝不能在动画进行中补 ——
+            # 主窗口点标签时会 set_current 两次（点击 + currentChanged 回调），
+            # 以前第二次直接 _snap 把刚起飞的胶囊按住，用户看到的就是「动画没了」。
+            if not _anim_running(self._ind_anim):
+                self._snap_indicator()
             return
+        prev = self._current
         self._current = tab_id
+        self._begin_switch(prev)
         if animate:
             self._animate_indicator()
         else:
             self._snap_indicator()
+        self.update()
+
+    # -------------------------------------------------- 高亮淡入淡出
+    def _begin_switch(self, prev: Optional[str]) -> None:
+        self._prev_id = prev
+        _anim_stop(self._switch_anim)
+        if not animations_on():
+            self._switch_t = 1.0
+            return
+        anim = QVariantAnimation(self)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setDuration(240)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.valueChanged.connect(self._on_switch)
+        self._switch_anim = anim
+        anim.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _on_switch(self, v):
+        self._switch_t = float(v)
         self.update()
 
     def current(self) -> Optional[str]:
@@ -170,6 +216,9 @@ class TabStrip(QWidget):
         if self._ind_anim is not None:
             _anim_stop(self._ind_anim)
             self._ind_anim = None
+        _anim_stop(self._switch_anim)
+        self._switch_t = 1.0
+        self._prev_id = None
         self._indicator = self._active_rect()
         self.update()
 
@@ -181,7 +230,12 @@ class TabStrip(QWidget):
             return
         if self._indicator.isNull():
             self._indicator = QRectF(target.left(), target.top(), 0, target.height())
+        if not animations_on():
+            self._snap_indicator()
+            return
         _anim_stop(self._ind_anim)
+        self._ind_from = QRectF(self._indicator)
+        self._ind_to = QRectF(target)
         self._ind_anim = QVariantAnimation(self)
         self._ind_anim.setStartValue(QRectF(self._indicator))
         self._ind_anim.setEndValue(target)
@@ -202,6 +256,17 @@ class TabStrip(QWidget):
     def _on_ind(self, v):
         self._indicator = v
         self.update()
+
+    def _stretch(self) -> float:
+        """胶囊飞行时左右轻微拉伸（速度感），落地回弹到 0。"""
+        if not _anim_running(self._ind_anim):
+            return 0.0
+        dist = abs(self._ind_to.left() - self._ind_from.left())
+        if dist < 2:
+            return 0.0
+        travel = abs(self._indicator.left() - self._ind_from.left()) / dist
+        travel = min(1.0, max(0.0, travel))
+        return 5.0 * (1.0 - abs(2.0 * travel - 1.0))
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
@@ -357,7 +422,10 @@ class TabStrip(QWidget):
         # 动画没在跑时一律用实时几何，绝不信任可能过期的 _indicator。
         capsule = self._indicator if _anim_running(self._ind_anim) else self._active_rect()
         if not capsule.isNull() and len(rects) == len(self.tabs):
-            r = capsule
+            r = QRectF(capsule)
+            stretch = self._stretch()
+            if stretch > 0.05:
+                r = r.adjusted(-stretch, 0, stretch, 0)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(C(t.elevated))
             p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 7, 7)
@@ -365,6 +433,13 @@ class TabStrip(QWidget):
         for tab, rect in zip(self.tabs, rects):
             is_cur = tab["id"] == self._current
             is_hover = tab["id"] == self._hover
+            # 高亮强度：新标签 0→1 淡入，旧标签 1→0 淡出，跟胶囊一起动
+            if is_cur:
+                hot = self._switch_t if self._prev_id else 1.0
+            elif tab["id"] == self._prev_id and self._switch_t < 1.0:
+                hot = 1.0 - self._switch_t
+            else:
+                hot = 0.0
             if is_hover and not is_cur:
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(C(t.hover))
@@ -374,11 +449,14 @@ class TabStrip(QWidget):
             mcol = C(method_color(method, t))
             br = self._badge_rect(rect)
             fill = QColor(mcol)
-            fill.setAlpha(40 if is_cur else 26)
+            fill.setAlpha(int(22 + 18 * hot))
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(fill)
             p.drawRoundedRect(br, 4.5, 4.5)
             p.setFont(mono(8.2, QFont.Weight.Bold))
+            if hot < 0.999 and (is_cur or tab["id"] == self._prev_id):
+                mcol = QColor(mcol)
+                mcol.setAlpha(int(150 + 105 * hot))
             p.setPen(mcol)
             short = "DEL" if method == "DELETE" else ("OPT" if method == "OPTIONS" else method)
             p.drawText(br, int(Qt.AlignmentFlag.AlignCenter), short)
@@ -389,7 +467,8 @@ class TabStrip(QWidget):
                 p.setFont(pf)
             else:
                 p.setFont(self._font)
-            p.setPen(C(t.accent) if is_cur else C(t.text_dim if is_hover else t.text_faint))
+            base = C(t.text_dim if is_hover else t.text_faint)
+            p.setPen(_mix(base, C(t.accent), hot) if hot > 0.001 else base)
             left = self._title_left(rect)
             avail = rect.right() - self.RIGHT_PAD - self.CLOSE_W - left - 4
             title = QFontMetricsF(self._font).elidedText(

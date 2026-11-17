@@ -6,17 +6,14 @@ OutCubic / OutQuart 缓动，保持 macOS 的轻盈手感。
 """
 from __future__ import annotations
 
-import math
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from PyQt6.QtCore import (
     QEasingCurve,
     QPoint,
     QPointF,
-    QRect,
     QRectF,
     QSize,
-    QSizeF,
     Qt,
     QTimer,
     QVariantAnimation,
@@ -28,7 +25,6 @@ from PyQt6.QtGui import (
     QFontMetricsF,
     QLinearGradient,
     QPainter,
-    QPainterPath,
     QPen,
 )
 from PyQt6.QtWidgets import (
@@ -40,8 +36,6 @@ from PyQt6.QtWidgets import (
     QMenu,
     QScrollArea,
     QSizePolicy,
-    QStyle,
-    QStyledItemDelegate,
     QVBoxLayout,
     QWidget,
 )
@@ -50,6 +44,17 @@ from . import i18n, icons
 from .anim import animations_on as _animations_on, running as _anim_running, stop as _anim_stop
 from .i18n import tr as _tr
 from .theme import C, S, font, mono, theme
+
+
+def _mix_colors(a: QColor, b: QColor, t: float) -> QColor:
+    """按 t 在两种颜色之间插值，用于选中态淡入淡出。"""
+    t = max(0.0, min(1.0, t))
+    return QColor(
+        int(a.red() + (b.red() - a.red()) * t),
+        int(a.green() + (b.green() - a.green()) * t),
+        int(a.blue() + (b.blue() - a.blue()) * t),
+        int(a.alpha() + (b.alpha() - a.alpha()) * t),
+    )
 
 
 class Menu(QMenu):
@@ -506,7 +511,6 @@ class Button(QWidget):
         if self._kind == "subtle":
             bg = C(t.panel_alt)
             if self._hover:
-                bgc = C(t.hover)
                 bg = QColor(bg)
                 bg = bg.lighter(100 + int(10 * self._hover)) if t.is_dark else bg
             fg = C(t.text) if self._checked else C(t.text_dim)
@@ -579,7 +583,6 @@ class Button(QWidget):
         super().keyPressEvent(e)
 
     def paintEvent(self, _e):  # noqa: N802
-        t = theme()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
@@ -787,6 +790,10 @@ class SegmentedTabs(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._indicator = 0.0
         self._indicator_w = 0.0
+        self._pill = QRectF()
+        self._prev_key = ""
+        self._fade_t = 1.0
+        self._fade_anim: Optional[QVariantAnimation] = None
         self._anim: Optional[QVariantAnimation] = None
         self._badge_anims: Dict[str, float] = {}
         for key, label in items:
@@ -835,10 +842,13 @@ class SegmentedTabs(QWidget):
         for item in self._items:
             if item["key"] == key:
                 if self._current == key:
-                    self._snap_indicator()
+                    if not _anim_running(self._anim):
+                        self._snap_indicator()
                     return
+                self._prev_key = self._current
                 self._current = key
                 self._animate_indicator()
+                self._animate_fade()
                 self.update()
                 if emit:
                     self.changed.emit(key)
@@ -862,11 +872,32 @@ class SegmentedTabs(QWidget):
 
     def _snap_indicator(self) -> None:
         rects = self._rects()
+        _anim_stop(self._fade_anim)
+        self._fade_t = 1.0
+        self._prev_key = ""
         for i, item in enumerate(self._items):
             if item["key"] == self._current and i < len(rects):
                 self._indicator = rects[i].left()
                 self._indicator_w = rects[i].width()
+                self._pill = rects[i].adjusted(0, 2, 0, -2)
         self.update()
+
+    def _animate_fade(self) -> None:
+        _anim_stop(self._fade_anim)
+        self._fade_t = 0.0
+        anim = QVariantAnimation(self)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setDuration(220)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        def _on(value):
+            self._fade_t = float(value)
+            self.update()
+
+        anim.valueChanged.connect(_on)
+        self._fade_anim = anim
+        anim.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def _animate_indicator(self) -> None:
         rects = self._rects()
@@ -878,18 +909,27 @@ class SegmentedTabs(QWidget):
             return
         _anim_stop(self._anim)
         self._anim = QVariantAnimation(self)
-        start = QRectF(self._indicator, 0, self._indicator_w, 0)
+        start = QRectF(self._pill) if not self._pill.isNull() else QRectF(target)
+        end = QRectF(target.adjusted(0, 2, 0, -2))
         self._anim.setStartValue(start)
-        self._anim.setEndValue(QRectF(target.left(), 0, target.width(), 0))
+        self._anim.setEndValue(end)
         self._anim.setDuration(240)
         self._anim.setEasingCurve(QEasingCurve.Type.OutQuint)
         self._anim.valueChanged.connect(self._on_indicator)
+        self._anim.finished.connect(lambda: self._snap_pill_only(end))
         self._anim.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _snap_pill_only(self, rect: QRectF) -> None:
+        self._pill = QRectF(rect)
+        self._indicator = rect.left()
+        self._indicator_w = rect.width()
+        self.update()
 
     def _on_indicator(self, v) -> None:
         r = v
         self._indicator = r.left()
         self._indicator_w = r.width()
+        self._pill = QRectF(r)
         self.update()
 
     def showEvent(self, e):  # noqa: N802
@@ -931,10 +971,22 @@ class SegmentedTabs(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         rects = self._rects()
+        moving = _anim_running(self._anim) or self._fade_t < 0.999
         for i, (item, r) in enumerate(zip(self._items, rects)):
             active = item["key"] == self._current
+            if active:
+                hot = self._fade_t if self._prev_key else 1.0
+            elif self._prev_key == item["key"] and self._fade_t < 1.0:
+                hot = 1.0 - self._fade_t
+            else:
+                hot = 0.0
             if self._style == "pill":
-                if active:
+                # 选中的胶囊用动画中的实时矩形，跟手滑过去，而不是整块瞬移
+                if moving and not self._pill.isNull() and active:
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(C(t.accent_soft))
+                    p.drawRoundedRect(self._pill, 7, 7)
+                elif active:
                     p.setPen(Qt.PenStyle.NoPen)
                     p.setBrush(C(t.accent_soft))
                     p.drawRoundedRect(r.adjusted(0, 2, 0, -2), 7, 7)
@@ -951,7 +1003,8 @@ class SegmentedTabs(QWidget):
 
             p.setFont(self._font)
             # 选中项跟着主题色走：自动 = 原来的文字色，彩色 = 该强调色
-            col = C(t.accent) if active else C(t.text_dim if i == self._hover else t.text_faint)
+            base = C(t.text_dim if i == self._hover else t.text_faint)
+            col = _mix_colors(base, C(t.accent), hot) if hot > 0.001 else base
             x = r.left() + self._pad_h
             text_rect = QRectF(x, r.top(), r.width() - self._pad_h * 2, r.height())
             p.setPen(col)

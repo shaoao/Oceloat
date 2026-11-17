@@ -33,7 +33,7 @@ from .anim import stop as _anim_stop
 from .code_editor import CodeView
 from .codegen import LANGUAGES
 from .kv_editor import KVEditor
-from .store import CHANGELOG, STATE_FILE, VERSION, Store, body_mode, new_folder, uid
+from .store import CHANGELOG, STATE_FILE, VERSION, Store, body_mode, uid
 from .theme import ACCENTS, C, S, font, mono, theme
 from .widgets import (
     Button,
@@ -57,8 +57,23 @@ from .widgets import (
 # ---------------------------------------------------------------- 基类
 
 
+def _glass_everywhere() -> bool:
+    """设置里「所有窗口模糊且固定」是否开启。"""
+    from .store import Store
+
+    store = Store.active()
+    return bool(store is not None and store.settings.get("glass_all", False))
+
+
 class GlassDialog(QDialog):
-    """无边框圆角对话框，与主窗口同一套视觉语言。"""
+    """无边框圆角对话框，与主窗口同一套视觉语言。
+
+    默认：自动居中、可拖动、无背景模糊（普通小弹窗没必要挡视线）。
+    需要「模糊 + 不可拖动」的对话框（设置、导入导出）把 BLUR_FIXED 设成 True；
+    用户在设置里打开「所有窗口都模糊」后，所有对话框都会走这一套。
+    """
+
+    BLUR_FIXED = False
 
     def __init__(self, parent=None, width: int = 520, height: int = 320, title: str = ""):
         super().__init__(parent)
@@ -71,6 +86,8 @@ class GlassDialog(QDialog):
         self._root.setContentsMargins(0, 0, 0, 0)
         self._root.setSpacing(0)
         self._drag_pos: Optional[QPoint] = None
+        self._user_moved = False
+        self._fixed_mode = False
         self._backdrop_on = False
 
         self.title = title
@@ -103,9 +120,54 @@ class GlassDialog(QDialog):
         p.end()
 
     def mousePressEvent(self, e):
-        # 标题栏不再拖动窗口：模态框固定在父窗口正中，跟 macOS 的系统弹窗一致，
-        # 拖跑了反而会挡住正在看的内容。
+        # 默认窗口固定在父窗口正中（跟 macOS 系统弹窗一致）。只有「可拖动」的
+        # 普通弹窗才允许按住标题栏拖走；设置 / 导入导出这类大窗永远不动。
+        if (e.button() == Qt.MouseButton.LeftButton and not self._fixed_mode
+                and self.header.geometry().contains(e.position().toPoint())):
+            self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            e.accept()
+            return
         super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._drag_pos is not None and (e.buttons() & Qt.MouseButton.LeftButton):
+            self.move(e.globalPosition().toPoint() - self._drag_pos)
+            self._user_moved = True
+            e.accept()
+            return
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        self._drag_pos = None
+        super().mouseReleaseEvent(e)
+
+    def _place_center(self) -> None:
+        """把窗口摆到父窗口（没有父窗口就摆到屏幕）的正中央。
+
+        用 mapToGlobal(rect().center()) 而不是 frameGeometry：后者包含窗口边框
+        与平台给的摆放偏移，在无边框透明窗口上算出来的中心会整体偏十几到上百像素。
+        """
+        parent = self.parentWidget()
+        if parent is not None:
+            win = parent.window()
+            center = win.mapToGlobal(win.rect().center())
+            screen = QApplication.screenAt(center) or QApplication.primaryScreen()
+        else:
+            screen = QApplication.primaryScreen()
+            center = screen.availableGeometry().center() if screen is not None else QPoint(0, 0)
+        x = center.x() - self.width() // 2
+        y = center.y() - self.height() // 2
+        if screen is not None:
+            area = screen.availableGeometry()
+            x = max(area.left(), min(x, area.right() - self.width()))
+            y = max(area.top(), min(y, area.bottom() - self.height()))
+        self.move(x, y)
+
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        # 页面切换时对话框高度会变，保持「还在正中间」
+        if self.isVisible() and not self._user_moved:
+            self._place_center()
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key.Key_Escape:
@@ -122,8 +184,11 @@ class GlassDialog(QDialog):
             if nav is not None:
                 nav.sync_width()
                 nav.update()
-        # 背景高斯模糊：把父窗口当前画面模糊 + 压暗，模态感更强、层次更清楚
-        if not self._backdrop_on:
+        # 模糊 + 固定：设置窗口、导入导出窗口，或用户打开了「所有窗口都模糊」
+        self._fixed_mode = bool(self.BLUR_FIXED or _glass_everywhere())
+        if not self._user_moved:
+            self._place_center()
+        if self._fixed_mode and not self._backdrop_on:
             self._backdrop_on = True
             backdrop.acquire(self)
         fade_in(self, 140)
@@ -582,6 +647,8 @@ class ShortcutRow(QWidget):
 class SettingsDialog(GlassDialog):
     """统一的设置面板：通用 / 外观 / 快捷键 / 网络 / 环境变量 / 数据 / 更新内容 都在这一页。"""
 
+    BLUR_FIXED = True       # 设置窗口永远模糊 + 固定居中
+
     themeChanged = pyqtSignal(str)
     accentChanged = pyqtSignal(str)
     settingsChanged = pyqtSignal()
@@ -736,6 +803,8 @@ class SettingsDialog(GlassDialog):
 
         self.anim_switch = Switch(bool(s.get("animations", True)))
         self.anim_switch.toggled.connect(self._on_anim)
+        self.glass_switch = Switch(bool(s.get("glass_all", False)))
+        self.glass_switch.toggled.connect(self._on_glass)
         self.font_seg = SegmentedTabs([("10.5", "小"), ("11.8", "标准"), ("13", "大")],
                                       style="pill", height=26, font_size=11.5, pad_h=12)
         cur_size = str(s.get("code_font_size", 11.8))
@@ -744,6 +813,8 @@ class SettingsDialog(GlassDialog):
         self.font_seg.changed.connect(self._on_font_size)
         options = self._card(
             self._row("界面动效", "关闭后页面切换、悬停与响应到达不再播放动画。", self.anim_switch),
+            self._row("所有弹窗都模糊", "关闭时只有设置与导入导出窗口是模糊 + 不可拖动的；"
+                                   "开启后所有弹窗都这样。", self.glass_switch),
             self._row("代码字号", "响应体、请求体与代码片段的等宽字体大小。", self.font_seg),
         )
 
@@ -1356,6 +1427,12 @@ class SettingsDialog(GlassDialog):
         self.store.save()
         self.settingsChanged.emit()
 
+    def _on_glass(self, on: bool) -> None:
+        """所有弹窗是否都模糊 + 不可拖动（立即生效，下次弹窗就按新规则来）。"""
+        self.store.settings["glass_all"] = bool(on)
+        self.store.save()
+        self.settingsChanged.emit()
+
     def _on_font_size(self, value: str) -> None:
         from .code_editor import CodeView
 
@@ -1396,7 +1473,8 @@ class SettingsDialog(GlassDialog):
             except AttributeError:
                 pass
         for attr, key in (("redirect", "follow_redirects"), ("verify", "verify_ssl"),
-                          ("auto_name", "auto_name"), ("restore_session", "restore_session")):
+                          ("auto_name", "auto_name"), ("restore_session", "restore_session"),
+                          ("glass_switch", "glass_all")):
             wdg = getattr(self, attr, None)
             if wdg is not None:
                 s[key] = wdg.isChecked()
@@ -1873,26 +1951,58 @@ class WhatsNewDialog(GlassDialog):
 class PaletteList(QWidget):
     activated = pyqtSignal(int)
 
+    HEADER_H = 24
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.items: List[Dict[str, Any]] = []
         self.index = 0
         self._hover = -1
         self._hover_v = 0.0
+        self._tops: List[float] = []
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.row_h = 40
 
+    def row_height(self, item: Dict[str, Any]) -> int:
+        return self.HEADER_H if item.get("kind") == "header" else self.row_h
+
     def set_items(self, items: List[Dict[str, Any]]) -> None:
         self.items = items
-        self.index = 0
+        self.index = self.first_index()
         self._hover = -1
         self._hover_v = 0.0
-        self.setFixedHeight(max(1, len(items)) * self.row_h + 8)
+        y = 4.0
+        self._tops = []
+        for item in items:
+            self._tops.append(y)
+            y += self.row_height(item)
+        self.setFixedHeight(max(1, int(y + 4)))
         self.update()
 
+    def first_index(self) -> int:
+        for i, item in enumerate(self.items):
+            if item.get("kind") != "header":
+                return i
+        return 0
+
+    def step(self, delta: int) -> int:
+        """上下键跳过小标题，只在真正的条目之间移动。"""
+        i = self.index
+        for _ in range(len(self.items)):
+            i += delta
+            if i < 0 or i >= len(self.items):
+                return self.index
+            if self.items[i].get("kind") != "header":
+                self.index = i
+                return i
+        return self.index
+
     def _row_at(self, y: int) -> int:
-        return int((y - 4) // self.row_h)
+        for i, top in enumerate(self._tops):
+            if top <= y < top + self.row_height(self.items[i]):
+                return i
+        return -1
 
     def mouseMoveEvent(self, e):
         if not self.rect().contains(e.position().toPoint()):
@@ -1920,7 +2030,7 @@ class PaletteList(QWidget):
 
     def mouseReleaseEvent(self, e):
         idx = self._row_at(int(e.position().y()))
-        if 0 <= idx < len(self.items):
+        if 0 <= idx < len(self.items) and self.items[idx].get("kind") != "header":
             self.activated.emit(idx)
 
     def paintEvent(self, _e):
@@ -1936,7 +2046,17 @@ class PaletteList(QWidget):
             p.end()
             return
         for i, item in enumerate(self.items):
-            r = QRectF(6, 4 + i * self.row_h, self.width() - 12, self.row_h - 2)
+            top = self._tops[i] if i < len(self._tops) else 4 + i * self.row_h
+            h = self.row_height(item)
+            if item.get("kind") == "header":
+                # 分组小标题：只做视觉分隔，不可点、不能选
+                p.setFont(font(9.6, weight=QFont.Weight.DemiBold))
+                p.setPen(C(t.text_faint))
+                p.drawText(QRectF(14, top, self.width() - 28, h),
+                           int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                           i18n.tr(item.get("title") or ""))
+                continue
+            r = QRectF(6, top, self.width() - 12, h - 2)
             active = i == self.index
             hovered = i == self._hover
             if hovered:
@@ -2011,6 +2131,7 @@ class CommandPalette(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.hide()
         self._opacity = 0.0
+        self._slide = 0.0
 
         self.card = Card(radius=13, parent=self)
         cl = QVBoxLayout(self.card)
@@ -2048,55 +2169,53 @@ class CommandPalette(QWidget):
         self.show()
         self.raise_()
         self.card.setFixedWidth(min(620, parent.width() - 80))
-        self._layout_card()
+        # 每次打开只收集一次（集合树可能有几百条），之后按键只做过滤
+        self._cache = {True: self._collect(True), False: self._collect(False)}
         self.edit.clear()
         self._filter("")
+        self._slide = 14.0
         bar = self.scroll.verticalScrollBar()
         if bar is not None:
             bar.setValue(0)
         self.edit.setFocus()
         animate(self, 0.0, 1.0, 130, self._set_opacity)
+        animate(self, 14.0, 0.0, 170, self._set_slide)
+
+    def _set_slide(self, v):
+        self._slide = float(v)
+        self.card.move(self.card.x(), self._card_y())
 
     def _set_opacity(self, v):
         self._opacity = float(v)
         self.update()
 
-    # 搜索框 + 分隔线 + 内外边距固定占掉的高度（写死一个常量，卡片高度才能
-    # 正好落在整行上 —— 否则最下面一行会被卡片边缘切掉半截）
-    CARD_CHROME = 67
+    def _card_y(self) -> int:
+        h = self.card.height() or self.card.sizeHint().height()
+        y = (self.height() - h) // 2 + int(getattr(self, "_slide", 0.0))
+        return max(28, min(y, max(28, self.height() - h - 28)))
 
     def _layout_card(self) -> None:
-        row_h = self.list.row_h
-        total = max(1, len(self._results))
-        x = (self.width() - self.card.width()) // 2
-        y = int(self.height() * 0.16)
-        # 卡片最高到窗口 4/5，超出的行交给滚动区；能放几行就只显示几行，
-        # 保证底边永远落在行与行之间
-        max_h = max(180, self.height() - 2 * y)
-        fits = max(1, (max_h - self.CARD_CHROME - 8) // row_h)
-        shown = min(total, fits)
-        self.list.setFixedHeight(total * row_h + 8)
-        # 视口高度直接按「整行」给足，卡片高度再让布局自己算 —— 差几个像素
-        # 就会把最后一行切掉半截，手工累加边距永远对不准
-        self.scroll.setFixedHeight(shown * row_h + 8)
+        # 卡片永远摆在正中间（上下左右都居中）：以前压在 16% 高度，
+        # 大屏上看着像是「贴在顶上下不来」。
+        max_h = max(180, self.height() - 160)
+        self.scroll.setFixedHeight(min(self.list.height(), max_h))
         self.card.setFixedHeight(self.card.sizeHint().height())
-        self.card.move(x, y)
+        self.card.move((self.width() - self.card.width()) // 2, self._card_y())
         self._scroll_to(self.list.index)
 
     def _scroll_to(self, index: int) -> None:
-        if not self._results:
+        if not (0 <= index < len(self.list._tops)):
             return
         bar = self.scroll.verticalScrollBar()
         if bar is None:
             return
-        row_h = self.list.row_h
-        top = 4 + max(0, index) * row_h
-        bottom = top + row_h
+        top = self.list._tops[index]
+        bottom = top + self.list.row_height(self.list.items[index])
         view = self.scroll.viewport().height()
         if top < bar.value():
-            bar.setValue(top)
+            bar.setValue(int(top) - 4)
         elif bottom > bar.value() + view:
-            bar.setValue(bottom - view)
+            bar.setValue(int(bottom - view) + 4)
 
     def close(self) -> None:
         animate(self, 1.0, 0.0, 100, self._set_opacity, on_done=self.hide)
@@ -2113,12 +2232,12 @@ class CommandPalette(QWidget):
     def keyPressEvent(self, e):
         if e.key() == Qt.Key.Key_Escape:
             self.close()
-        elif e.key() in (Qt.Key.Key_Down,):
-            self.list.index = min(self.list.index + 1, len(self._results) - 1)
+        elif e.key() == Qt.Key.Key_Down:
+            self.list.step(1)
             self.list.update()
             self._scroll_to(self.list.index)
-        elif e.key() in (Qt.Key.Key_Up,):
-            self.list.index = max(self.list.index - 1, 0)
+        elif e.key() == Qt.Key.Key_Up:
+            self.list.step(-1)
             self.list.update()
             self._scroll_to(self.list.index)
         else:
@@ -2135,11 +2254,35 @@ class CommandPalette(QWidget):
         return super().eventFilter(obj, event)
 
     # -------------------------------------------------- 数据
-    def _collect(self) -> List[Dict[str, Any]]:
-        items = []
-        for key, title, icon_name, hint in self.ACTIONS:
-            items.append({"kind": "action", "key": key, "title": i18n.tr(title),
-                          "icon": icon_name, "hint": hint, "subtitle": ""})
+    PINNED = 5
+
+    def _hits(self) -> Dict[str, int]:
+        return self.store.data.setdefault("palette_hits", {})
+
+    def _action_item(self, action) -> Dict[str, Any]:
+        key, title, icon_name, hint = action
+        return {"kind": "action", "key": key, "title": i18n.tr(title),
+                "icon": icon_name, "hint": hint, "subtitle": ""}
+
+    def _pinned_actions(self) -> List[tuple]:
+        """用得最多的 5 条置顶；还没用过就按默认顺序取前 5 条。"""
+        hits = self._hits()
+        order = {a[0]: i for i, a in enumerate(self.ACTIONS)}
+        return sorted(self.ACTIONS,
+                      key=lambda a: (-int(hits.get(a[0], 0)), order[a[0]]))[:self.PINNED]
+
+    def _collect(self, with_headers: bool = True) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        pinned = self._pinned_actions()
+        rest = [a for a in self.ACTIONS if a not in pinned]
+        if with_headers:
+            items.append({"kind": "header", "title": "常用", "icon": "", "hint": "",
+                          "subtitle": ""})
+        items.extend(self._action_item(a) for a in pinned)
+        if with_headers and rest:
+            items.append({"kind": "header", "title": "全部命令", "icon": "", "hint": "",
+                          "subtitle": ""})
+        items.extend(self._action_item(a) for a in rest)
         for env in self.store.environments:
             active = env.get("id") == self.store.data.get("active_env")
             items.append({
@@ -2161,7 +2304,11 @@ class CommandPalette(QWidget):
 
     def _filter(self, text: str) -> None:
         query = (text or "").strip().lower()
-        all_items = self._collect()
+        cache = getattr(self, "_cache", None)
+        if cache:
+            all_items = cache[not query]
+        else:
+            all_items = self._collect(with_headers=not query)
         if query:
             self._results = [i for i in all_items
                              if query in i["title"].lower() or query in i["subtitle"].lower()]
@@ -2175,6 +2322,13 @@ class CommandPalette(QWidget):
         if not (0 <= index < len(self._results)):
             return
         item = self._results[index]
+        if item.get("kind") == "header":
+            return
+        if item.get("kind") == "action":
+            # 记住使用频率，「常用」那五项就会越用越准
+            hits = self._hits()
+            hits[item["key"]] = int(hits.get(item["key"], 0)) + 1
+            self.store.save()
         self.close()
         self.execute.emit(item["kind"], item.get("node") or item["key"])
 
@@ -2391,8 +2545,9 @@ class DonePage(QWidget):
         lay.setSpacing(0)
 
         self.badge = _SuccessBadge()
-        lay.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignHCenter)
-        lay.addSpacing(12)
+        # 用两侧弹簧包起来居中，比 AlignHCenter 更稳（页面宽度变化时不会偏）
+        lay.addWidget(HBox(1, self.badge, 1))
+        lay.addSpacing(10)
 
         self.title = Label("", 15, theme().text, weight=QFont.Weight.DemiBold)
         self.title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -2458,39 +2613,69 @@ class DonePage(QWidget):
 
 
 class _SuccessBadge(QWidget):
-    """圆形底色里的对勾；出现时做一次轻微的缩放淡入。"""
+    """圆形底色里的对勾：出现时缩放回落 + 一圈扩散光晕，左右严格居中。
+
+    注意对勾必须用 icons.draw_centered 画：QPixmap.width() 是设备像素，
+    手写 `width/2 - pm.width()/2` 会让对勾整体偏左十几个像素（用户看到的
+    「动画 logo 错位」就是这个）。
+    """
+
+    SIZE = 64
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(58, 58)
+        self.setFixedSize(self.SIZE, self.SIZE)
         self._scale = 1.0
-        self._alpha = 1.0
+        self._halo = 1.0
         self._anim: Optional[QVariantAnimation] = None
+        self._halo_anim: Optional[QVariantAnimation] = None
 
     def restart(self) -> None:
         _anim_stop(self._anim)
-        anim = QVariantAnimation(self)
-        anim.setStartValue(0.72)
-        anim.setEndValue(1.0)
-        anim.setDuration(240)
-        anim.setEasingCurve(QEasingCurve.Type.OutBack)
+        _anim_stop(self._halo_anim)
+        pop = QVariantAnimation(self)
+        pop.setStartValue(0.55)
+        pop.setEndValue(1.0)
+        pop.setDuration(300)
+        pop.setEasingCurve(QEasingCurve.Type.OutBack)
+        pop.valueChanged.connect(self._on_scale)
+        self._anim = pop
+        pop.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
 
-        def _on(v):
-            self._scale = float(v)
-            self.update()
+        halo = QVariantAnimation(self)
+        halo.setStartValue(0.0)
+        halo.setEndValue(1.0)
+        halo.setDuration(620)
+        halo.setEasingCurve(QEasingCurve.Type.OutCubic)
+        halo.valueChanged.connect(self._on_halo)
+        self._halo_anim = halo
+        halo.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
 
-        anim.valueChanged.connect(_on)
-        self._anim = anim
-        anim.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
+    def _on_scale(self, v):
+        self._scale = float(v)
+        self.update()
+
+    def _on_halo(self, v):
+        self._halo = float(v)
+        self.update()
 
     def paintEvent(self, _e):
         t = theme()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        side = 54 * self._scale
-        r = QRectF((self.width() - side) / 2, (self.height() - side) / 2, side, side)
+        cx, cy = self.width() / 2, self.height() / 2
+        side = 50 * max(0.4, self._scale)
+        r = QRectF(cx - side / 2, cy - side / 2, side, side)
+        # 扩散光晕：从本体边缘向外散开并淡出，收尾后完全消失
+        if self._halo < 0.999:
+            grow = 8 + 16 * self._halo
+            ring = QColor(C(t.success))
+            ring.setAlpha(int(90 * (1.0 - self._halo)))
+            p.setPen(QPen(ring, 1.2))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(r.adjusted(-grow, -grow, grow, grow))
         fill = QColor(C(t.success))
-        fill.setAlpha(30)
+        fill.setAlpha(28)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(fill)
         p.drawEllipse(r)
@@ -2499,9 +2684,8 @@ class _SuccessBadge(QWidget):
         p.setPen(QPen(edge, 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(r.adjusted(0.5, 0.5, -0.5, -0.5))
-        pm = icons.pixmap("check", t.success, int(26 * self._scale), 2.6)
-        p.drawPixmap(QPointF(self.width() / 2 - pm.width() / 2,
-                             self.height() / 2 - pm.height() / 2), pm)
+        icon_size = max(12, int(25 * max(0.55, self._scale)))
+        icons.draw_centered(p, icons.pixmap("check", t.success, icon_size, 2.6), cx, cy)
         p.end()
 
 
@@ -2511,15 +2695,21 @@ class TransferDialog(GlassDialog):
     头部左侧的返回箭头只在第二层出现；所有操作都在这个框里，不会一层层弹新窗口。
     """
 
+    BLUR_FIXED = True       # 导入导出窗口永远模糊 + 固定居中
+
     imported = pyqtSignal(int)      # 导入的请求条数
+    _urlDone = pyqtSignal(str, str)  # (下载到的文本, 错误)
 
     def __init__(self, store: Store, parent=None):
         from .transfer import EXPORT_TARGETS, IMPORT_SOURCES
 
-        super().__init__(parent, 580, 640, i18n.tr("集合"))
+        super().__init__(parent, 580, 660, i18n.tr("集合"))
         self.store = store
         self._source = ""
         self._pending: Optional[Tuple[List[Dict[str, Any]], str, str]] = None
+        self._last_name = ""            # 最近一次导入的集合名（导出默认文件名用它）
+        self._pending_name = ""
+        self._urlDone.connect(self._on_url_text)
         self._import_sources = IMPORT_SOURCES
         self._export_targets = EXPORT_TARGETS
         self._done_title = "完成"
@@ -2562,6 +2752,10 @@ class TransferDialog(GlassDialog):
                            "自动识别 JSON 集合或 cURL 命令，直接粘过来")
         clip.clicked.connect(self._import_clipboard)
         lay.addWidget(clip)
+        url_row = TransferRow("link", "从 URL 导入",
+                              "填一个远程 JSON / YAML 地址，自动下载并识别来源")
+        url_row.clicked.connect(self._import_url)
+        lay.addWidget(url_row)
         lay.addStretch(1)
         lay.addWidget(Divider())
         export_row = TransferRow("download", "导出全部集合",
@@ -2626,6 +2820,7 @@ class TransferDialog(GlassDialog):
         self.file_desc.setText(i18n.tr(descs.get(key, "")))
         self.file_status.setText("")
         self.import_btn.setEnabled(False)
+        self._show_zone(True)
         self._show_page("file")
 
     def _pick_file(self) -> None:
@@ -2638,8 +2833,6 @@ class TransferDialog(GlassDialog):
     def _load_path(self, path: str) -> None:
         from pathlib import Path
 
-        from .transfer import FORMAT_LABELS, environments_of, parse_text, summarize
-
         try:
             text = Path(path).read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -2651,14 +2844,23 @@ class TransferDialog(GlassDialog):
         except Exception as exc:  # noqa: BLE001
             self._fail(i18n.trf("读取失败：{err}", err=exc))
             return
-        nodes, fmt, err = parse_text(text)
+        self._load_text(text, Path(path).name, Path(path).stem)
+
+    def _load_text(self, text: str, display_name: str, stem: str = "") -> None:
+        from .transfer import FORMAT_LABELS, environments_of, parse_text, summarize
+
+        nodes, fmt, err = parse_text(text, fallback_name=stem)
         if err or not nodes:
             self._fail(err or i18n.tr("文件里没有可导入的请求"))
             return
         stats = summarize(nodes)
         envs = environments_of(text)
         self._pending = (nodes, fmt, text)
-        self.zone.filename = Path(path).name
+        self._pending_name = ""
+        if len(nodes) == 1 and nodes[0].get("type") == "folder":
+            self._pending_name = nodes[0].get("name") or ""
+        self._show_zone(True)
+        self.zone.filename = display_name
         self.zone.update()
         label = FORMAT_LABELS.get(fmt, fmt)
         bits = [i18n.trf("{n} 个请求", n=stats["requests"])]
@@ -2670,10 +2872,73 @@ class TransferDialog(GlassDialog):
                 bits.append(i18n.trf("{n} 个{name}", n=stats[key], name=i18n.tr(name)))
         if envs:
             bits.append(i18n.trf("{n} 套环境变量", n=len(envs)))
+        if self._pending_name:
+            bits.append(i18n.trf("集合名「{name}」", name=self._pending_name))
         self.file_status.setText(i18n.trf("✓ 已识别 {fmt}：{detail}",
                                           fmt=label, detail=" · ".join(bits)))
         self.file_status.setStyleSheet(f"color: {theme().success}; background: transparent;")
         self.import_btn.setEnabled(True)
+
+    def _show_zone(self, show: bool) -> None:
+        """选文件页的投放区 / 提示 / 主按钮一起显隐（URL 下载与剪贴板提示共用）。"""
+        for w in (getattr(self, "zone", None), getattr(self, "file_hint", None),
+                  getattr(self, "import_btn", None)):
+            if w is not None:
+                w.setVisible(show)
+
+    def _import_url(self) -> None:
+        """远程地址导入：填一个链接，下载后走和本地文件完全一样的识别流程。"""
+        dlg = PromptDialog(i18n.tr("从 URL 导入"), i18n.tr("集合 JSON / YAML 的地址"), "", self)
+        dlg.edit.setText("https://" if not QApplication.clipboard().text().startswith("http")
+                         else QApplication.clipboard().text().strip())
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        url = dlg.value().strip()
+        if not url.lower().startswith(("http://", "https://")):
+            self.toast_hint(i18n.tr("地址要以 http:// 或 https:// 开头"))
+            return
+        self._source = "url"
+        self.file_title.setText(i18n.tr("从 URL 导入"))
+        self.file_desc.setText(url)
+        self.file_status.setText(i18n.tr("正在下载…"))
+        self.file_status.setStyleSheet(f"color: {theme().text_faint}; background: transparent;")
+        self.import_btn.setEnabled(False)
+        self._show_zone(False)
+        self._show_page("file")
+        import threading
+
+        def worker():
+            text, error = "", ""
+            try:
+                import urllib.request
+
+                req = urllib.request.Request(url, headers={"User-Agent": "Ocelot"})
+                with urllib.request.urlopen(req, timeout=20) as resp:   # noqa: S310
+                    raw = resp.read(8 * 1024 * 1024 + 1)
+                if len(raw) > 8 * 1024 * 1024:
+                    error = "文件超过 8 MB，请先下载到本地再导入"
+                else:
+                    text = raw.decode("utf-8", "replace")
+            except Exception as exc:      # noqa: BLE001
+                error = str(exc)
+            self._urlDone.emit(text, error)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_url_text(self, text: str, error: str) -> None:
+        if error or not text.strip():
+            self._fail(i18n.trf("下载失败：{err}", err=error or "内容为空"))
+            self._show_zone(True)
+            return
+        stem = ""
+        try:
+            from urllib.parse import urlparse
+
+            tail = urlparse(self.file_desc.text()).path.rstrip("/").split("/")[-1]
+            stem = tail.rsplit(".", 1)[0] if "." in tail else tail
+        except Exception:      # noqa: BLE001
+            stem = ""
+        self._load_text(text, stem or i18n.tr("远程集合"), stem)
 
     def _fail(self, message: str) -> None:
         self._pending = None
@@ -2699,6 +2964,7 @@ class TransferDialog(GlassDialog):
             existing.add(env.get("name"))
             added_envs += 1
         self._pending = None
+        self._last_name = self._pending_name
         self.store.save()
         stats = summarize(nodes)
         self.imported.emit(stats["requests"])
@@ -2723,8 +2989,11 @@ class TransferDialog(GlassDialog):
             rows.append(("layers", "环境变量", str(envs)))
         self._done_title = i18n.tr("导入完成")
         self._done_height = 290 + len(rows) * 30
-        self.done.reset(i18n.trf("已导入 {n} 个请求", n=stats["requests"]),
-                        i18n.trf("来自 {fmt} · 已追加到集合列表末尾", fmt=fmt_label),
+        sub = i18n.trf("来自 {fmt} · 已追加到集合列表末尾", fmt=fmt_label)
+        if self._last_name:
+            sub = i18n.trf("集合「{name}」来自 {fmt}，已追加到侧栏末尾",
+                           name=self._last_name, fmt=fmt_label)
+        self.done.reset(i18n.trf("已导入 {n} 个请求", n=stats["requests"]), sub,
                         i18n.tr("完成"))
         self.done.secondary.hide()
         for icon_name, name, value in rows:
@@ -2750,10 +3019,11 @@ class TransferDialog(GlassDialog):
             self.imported.emit(1)
             self.toast_hint(i18n.tr("已从剪贴板导入 1 个请求"))
             return
-        nodes, _fmt, err = parse_text(text)
+        nodes, _fmt, err = parse_text(text, fallback_name=i18n.tr("剪贴板集合"))
         if err or not nodes:
             self.toast_hint(err or i18n.tr("剪贴板内容不是可识别的集合"))
             return
+        self._last_name = nodes[0].get("name", "") if len(nodes) == 1 else ""
         self.store.collections.extend(nodes)
         self.store.save()
         total = count_requests(nodes)
@@ -2766,16 +3036,12 @@ class TransferDialog(GlassDialog):
         self.file_desc.setText(text)
         self.file_status.setText("")
         self._show_page("file")
-        self.zone.hide()
-        self.file_hint.hide()
-        self.import_btn.hide()
+        self._show_zone(False)
         QTimer.singleShot(1200, self._restore_clipboard_page)
 
     def _restore_clipboard_page(self) -> None:
         try:
-            self.zone.show()
-            self.file_hint.show()
-            self.import_btn.show()
+            self._show_zone(True)
             self._show_page("import")
         except RuntimeError:      # 对话框已经被关掉
             return
@@ -2856,7 +3122,6 @@ class TransferDialog(GlassDialog):
                 row.setCursor(Qt.CursorShape.ArrowCursor)
 
     def _show_export_done(self, path: str, size: int, key: str) -> None:
-        import os
         from pathlib import Path
 
         from .transfer import EXPORT_TARGETS
@@ -2898,10 +3163,20 @@ class TransferDialog(GlassDialog):
         except Exception:      # noqa: BLE001
             pass
 
+    def _export_stem(self) -> str:
+        """导出默认文件名：就一个集合时用集合（目录）名，否则用最近导入的名字。"""
+        import re
+
+        names = [str(c.get("name") or "").strip() for c in self.store.collections
+                 if str(c.get("name") or "").strip()]
+        stem = names[0] if len(names) == 1 else (self._last_name or "")
+        stem = re.sub(r'[\\/:*?"<>|\n\r\t]+', "-", stem).strip(" .-")
+        return stem[:60] or "ocelot-collection"
+
     def _do_export(self, key: str) -> None:
         from .transfer import EXT, to_har, to_ocelot, to_openapi, to_postman, to_yaml
 
-        default = "ocelot-collection" + EXT.get(key, ".json")
+        default = self._export_stem() + EXT.get(key, ".json")
         suffix = "YAML (*.yaml)" if key == "openapi-yaml" else (
             "HAR (*.har)" if key == "har" else "JSON (*.json)")
         path, _ = QFileDialog.getSaveFileName(self, i18n.tr("导出集合"), default, suffix)
@@ -2938,8 +3213,12 @@ class TransferDialog(GlassDialog):
         # 高度跟着内容走：列表页最高，选文件 / 导出页短一些，免得中间空一大块
         if key == "export":
             self._refresh_export_summary()
-        height = {"import": 640, "file": 402, "export": 486,
+        height = {"import": 660, "file": 430, "export": 486,
                   "done": self._done_height}.get(key, 620)
+        # 小屏上别让窗口比屏幕还高（矮屏笔记本 768 高度很常见）
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            height = min(height, max(360, screen.availableGeometry().height() - 80))
         if self.height() != height:
             self.resize(self.width(), height)
 

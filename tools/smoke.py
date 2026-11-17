@@ -20,6 +20,7 @@ from app.code_editor import CodeView  # noqa: E402
 from app.codegen import LANGUAGES, to_curl, to_js, to_python  # noqa: E402
 from PyQt6.QtGui import QKeyEvent  # noqa: E402
 from app.main_window import MainWindow  # noqa: E402
+from app.anim import running as _anim_running  # noqa: E402
 from app.store import Store, new_request, resolve_vars  # noqa: E402
 from app.theme import apply_theme, theme_by_name  # noqa: E402
 
@@ -2465,7 +2466,20 @@ def main() -> int:
               stats["requests"] == 3 and stats["folders"] == 2 and stats["post"] == 1
               and stats["auth"] == 1, str(stats))
         plain, _f, _e = transfer.parse_text(_json.dumps(pm, ensure_ascii=False))
-        check("单份集合不额外套文件夹", transfer.summarize(plain)["folders"] == 1)
+        check("单份集合按集合名建目录（不再散在根上）",
+              len(plain) == 1 and plain[0].get("type") == "folder"
+              and plain[0].get("name") == "Demo", str(plain[:1])[:120])
+        check("目录里保留原有的文件夹层级",
+              any(c.get("name") == "Folder A" for c in plain[0].get("children") or []))
+        single = _json.dumps(pm["item"][1], ensure_ascii=False)
+        one, _f, _e = transfer.parse_text(single)
+        check("单个请求的 JSON 就是一条请求，不套目录",
+              len(one) == 1 and one[0].get("type") == "request", str(one[:1])[:80])
+        named, _f, _e = transfer.parse_text(
+            _json.dumps({k: v for k, v in pm.items() if k != "info"}, ensure_ascii=False),
+            fallback_name="my-export")
+        check("缺集合名时用文件名兜底", named and named[0].get("name") == "my-export",
+              str(named[:1])[:80])
 
         # 结果页：导入后跳到 done 并列出明细
         dlg = TransferDialog(w.store, w)
@@ -2488,6 +2502,28 @@ def main() -> int:
               abs(ts._indicator.width() - act.width()) < 0.5
               and abs(ts._indicator.x() - act.x()) < 0.5,
               f"{ts._indicator.width():.1f} vs {act.width():.1f}")
+
+        # 点标签会 set_current 两次（点击 + 回调），第二次不能把动画按住
+        ts.add_tab({"id": "tabx1", "title": "One", "method": "GET"}, activate=True)
+        ts.add_tab({"id": "tabx2", "title": "Two", "method": "GET"}, activate=True)
+        ts.set_current("tabx1")
+        check("切标签会起动画", ts._ind_anim is not None and _anim_running(ts._ind_anim),
+              "动画没起来")
+        ts.set_current("tabx1")          # 模拟回调里的二次调用
+        check("二次 set_current 不会掐掉动画",
+              ts._ind_anim is not None and _anim_running(ts._ind_anim), "动画被停掉了")
+        check("切换时有高亮淡入进度", ts._prev_id == "tabx2", str(ts._prev_id))
+        ts.set_current("tabx1", animate=False)
+        ts.remove_tab("tabx2")
+        ts.remove_tab("tabx1")
+
+        # 集合 / 历史 的胶囊也要滑过去，而不是整块瞬移
+        seg = w.sidebar.seg
+        seg.set_current("history")
+        check("分段控件切换会起动画",
+              seg._anim is not None and _anim_running(seg._anim), "没有滑动动画")
+        check("分段控件文字跟着淡入", seg._fade_t < 0.999, f"fade={seg._fade_t:.2f}")
+        seg.set_current("collections", emit=False)
 
         # 搜索框吃掉剩余宽度，紧贴导入导出按钮
         sb = w.sidebar
@@ -2521,6 +2557,110 @@ def main() -> int:
             w.editor.urlbar.method._choose("GET")
             app.processEvents()
             check("改回来后依然同步", (w.store.find(req_node["id"]) or {}).get("method") == "GET")
+
+        # 弹窗策略：设置 / 导入导出模糊且固定，其余默认不模糊、可拖动
+        from app.dialogs import PromptDialog, SettingsDialog, TransferDialog
+
+        w.store.settings["glass_all"] = False
+        small = PromptDialog("重命名", "名字", "x", w)
+        small.show()
+        app.processEvents()
+        check("普通弹窗默认不模糊", not small._backdrop_on and not small._fixed_mode)
+        check("普通弹窗可以拖动", not small._fixed_mode)
+        # 居中：以父窗口中心为准，并夹在屏幕可视区内
+        area = app.primaryScreen().availableGeometry()
+        gcenter = w.mapToGlobal(w.rect().center())
+        g = small.geometry()
+        exp_x = min(max(gcenter.x() - g.width() // 2, area.left()),
+                    area.right() - g.width())
+        exp_y = min(max(gcenter.y() - g.height() // 2, area.top()),
+                    area.bottom() - g.height())
+        check("弹窗默认居中", abs(g.x() - exp_x) <= 2 and abs(g.y() - exp_y) <= 2,
+              f"{g} 期望 ({exp_x},{exp_y})")
+        small.close()
+
+        sd = SettingsDialog(w.store, w)
+        sd.show()
+        app.processEvents()
+        check("设置窗口模糊且不可拖动", sd._fixed_mode and sd._backdrop_on)
+        sd.close()
+
+        # 可拖动：按住标题栏往下拖 40px，窗口应该真的跟着动；固定模式下则不动
+        from PyQt6.QtGui import QMouseEvent
+
+        def drag(dlg, dy=40):
+            from PyQt6.QtCore import QPointF
+
+            center = dlg.header.rect().center()
+            local = QPointF(dlg.header.mapTo(dlg, center))
+            press = QMouseEvent(QEvent.Type.MouseButtonPress, local,
+                                QPointF(dlg.mapToGlobal(center)), Qt.MouseButton.LeftButton,
+                                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+            move = QMouseEvent(QEvent.Type.MouseMove, local + QPointF(0, dy),
+                               QPointF(dlg.mapToGlobal(center)) + QPointF(0, dy),
+                               Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+                               Qt.KeyboardModifier.NoModifier)
+            dlg.mousePressEvent(press)
+            dlg.mouseMoveEvent(move)
+            dlg.mouseReleaseEvent(move)
+
+        movable = PromptDialog("重命名", "名字", "x", w)
+        movable.show()
+        app.processEvents()
+        before = movable.pos()
+        drag(movable)
+        check("可拖动弹窗能跟着鼠标移动", movable.pos().y() != before.y(),
+              f"{before} -> {movable.pos()}")
+        movable.close()
+
+        fixed = SettingsDialog(w.store, w)
+        fixed.show()
+        app.processEvents()
+        before = fixed.pos()
+        drag(fixed)
+        check("模糊 + 固定窗口拖不动", fixed.pos() == before, f"{before} -> {fixed.pos()}")
+        fixed.close()
+
+        w.store.settings["glass_all"] = True
+        small2 = PromptDialog("重命名", "名字", "x", w)
+        small2.show()
+        app.processEvents()
+        check("打开「所有弹窗都模糊」后普通弹窗也模糊", small2._fixed_mode and small2._backdrop_on)
+        small2.close()
+        w.store.settings["glass_all"] = False
+        app.processEvents()
+
+        # URL 导入：下载到的文本走和本地文件一样的识别流程
+        dlg2 = TransferDialog(w.store, w)
+        dlg2._choose_source("url")
+        dlg2._on_url_text(_json.dumps(pm, ensure_ascii=False), "")
+        check("URL 导入能识别并给出集合名",
+              dlg2._pending is not None and dlg2._pending_name == "Demo",
+              dlg2.file_status.text())
+        check("URL 下载失败时给出错误提示",
+              (dlg2._on_url_text("", "timeout")) or "下载失败" in dlg2.file_status.text())
+
+        # 命令面板：常用五条按使用频率排序，其余归到「全部命令」
+        w.store.data["palette_hits"] = {"settings": 7, "send": 3}
+        pinned = [a[0] for a in w.palette._pinned_actions()]
+        check("命令面板常用五项按频率置顶",
+              len(pinned) == 5 and pinned[0] == "settings" and pinned[1] == "send",
+              str(pinned))
+        w.palette.open()
+        app.processEvents()
+        heads = [i.get("title") for i in w.palette._results if i.get("kind") == "header"]
+        check("命令面板有「常用 / 全部命令」分组", heads == ["常用", "全部命令"], str(heads))
+        w.palette.close()
+        w.store.data["palette_hits"] = {}
+
+        # 导出默认文件名 = 集合（目录）名，单集合时不再写死 ocelot-collection
+        saved = list(w.store.collections)
+        w.store.data["collections"] = [{"id": "c1", "type": "folder", "name": "Demo/API: v2",
+                                        "open": True, "children": []}]
+        check("导出默认名用集合名并过滤非法字符",
+              dlg2._export_stem() == "Demo-API- v2", dlg2._export_stem())
+        w.store.data["collections"] = saved
+        dlg2.close()
         return 0
 
     def finish():

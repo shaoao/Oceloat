@@ -13,10 +13,12 @@ Ocelot 是一个为 macOS 写的 API 调试工具，Python + PyQt6 实现，窗�
 - 本地 Mock：在自己电脑上起一个 HTTP 服务，路由、状态码、延迟、返回内容都由你定，断网也能调
 - 出文档：把一次请求连同响应生成一份 Markdown，带代码示例，可以直接发给别人
 - 存起来复用：集合、多环境变量、历史记录、十种语言的代码生成、导入 cURL 和 Postman
+- 命令面板（⌘K）：常用五条按使用频率置顶，下面是全部命令、环境切换和请求跳转
 - 跑脚本：前置 / 后置 JavaScript，能改请求、读响应、写环境变量、写断言，输出都进响应面板的「控制台」
 - 互通：一键在 Ocelot JSON / Postman / Apifox / Hoppscotch / Insomnia / OpenAPI（JSON、YAML）/ HAR 之间导入导出，
   Ocelot JSON 就是 Postman v2.1 加一层 x-ocelot 元数据，别的工具直接能读，导回来也不丢脚本和认证；
-  导入前先告诉你识别成什么格式、几个请求，导入后有一页明细清单
+  导入前先告诉你识别成什么格式、几个请求，导入后有一页明细清单；
+  也能直接从剪贴板或远程 URL 拉一份 JSON / YAML 进来，集合会按文件里的名字建成目录
 - 云同步：用 Turso 存一份快照，换台电脑能拉回来；改名、改请求都会自动同步
 
 其余的功能在软件里点一遍基本能看见，这里就不一条条列了。
@@ -119,7 +121,7 @@ app/store.py          数据和设置，存在一个 JSON 里
 跑测试和截图：
 
 ```bash
-python3 tools/smoke.py         # 395 项检查，会真的起一个本地 HTTP 服务
+python3 tools/smoke.py         # 467 项检查，会真的起一个本地 HTTP 服务
 python3 tools/readme_shots.py  # 重新生成 README 里的截图，输出到 docs/
 ```
 

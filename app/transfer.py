@@ -413,6 +413,45 @@ def _mk_request(name: str, method: str, url: str, **fields) -> Dict[str, Any]:
     return req
 
 
+# 导出时写死的通用名：导入时不要拿它当集合名（否则每次往返都多一层「Ocelot Collection」）
+_GENERIC_NAMES = {
+    "ocelot collection", "ocelot api", "imported", "collection", "collections",
+    "untitled collection", "postman collection", "api collection", "new collection",
+}
+
+
+def collection_name(*candidates: Any) -> str:
+    """从若干候选里挑一个像样的集合名：优先非通用名，其次任意非空，最后空串。"""
+    texts = [str(c or "").strip() for c in candidates]
+    for text in texts:
+        if text and text.lower() not in _GENERIC_NAMES:
+            return text[:80]
+    for text in texts:
+        if text:
+            return text[:80]
+    return ""
+
+
+def wrap_collection(items: List[Dict[str, Any]], name: Any, fallback: str = "") -> List[Dict[str, Any]]:
+    """把一份集合包成同名文件夹（集合在侧栏里就该是一个目录）。
+
+    - 只有一个请求、且没有任何集合信息 → 保持单条请求，不套壳；
+    - 里面已经是一个同名文件夹 → 不重复套。
+    """
+    nodes = [x for x in items if x]
+    if not nodes:
+        return []
+    title = collection_name(name, fallback)
+    if not title:
+        return nodes
+    if len(nodes) == 1 and nodes[0].get("type") == "folder" and \
+            (nodes[0].get("name") or "").strip() == title:
+        return nodes
+    folder = new_folder(title)
+    folder["children"] = nodes
+    return [folder]
+
+
 def _from_postman_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if "item" in item:
         folder = new_folder(str(item.get("name") or "Folder"))
@@ -536,7 +575,7 @@ def _import_postman_auth(auth: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _from_hoppscotch(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _from_hoppscotch(data: Any, fallback: str = "") -> List[Dict[str, Any]]:
     def convert_requests(requests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out = []
         for item in requests or []:
@@ -575,14 +614,14 @@ def _from_hoppscotch(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             out.append(node)
         return out
 
+    colls = [c for c in (data if isinstance(data, list) else [data]) if isinstance(c, dict)]
     roots = []
-    for coll in data if isinstance(data, list) else [data]:
-        if not isinstance(coll, dict):
-            continue
-        node = new_folder(str(coll.get("name") or "Imported"))
-        node["children"] = (convert_folders(coll.get("folders") or [])
-                            + convert_requests(coll.get("requests") or []))
-        roots.append(node)
+    for i, coll in enumerate(colls):
+        children = (convert_folders(coll.get("folders") or [])
+                    + convert_requests(coll.get("requests") or []))
+        name = collection_name(coll.get("name"),
+                               f"{fallback}-{i + 1}" if len(colls) > 1 else fallback)
+        roots.extend(wrap_collection(children, name))
     return roots
 
 
@@ -602,7 +641,7 @@ def _hoppscotch_auth(auth: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _from_insomnia(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _from_insomnia(data: Dict[str, Any], fallback: str = "") -> List[Dict[str, Any]]:
     resources = data.get("resources") or []
     groups = {r.get("_id"): r for r in resources if r.get("_type") == "request_group"}
     by_parent: Dict[Optional[str], List[Dict[str, Any]]] = {}
@@ -661,12 +700,18 @@ def _from_insomnia(data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 orphan.setdefault("__root__", []).append(res)
             by_parent.update(orphan)
             roots = build("__root__")
-    return roots
+    if not roots:
+        return []
+    # 集合名优先取 workspace 名，其次文件名
+    workspace = next((str(r.get("name") or "") for r in resources
+                      if r.get("_type") == "workspace" and r.get("name")), "")
+    return wrap_collection(roots, collection_name(workspace, fallback))
 
 
-def _from_har(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _from_har(data: Dict[str, Any], fallback: str = "") -> List[Dict[str, Any]]:
     log = data.get("log") or {}
-    folder = new_folder("HAR · " + str(((log.get("pages") or [{}])[0] or {}).get("title") or "Import"))
+    page = (log.get("pages") or [{}])[0] or {}
+    folder = new_folder(collection_name(page.get("title"), fallback) or "HAR")
     children = []
     for entry in log.get("entries") or []:
         req = entry.get("request") or {}
@@ -692,7 +737,7 @@ def _from_har(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [folder]
 
 
-def _from_openapi(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _from_openapi(data: Dict[str, Any], fallback: str = "") -> List[Dict[str, Any]]:
     servers = data.get("servers") or []
     base = ""
     if servers and isinstance(servers[0], dict):
@@ -700,7 +745,8 @@ def _from_openapi(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     if not base and data.get("host"):
         schemes = data.get("schemes") or ["https"]
         base = f"{schemes[0]}://{data.get('host')}{data.get('basePath') or ''}"
-    root = new_folder(str((data.get("info") or {}).get("title") or "OpenAPI Import"))
+    root = new_folder(collection_name((data.get("info") or {}).get("title"), fallback)
+                      or "OpenAPI")
     items = root["children"]
     for path, methods in (data.get("paths") or {}).items():
         if not isinstance(methods, dict):
@@ -958,8 +1004,12 @@ def _yaml_load(text: str) -> Any:
     return data
 
 
-def parse_text(text: str) -> Tuple[List[Dict[str, Any]], str, str]:
-    """把一段文本解析成 (节点列表, 识别到的格式, 错误)。"""
+def parse_text(text: str, fallback_name: str = "") -> Tuple[List[Dict[str, Any]], str, str]:
+    """把一段文本解析成 (节点列表, 识别到的格式, 错误)。
+
+    fallback_name：文件名 / URL 最后一段。文件里没有集合名时拿它兜底，
+    这样导入进来的集合不会叫「Imported」或者空名字。
+    """
     text = sanitize(text)
     fmt = detect_format(text)
     if fmt == "unknown":
@@ -982,25 +1032,26 @@ def parse_text(text: str) -> Tuple[List[Dict[str, Any]], str, str]:
             return [], fmt, f"JSON 解析失败：{exc}"
 
     if fmt == "ocelot":
-        nodes = _from_ocelot(data)
+        nodes = _from_ocelot(data, fallback_name)
     elif fmt in ("postman", "apifox"):
         if "apiCollection" in (data or {}):
-            nodes = _from_apifox(data)
+            nodes = _from_apifox(data, fallback_name)
         else:
-            # item 本身就是树，不用再套一层文件夹；否则每次来回导都多一层「Imported」。
-            nodes = _from_postman_any(data)
+            # 集合在侧栏里必须是一个目录：用文件里的集合名建一层，里面的文件夹
+            # 保持原来的层级。以前直接把 item 摊在根上，导入完看起来像「没建目录」。
+            nodes = _from_postman_any(data, fallback_name)
     elif fmt == "postman_dump":
-        nodes = _from_postman_dump(data)
+        nodes = _from_postman_dump(data, fallback_name)
     elif fmt == "postman_v1":
-        nodes = _from_postman_v1(data)
+        nodes = _from_postman_v1(data, fallback_name)
     elif fmt == "hoppscotch":
-        nodes = _from_hoppscotch(data)
+        nodes = _from_hoppscotch(data, fallback_name)
     elif fmt == "insomnia":
-        nodes = _from_insomnia(data)
+        nodes = _from_insomnia(data, fallback_name)
     elif fmt == "har":
-        nodes = _from_har(data)
+        nodes = _from_har(data, fallback_name)
     elif fmt == "openapi":
-        nodes = _from_openapi(data)
+        nodes = _from_openapi(data, fallback_name)
     elif fmt == "native":
         raw_nodes = data.get("collections") if isinstance(data, dict) else data
         nodes = [_normalize_import(n) for n in (raw_nodes or []) if isinstance(n, dict)]
@@ -1022,40 +1073,50 @@ def _empty_hint(fmt: str, data: Any) -> str:
     return "文件里没有可导入的请求"
 
 
-def _from_postman_any(data: Any) -> List[Dict[str, Any]]:
-    """Postman 系（含单个请求、数组、缺 info 的裸集合）。"""
+def _from_postman_any(data: Any, fallback: str = "") -> List[Dict[str, Any]]:
+    """Postman 系（含单个请求、数组、缺 info 的裸集合），集合名当目录名。"""
     if isinstance(data, list):
-        items: List[Any] = []
-        for entry in data:
-            if isinstance(entry, dict):
-                items.extend(entry.get("item") or [])
-        return [x for x in (_from_postman_item(i) for i in items) if x]
+        out: List[Dict[str, Any]] = []
+        for i, entry in enumerate(data):
+            if not isinstance(entry, dict):
+                continue
+            items = [x for x in (_from_postman_item(i2) for i2 in entry.get("item") or []) if x]
+            info = entry.get("info") or {}
+            out.extend(wrap_collection(items, info.get("name") or entry.get("name"),
+                                       f"{fallback}-{i + 1}" if len(data) > 1 else fallback))
+        return out
     if not isinstance(data, dict):
         return []
     items = data.get("item")
     if isinstance(items, dict):
         items = [items]
-    if not items and "request" in data:
+    single = not items and "request" in data
+    if single:
         items = [data]
-    return [x for x in (_from_postman_item(i) for i in items or []) if x]
+    nodes = [x for x in (_from_postman_item(i) for i in items or []) if x]
+    if single and not (data.get("info") or {}).get("name"):
+        # 单个请求的 JSON：就该是一条请求，别硬套一层目录
+        return nodes
+    info = data.get("info") or {}
+    return wrap_collection(nodes, info.get("name") or data.get("name"), fallback)
 
 
-def _from_postman_dump(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _from_postman_dump(data: Dict[str, Any], fallback: str = "") -> List[Dict[str, Any]]:
     """Postman「Export Data」导出的整包 dump：collections + environments。"""
     out: List[Dict[str, Any]] = []
-    for coll in data.get("collections") or []:
-        if not isinstance(coll, dict):
-            continue
+    colls = [c for c in data.get("collections") or [] if isinstance(c, dict)]
+    for i, coll in enumerate(colls):
         info = coll.get("info") or {}
-        folder = new_folder(str(info.get("name") or coll.get("name") or "Imported"))
-        folder["children"] = [x for x in (_from_postman_item(i)
-                                          for i in coll.get("item") or []) if x]
-        if folder["children"]:
-            out.append(folder)
+        name = collection_name(info.get("name"), coll.get("name"),
+                               f"{fallback}-{i + 1}" if len(colls) > 1 else fallback)
+        folder = wrap_collection(
+            [x for x in (_from_postman_item(i2) for i2 in coll.get("item") or []) if x],
+            name, fallback)
+        out.extend(folder)
     return out
 
 
-def _from_postman_v1(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _from_postman_v1(data: Dict[str, Any], fallback: str = "") -> List[Dict[str, Any]]:
     """Postman v1（很老的格式）：requests + folders + order。"""
     reqs = {r.get("id"): r for r in data.get("requests") or [] if isinstance(r, dict)}
     folders = {f.get("id"): f for f in data.get("folders") or [] if isinstance(f, dict)}
@@ -1110,7 +1171,7 @@ def _from_postman_v1(data: Dict[str, Any]) -> List[Dict[str, Any]]:
             node["children"] = walk(f.get("order") or [])
             if node["children"]:
                 roots.append(node)
-    return roots
+    return wrap_collection(roots, data.get("name") or data.get("id"), fallback)
 
 
 def _join_base(base: str, path: str) -> str:
@@ -1125,10 +1186,10 @@ def _join_base(base: str, path: str) -> str:
     return base + "/" + path.lstrip("/")
 
 
-def _from_apifox(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _from_apifox(data: Dict[str, Any], fallback: str = "") -> List[Dict[str, Any]]:
     """Apifox 自有格式（apiCollection）以及它的 Postman 兼容导出。"""
     if "apiCollection" not in data:
-        return _from_postman_any(data)
+        return _from_postman_any(data, fallback)
     base = ""
     for key in ("baseUrl", "baseURL", "host"):
         if isinstance(data.get(key), str) and data.get(key):
@@ -1151,10 +1212,17 @@ def _from_apifox(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         return folder
 
     roots = []
-    for coll in data.get("apiCollection") or []:
+    colls = [c for c in data.get("apiCollection") or [] if isinstance(c, dict)]
+    for i, coll in enumerate(colls):
         node = walk(coll, base)
-        if node:
-            roots.append(node)
+        if node is None:
+            continue
+        if node.get("type") == "folder" and not (node.get("name") or "").strip():
+            node["name"] = collection_name(fallback) or "Apifox"
+        if node.get("type") != "folder":
+            # 根节点直接是接口（没有目录）：补一层集合目录，别让请求散在根上
+            node = wrap_collection([node], collection_name(coll.get("name"), fallback))[0]
+        roots.append(node)
     return roots
 
 
@@ -1197,9 +1265,9 @@ def _apifox_request(name: str, api: Dict[str, Any], base: str) -> Dict[str, Any]
                        note=str(api.get("description") or ""))
 
 
-def _from_ocelot(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _from_ocelot(data: Dict[str, Any], fallback: str = "") -> List[Dict[str, Any]]:
     roots = [x for x in (_from_postman_item(i) for i in data.get("item") or []) if x]
-    return roots
+    return wrap_collection(roots, (data.get("info") or {}).get("name"), fallback)
 
 
 def _normalize_import(node: Dict[str, Any]) -> Dict[str, Any]:

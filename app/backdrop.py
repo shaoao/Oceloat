@@ -2,123 +2,45 @@
 
 为什么不用 QGraphicsBlurEffect 直接挂在控件上：这个项目在 macOS 上被
 QGraphics*Effect 坑过一次（渲染层 SIGBUS）。这里只在「抓下来的静态图片」上
-做纯 QImage 运算，既不影响控件树，也不会在合成阶段引入额外图层。
+做纯 QImage 缩放运算，既不影响控件树，也不会在合成阶段引入额外图层。
 
-做法：先把整窗缩到很小（1/12），在缩略图上做两遍盒式模糊，再用平滑插值放回
-原尺寸。视觉上就是高斯模糊，成本只有几毫秒。
+模糊算法：把整窗两级降采样到很小的缩略图（每级都是平滑插值 = 多次盒式平均），
+再逐级放回原尺寸。这样得到的模糊在整张图上完全均匀（不会像 Qt 模糊效果那样
+在外边缘衰减、也不会因为 scene 边界把图偏移几个像素），而且只要几毫秒、
+峰值内存也就几百 KB。
 """
 from __future__ import annotations
 
 from typing import Dict, Optional
 
-from PyQt6.QtCore import QEasingCurve, QEvent, QRectF, Qt, QVariantAnimation
-from PyQt6.QtGui import QColor, QImage, QPainter, QPixmap
+from PyQt6.QtCore import QEasingCurve, QEvent, Qt, QVariantAnimation
+from PyQt6.QtGui import QColor, QPainter, QPixmap
 from PyQt6.QtWidgets import QWidget
 
 from .anim import animations_on, stop as _anim_stop
 from .theme import C, theme
 
-# 缩略图最长边：越小越糊、越快
-_SMALL_MAX = 128
-_BLUR_PASSES = 2
-_BLUR_RADIUS = 1
+# 缩略图最长边：越小越糊、越快（120 ≈ 视觉上 8~10px 半径的高斯，还能看出布局轮廓）
+_SMALL_MAX = 120
 
 
-def _shrink(img: QImage) -> QImage:
-    w, h = img.width(), img.height()
-    if w <= 0 or h <= 0:
-        return img
-    scale = min(1.0, _SMALL_MAX / max(w, h))
-    return img.scaled(max(1, int(w * scale)), max(1, int(h * scale)),
-                      Qt.AspectRatioMode.IgnoreAspectRatio,
+def _smooth_scale(pix: QPixmap, w: int, h: int) -> QPixmap:
+    return pix.scaled(max(1, w), max(1, h), Qt.AspectRatioMode.IgnoreAspectRatio,
                       Qt.TransformationMode.SmoothTransformation)
 
 
-def _box_blur(img: QImage, radius: int, passes: int) -> QImage:
-    """在缩略图上做盒式模糊（两遍 ≈ 高斯）。纯 Python 但图很小，几毫秒。"""
-    img = img.convertToFormat(QImage.Format.Format_ARGB32)
-    w, h = img.width(), img.height()
-    if w < 3 or h < 3:
-        return img
-    buf = img.bits()
-    buf.setsize(img.sizeInBytes())
-    data = bytearray(buf)
-    stride = img.bytesPerLine()
-    for _ in range(passes):
-        # 横向
-        out = bytearray(data)
-        for y in range(h):
-            row = y * stride
-            for x in range(w):
-                r = g = b = a = n = 0
-                for dx in range(-radius, radius + 1):
-                    sx = x + dx
-                    if 0 <= sx < w:
-                        i = row + sx * 4
-                        b += data[i]; g += data[i + 1]; r += data[i + 2]; a += data[i + 3]
-                        n += 1
-                i = row + x * 4
-                out[i] = b // n; out[i + 1] = g // n
-                out[i + 2] = r // n; out[i + 3] = a // n
-        data = out
-        # 纵向
-        out = bytearray(data)
-        for y in range(h):
-            for x in range(w):
-                b = g = r = a = n = 0
-                for dy in range(-radius, radius + 1):
-                    sy = y + dy
-                    if 0 <= sy < h:
-                        i = sy * stride + x * 4
-                        b += data[i]; g += data[i + 1]; r += data[i + 2]; a += data[i + 3]
-                        n += 1
-                i = y * stride + x * 4
-                out[i] = b // n; out[i + 1] = g // n
-                out[i + 2] = r // n; out[i + 3] = a // n
-        data = out
-    result = QImage(data, w, h, stride, QImage.Format.Format_ARGB32)
-    return result.copy()
-
-
-def _qt_blur(pix: QPixmap, radius: float) -> QPixmap:
-    """用 Qt 自带的模糊效果渲染一张静态图。
-
-    注意：QGraphicsBlurEffect 只作用在离屏的 QGraphicsPixmapItem 上，
-    渲染结果直接画进 QImage，**不挂到任何活控件**——这是本项目的红线，
-    macOS 上给控件树挂 QGraphicsEffect 会触发渲染层崩溃。
-    """
-    from PyQt6.QtWidgets import QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene
-
-    scene = QGraphicsScene()
-    item = QGraphicsPixmapItem(pix)
-    effect = QGraphicsBlurEffect()
-    effect.setBlurRadius(radius)
-    effect.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
-    item.setGraphicsEffect(effect)
-    scene.addItem(item)
-    out = QImage(pix.size(), QImage.Format.Format_ARGB32_Premultiplied)
-    out.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(out)
-    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-    scene.render(painter, QRectF(out.rect()), QRectF(pix.rect()))
-    painter.end()
-    return QPixmap.fromImage(out)
-
-
 def blur_pixmap(source: QPixmap) -> QPixmap:
-    """把一张窗口截图变成模糊底图（半步长渲染 + 平滑放大，够快也够干净）。"""
+    """把一张窗口截图变成模糊底图：两级降采样 + 两级还原，均匀且极快。"""
     if source.isNull():
         return source
-    w, h = max(1, source.width() // 2), max(1, source.height() // 2)
-    half = source.scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio,
-                         Qt.TransformationMode.SmoothTransformation)
-    try:
-        blurred = _qt_blur(half, 9.0)
-    except Exception:      # noqa: BLE001  极端情况下退回纯 Python 小图模糊
-        blurred = QPixmap.fromImage(_box_blur(_shrink(source.toImage()),
-                                              _BLUR_RADIUS, _BLUR_PASSES))
-    return blurred.scaled(source.size(), Qt.AspectRatioMode.IgnoreAspectRatio,
-                          Qt.TransformationMode.SmoothTransformation)
+    w, h = source.width(), source.height()
+    if w < 4 or h < 4:
+        return source
+    scale = _SMALL_MAX / max(w, h)
+    small = _smooth_scale(source, int(w * scale), int(h * scale))
+    tiny = _smooth_scale(small, small.width() // 2, small.height() // 2)
+    mid = _smooth_scale(tiny, small.width(), small.height())
+    return _smooth_scale(mid, w, h)
 
 
 class Backdrop(QWidget):
@@ -206,10 +128,10 @@ class Backdrop(QWidget):
         # 压暗：深色主题用窗口色加暗；浅色主题用一点黑，否则整个背景会发白糊成一片
         if t.is_dark:
             scrim = QColor(C(t.window))
-            scrim.setAlpha(int(118 * alpha))
+            scrim.setAlpha(int(92 * alpha))
         else:
             scrim = QColor(0, 0, 0)
-            scrim.setAlpha(int(46 * alpha))
+            scrim.setAlpha(int(68 * alpha))
         p.fillRect(self.rect(), scrim)
         p.end()
 

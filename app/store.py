@@ -19,9 +19,32 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.29"
+VERSION = "1.0.30"
 
 CHANGELOG = [
+    {
+        "version": "1.0.30",
+        "date": "2026-11-18",
+        "items": [
+            "修复：切标签的胶囊滑动动画「没了」—— 主窗口点标签时会 set_current 两次，"
+            "第二次直接 snap 把刚起飞的动画按住；现在二次调用不再打断，胶囊带一点速度拉伸，"
+            "新旧标签的文字/徽标跟着淡入淡出",
+            "新增：集合 / 历史 分段控件的选中胶囊改成滑动过渡，文字颜色同步渐变（以前是整块瞬移）",
+            "修复：弹窗背景只有左边模糊 —— 换成两级降采样的均匀模糊，整窗一致（1600×1000 约 3.5ms，"
+            "峰值内存只有几百 KB），不再用 QGraphicsBlurEffect 渲染",
+            "修复：导入完成的大对勾偏左 —— 图标用设备像素算居中，Retina 上整体偏了十几个点；"
+            "现在按逻辑尺寸居中，并加上扩散光晕的出现动画",
+            "改进：所有弹窗默认摆到父窗口正中间（页面切换改高度时也保持居中）；"
+            "只有设置与导入导出窗口模糊 + 不可拖动，其他弹窗不模糊、可拖标题栏移动",
+            "新增：设置 → 外观「所有弹窗都模糊」开关 —— 开启后所有弹窗都模糊且不可拖动",
+            "新增：命令面板顶部固定「常用」五条（按使用频率自动排序，用过就置顶），下面是「全部命令」；面板改为窗口正中弹出，带下落淡入",
+            "修复：导入的集合名不准 —— 现在按文件里的集合名（info.name / Apifox 集合名 / workspace 名 / OpenAPI 标题）"
+            "或文件名兜底，并在侧栏里建出同名目录，里面的文件夹层级原样保留；单个请求的 JSON 仍然就是一条请求",
+            "新增：从 URL 导入 —— 填一个远程 JSON / YAML 地址，自动下载（上限 8 MB）并走同一套识别流程",
+            "改进：导出默认文件名改用集合（目录）名，不再写死 ocelot-collection",
+            "优化：清掉一批无用导入与多余计算，自测项扩展到 467 项，全部通过",
+        ],
+    },
     {
         "version": "1.0.29",
         "date": "2026-11-18",
@@ -737,6 +760,7 @@ def _sample_state() -> Dict[str, Any]:
             "auto_name": True,
             "restore_session": True,
             "animations": True,
+            "glass_all": False,
             "sidebar_width": 268,
             "sidebar_visible": True,
             "split_ratio": 0.46,
@@ -752,10 +776,17 @@ def _sample_state() -> Dict[str, Any]:
 
 
 class Store:
+    _active: Optional["Store"] = None
+
     def __init__(self, data: Dict[str, Any], path: Path = STATE_FILE):
         self.data = data
         self.path = Path(path)      # 允许传字符串，否则 save() 里 .parent 会炸
         self._dirty = False
+
+    @classmethod
+    def active(cls) -> Optional["Store"]:
+        """进程内当前使用的 Store（弹窗读设置用，避免到处传引用）。"""
+        return cls._active
 
     # ------------------------------------------------------------ 生命周期
     @classmethod
@@ -774,7 +805,12 @@ class Store:
             data.setdefault(k, v)
         for k, v in base["settings"].items():
             data["settings"].setdefault(k, v)
-        return cls(data, path)
+        store = cls(data, path)
+        # 只有还没有活跃 Store 时才占位：别的地方为了校验落盘而 Store.load() 一份快照，
+        # 不该把正在用的那份挤掉（否则弹窗读到的设置会「不生效」）。
+        if cls._active is None:
+            cls._active = store
+        return store
 
     @staticmethod
     def migrate_legacy() -> bool:
