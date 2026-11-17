@@ -253,7 +253,8 @@ class ResponsePanel(QWidget):
 
         # ---------- 页面
         self.pretty = CodeView(read_only=True, highlight=True, show_gutter=False)
-        self.raw = CodeView(read_only=True, highlight=False, show_gutter=False, wrap=False)
+        # 原始视图同样走统一高亮，切页时按内容自动识别 JSON / XML / 纯文本
+        self.raw = CodeView(read_only=True, highlight=True, show_gutter=False, wrap=False)
         self.tree_host = QWidget()
         th = QVBoxLayout(self.tree_host)
         th.setContentsMargins(8, 4, 8, 8)
@@ -267,7 +268,7 @@ class ResponsePanel(QWidget):
         self.preview_lay.setSpacing(0)
 
         # ---------- 对比（与上一次同地址响应比较）
-        self.diff_view = CodeView(read_only=True, highlight=False, show_gutter=True)
+        self.diff_view = CodeView(read_only=True, highlight=True, show_gutter=True)
         self.diff_note = Label("", 10.5, theme().text_faint, mono_font=True)
         self.diff_base_btn = Button("设为基准", None, kind="ghost", height=22, padding=7, font_size=11)
         self.diff_base_btn.setToolTip("把当前响应保存为对比基准")
@@ -700,9 +701,20 @@ class ResponsePanel(QWidget):
             ("Header", self._bytes(hs), hs / total),
             ("Body", self._bytes(bs), bs / total),
         ]
+        # 请求大小：用真正发出去的字节数，不再靠猜
+        rh = getattr(resp, "request_header_size", 0) or 0
+        rb = getattr(resp, "request_size", 0) or 0
+        req_total = max(1, rh + rb)
+        sections = []
+        if rh or rb:
+            sections.append((i18n.tr("Request Size"), human_size(rh + rb), [
+                ("Header", self._bytes(rh), rh / req_total),
+                ("Body", self._bytes(rb), rb / req_total),
+            ]))
         return DetailCard("响应大小", human_size(resp.size), rows, bars=False,
                           head_icon="layers", split=True,
-                          note="Header 为估算 · Body 为正文")
+                          note=i18n.tr("Header 含状态行 · Body 为正文"),
+                          sections=sections)
 
     # -------------------------------------------------- 状态
     def _set_actions_enabled(self, on: bool) -> None:
@@ -850,9 +862,14 @@ class ResponsePanel(QWidget):
                 pretty_text = self._format_markup(body)
             else:
                 pretty_text = body
-            # 大响应（200KB 起）重新上色比读内容还慢，关掉高亮直接显示
+            # 大响应（200KB 起）重新上色比读内容还慢 —— 必须在 setPlainText
+            # 之前关掉，否则会先按高亮渲染一遍，白等 1 秒。
             self.pretty.set_highlight(len(pretty_text) <= 180_000)
             self.pretty.setPlainText(pretty_text)
+            # 美化页按内容类型切高亮语言：JSON 用 JSON 规则，XML/HTML 用通用规则。
+            # 大文档高亮已关，此时不要再 set_language（会触发全文档重新着色）。
+            if len(pretty_text) <= 180_000:
+                self.pretty.set_language("xml" if as_markup else None)
             # 「原始」页按需填充：绝大多数人只看美化页，没必要每次都解析两遍
             if truncated:
                 self._raw_text = body[:VIEW_LIMIT] + i18n.trf(
@@ -1129,8 +1146,13 @@ class ResponsePanel(QWidget):
     # -------------------------------------------------- 标签切换
     def _flush_raw(self) -> None:
         self._raw_pending = False
-        self.raw.setPlainText(getattr(self, "_raw_text", ""))
-        self.raw.set_highlight(len(getattr(self, "_raw_text", "")) <= 180_000)
+        text = getattr(self, "_raw_text", "")
+        self.raw.setPlainText(text)
+        self.raw.set_highlight(len(text) <= 180_000)
+        if len(text) <= 180_000:
+            # 按首个非空字符识别 JSON / XML，让原始页也用统一高亮
+            stripped = text.lstrip()
+            self.raw.set_language("xml" if stripped.startswith("<") else None)
 
     def _flush_tree(self) -> None:
         data = getattr(self, "_tree_data", None)

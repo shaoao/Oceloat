@@ -84,7 +84,9 @@ class Response:
     # 分段计时（毫秒）：none 表示该阶段未测到。ttfb/download 是真实测量，
     # 其余为基于总时间的估算，UI 上会标明「估算」。
     timing: Dict[str, int] = field(default_factory=dict)
-    header_size: int = 0        # 响应头字节数
+    header_size: int = 0        # 响应头字节数（含状态行与结尾空行）
+    request_size: int = 0       # 请求体字节数
+    request_header_size: int = 0  # 请求头字节数（含请求行）
 
     def charset(self) -> str:
         return self.declared_charset() or "utf-8"
@@ -202,6 +204,45 @@ class ApiClient(QObject):
         self._timed_out = False
         self._cancelled = False
         self._keepalive: List[Any] = []
+        self._store = None
+        self._request_size = 0
+        self._request_header_size = 0
+        self.scriptLogs = []          # 最近一次请求的脚本日志，供 UI 展示
+        self._active_scripts: Dict[str, Any] = {}
+        self._active_env_vars: Dict[str, str] = {}
+
+    def set_store(self, store) -> None:
+        """注入 Store：前置 / 后置脚本要读写环境变量。"""
+        self._store = store
+
+    # ------------------------------------------------------------ 请求脚本
+    def _run_pre_script(self, req: Dict[str, Any], env_vars: Dict[str, str]) -> None:
+        scripts = req.get("scripts") or {}
+        source = scripts.get("pre") or ""
+        if not source or self._store is None:
+            return
+        from .scripts import run_script
+
+        result = run_script(source, self._store, req, env_vars=env_vars)
+        self.scriptLogs = [("[pre] " + line) for line in result.logs]
+        if result.error:
+            self.scriptLogs.append("[pre] " + result.error)
+        # 脚本可能新增/修改了环境变量：把快照同步给本次请求
+        env_vars.update(self._store.env_vars())
+
+    def _run_post_script(self, resp: "Response", env_vars: Dict[str, Any]) -> None:
+        scripts = getattr(self, "_active_scripts", None) or {}
+        source = scripts.get("post") or ""
+        if not source or self._store is None:
+            return
+        from .scripts import run_script
+
+        result = run_script(source, self._store,
+                            {"method": "GET", "url": "", "headers": [], "params": [],
+                             "body": {"raw": ""}}, res=resp, env_vars=env_vars)
+        self.scriptLogs.extend(("[post] " + line) for line in result.logs)
+        if result.error:
+            self.scriptLogs.append("[post] " + result.error)
 
     # ------------------------------------------------------------ 代理
     def _configure_proxy(self, settings: Dict[str, Any], host: str = "") -> None:
@@ -342,12 +383,13 @@ class ApiClient(QObject):
             if not content_type:
                 content_type = "application/json; charset=utf-8"
                 headers.append({"name": "Content-Type", "value": content_type})
-        elif mode == "text":
+        elif mode in ("text", "xml"):
             # 中继接口只接受 text / json 字符串，文本按 JSON 字段外的 body 传不了，
-            # 统一塞进 json 字段并让服务端按 text/plain 转发。
+            # 统一塞进 json 字段并让服务端按对应 Content-Type 转发。
             json_raw = resolve_vars(bdata.get("raw", "") or "", env_vars)
             if not content_type:
-                content_type = "text/plain; charset=utf-8"
+                content_type = ("application/xml; charset=utf-8" if mode == "xml"
+                                else "text/plain; charset=utf-8")
                 headers.append({"name": "Content-Type", "value": content_type})
         elif mode == "urlencoded":
             for row in bdata.get("form", []):
@@ -378,6 +420,12 @@ class ApiClient(QObject):
         self._timed_out = False
         self._cancelled = False
         self._keepalive = []
+        self.scriptLogs = []
+
+        # 前置脚本：在中继分支之前执行，覆盖所有发送路径
+        self._active_scripts = req.get("scripts") or {}
+        self._active_env_vars = dict(env_vars)
+        self._run_pre_script(req, env_vars)
 
         if settings.get("relay_node"):
             try:
@@ -474,12 +522,13 @@ class ApiClient(QObject):
             if not has_ct:
                 nreq.setHeader(QNetworkRequest.KnownHeaders.ContentTypeHeader,
                                "application/json; charset=utf-8")
-        elif mode == "text":
+        elif mode in ("text", "xml"):
             text = resolve_vars(bdata.get("raw", "") or "", env_vars)
             payload = QByteArray(text.encode("utf-8"))
             if not has_ct:
                 nreq.setHeader(QNetworkRequest.KnownHeaders.ContentTypeHeader,
-                               "text/plain; charset=utf-8")
+                               ("application/xml; charset=utf-8" if mode == "xml"
+                                else "text/plain; charset=utf-8"))
         elif mode == "urlencoded":
             q = QUrlQuery()
             for row in bdata.get("form", []):
@@ -560,6 +609,15 @@ class ApiClient(QObject):
 
         self._configure_proxy(settings, url.host())
         method = (req.get("method") or "GET").upper()
+        # 请求体积：用真正发出去的 QNetworkRequest 原始头 + 请求行来算，
+        # 不再拿界面上的字符串猜（那样漏掉默认注入的 UA / Accept / Cookie）。
+        req_header_bytes = len(method.encode("utf-8")) + 1 + len(
+            QUrl(raw_url).path(QUrl.ComponentFormattingOption.FullyEncoded).encode("utf-8")) + 1 + 8
+        for name in nreq.rawHeaderList():
+            req_header_bytes += len(bytes(name)) + len(bytes(nreq.rawHeader(name))) + 4
+        self._request_size = int(payload.size()) if not isinstance(payload, type(None)) else 0
+        self._request_header_size = req_header_bytes
+
         self._clock.start()
         try:
             if multipart is not None:
@@ -671,13 +729,26 @@ class ApiClient(QObject):
             "download": download,
             "process": 0,
         }
-        header_size = sum(len(k.encode("latin-1", "replace")) +
-                          len(v.encode("latin-1", "replace")) + 4 for k, v in headers)
+        # 头部字节数：加上状态行与结尾空行，才是线上真实开销（原来只算 key+value+4，
+        # 少了「HTTP/1.1 200 OK\r\n」和结尾的 \r\n，显示总是偏小）。
+        http_version = "HTTP/1.1"
+        status_line = f"{http_version} {status} {reason}\r\n"
+        header_size = (len(status_line.encode("latin-1", "replace"))
+                       + sum(len(k.encode("latin-1", "replace")) +
+                             len(v.encode("latin-1", "replace")) + 4 for k, v in headers)
+                       + 2)
 
         resp = Response(
             status=status, reason=reason, headers=headers, body=body,
             elapsed=elapsed, size=len(body), url=final_url, content_type=ct,
             error=error, cookies=cookies, timing=timing, header_size=header_size,
+            request_size=getattr(self, "_request_size", 0),
+            request_header_size=getattr(self, "_request_header_size", 0),
         )
+        # 后置脚本可改写响应（status / body / headers）或写环境变量
+        try:
+            self._run_post_script(resp, dict(self._active_env_vars or {}))
+        except Exception:  # noqa: BLE001 — 脚本失败不能影响响应展示
+            pass
         reply.deleteLater()
         self.finished.emit(resp)

@@ -55,6 +55,7 @@ class Theme:
     info: str
     selection: Color
     code_bg: str
+    detail_bg: str
     scroll: Color
     scroll_hover: Color
     shadow: Color
@@ -123,6 +124,7 @@ def _dark_scheme(key: str, label: str, base: str) -> Theme:
         info="#89AECE",
         selection=(255, 255, 255, 48),
         code_bg=_shift(base, -5),
+        detail_bg=_shift(base, -10),
         scroll=(255, 255, 255, 28),
         scroll_hover=(255, 255, 255, 60),
         shadow=(0, 0, 0, 180),
@@ -156,6 +158,7 @@ def _light_scheme(key: str, label: str, base: str) -> Theme:
         info="#2C6BAD",
         selection=(0, 0, 0, 38),
         code_bg="#FFFFFF",
+        detail_bg=_shift(base, -4),
         scroll=(0, 0, 0, 28),
         scroll_hover=(0, 0, 0, 64),
         shadow=(0, 0, 0, 48),

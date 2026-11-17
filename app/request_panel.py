@@ -41,10 +41,25 @@ from .widgets import (
 # 与参考图一致：GET / POST / PUT / DELETE / OPTIONS / HEAD / PATCH / TRACE
 METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"]
 
+# 与 Postman / Hoppscotch 对齐的 body 类型；显示英文名，i18n 会保留原词。
+# 存储层仍用短 key（form = form-data，urlencoded = x-www-form-urlencoded），
+# 旧数据天然兼容；XML 是新增的独立类型，走代码编辑器 + application/xml。
 BODY_MODES = [
-    ("none", "无"), ("json", "JSON"), ("text", "文本"),
-    ("form", "表单"), ("urlencoded", "URL 编码"), ("binary", "文件"),
+    ("none", "none"),
+    ("form", "form-data"),
+    ("urlencoded", "x-www-form-urlencoded"),
+    ("json", "JSON"),
+    ("xml", "XML"),
+    ("text", "Text"),
+    ("binary", "Binary"),
 ]
+# 旧数据的 mode 值直接沿用，这里只做「截图的显示名 → 存储 key」的反向兼容说明：
+# form-data → form, x-www-form-urlencoded → urlencoded。导入器若写入长名，先归一化。
+_MODE_ALIAS = {
+    "form-data": "form", "multipart/form-data": "form",
+    "x-www-form-urlencoded": "urlencoded", "url-encoded": "urlencoded",
+    "application/json": "json", "raw": "text", "file": "binary",
+}
 
 AUTH_TYPES = [("none", "无"), ("bearer", "Bearer"), ("basic", "Basic"), ("apikey", "API Key")]
 
@@ -458,7 +473,7 @@ class BodyPage(QWidget):
         top = HBox(self.modes, 1, self.type_label, spacing=8)
         top.layout().setContentsMargins(0, 0, 2, 0)
 
-        # JSON / 文本
+        # JSON / XML / 文本 —— 共用代码编辑器，按类型切高亮语言
         self.code = CodeView(read_only=False, highlight=True, show_gutter=True, wrap=False)
         self.code.textChanged.connect(self._on_code_changed)
         self.code_frame = Card(radius=9)
@@ -467,9 +482,9 @@ class BodyPage(QWidget):
         cf.addWidget(self.code, 1)
 
         self.json_status = Label("", 10.5, theme().text_faint, mono_font=True)
-        self.format_btn = Button("格式化", None, kind="ghost", height=24, padding=8, font_size=11.5)
+        self.format_btn = Button("Format", None, kind="ghost", height=24, padding=8, font_size=11.5)
         self.format_btn.clicked.connect(self._format)
-        self.minify_btn = Button("压缩", None, kind="ghost", height=24, padding=8, font_size=11.5)
+        self.minify_btn = Button("Minify", None, kind="ghost", height=24, padding=8, font_size=11.5)
         self.minify_btn.clicked.connect(self._minify)
         self.code_tools = HBox(4, self.json_status, 1, self.format_btn, self.minify_btn, spacing=4)
 
@@ -523,8 +538,9 @@ class BodyPage(QWidget):
 
     # -------------------------------------------------- 模式
     def _on_mode(self, mode: str) -> None:
+        mode = _MODE_ALIAS.get(mode, mode)
         self._mode = mode
-        if mode in ("json", "text"):
+        if mode in ("json", "xml", "text"):
             self.stack.set_current("code")
         elif mode in ("form", "urlencoded"):
             self.stack.set_current("form")
@@ -538,6 +554,8 @@ class BodyPage(QWidget):
         else:
             self.code.setEnabled(True)
             self.code.setStyleSheet("QPlainTextEdit { background: transparent; border: none; }")
+        # 新增/切换类型时同步代码高亮语言：JSON 走 JSON 规则，XML 走通用规则
+        self.code.set_language("xml" if mode == "xml" else None)
         self._sync_tools()
         if not self._loading:
             self.changed.emit()
@@ -545,31 +563,41 @@ class BodyPage(QWidget):
     def _sync_tools(self) -> None:
         mode = self._mode
         self.type_label.setText({
-            "json": "application/json", "text": "text/plain",
+            "json": "application/json", "xml": "application/xml",
+            "text": "text/plain",
             "urlencoded": "x-www-form-urlencoded", "form": "multipart/form-data",
             "binary": "application/octet-stream", "none": "",
         }.get(mode, ""))
-        self.code_tools.setVisible(mode in ("json", "text"))
-        self.format_btn.setVisible(mode == "json")
+        self.code_tools.setVisible(mode in ("json", "xml", "text"))
+        self.format_btn.setVisible(mode in ("json", "xml"))
         self.minify_btn.setVisible(mode == "json")
-        self.json_status.setVisible(mode == "json")
+        self.json_status.setVisible(mode in ("json", "xml"))
         self.code.setVisible(mode != "none")
 
     def _on_code_changed(self) -> None:
         if self._loading:
             return
-        if self._mode == "json":
+        if self._mode in ("json", "xml"):
             self._validate_json()
         self.changed.emit()
 
     def refresh_theme(self) -> None:
-        if self._mode == "json" and self.code.toPlainText().strip():
+        if self._mode in ("json", "xml") and self.code.toPlainText().strip():
             self._validate_json()
 
     def _validate_json(self) -> None:
         text = self.code.toPlainText().strip()
         if not text:
             self.json_status.setText("")
+            return
+        if self._mode == "xml":
+            from PyQt6.QtXml import QDomDocument
+
+            doc = QDomDocument()
+            ok = doc.setContent(text)
+            self.json_status.setText("✓ XML" if ok else "✕ XML")
+            self.json_status.setStyleSheet(
+                f"color: {theme().success if ok else theme().danger}; background: transparent;")
             return
         try:
             data = json.loads(text)
@@ -584,9 +612,16 @@ class BodyPage(QWidget):
             self.json_status.setStyleSheet(f"color: {theme().danger}; background: transparent;")
 
     def _format(self) -> None:
-        text, ok = pretty_json(self.code.toPlainText())
+        if self._mode == "xml":
+            from ..code_editor import _format_xml
+
+            out = _format_xml(self.code.toPlainText())
+            if out:
+                self.code.setPlainText(out)
+            return
+        formatted, ok = pretty_json(self.code.toPlainText())
         if ok:
-            self.code.setPlainText(text)
+            self.code.setPlainText(formatted)
 
     def _minify(self) -> None:
         try:
@@ -617,15 +652,17 @@ class BodyPage(QWidget):
     def load(self, body: Dict[str, Any]) -> None:
         self._loading = True
         mode = body.get("mode", "none") or "none"
+        mode = _MODE_ALIAS.get(mode, mode)
         self._mode = mode
         self.modes.set_current(mode, emit=False)
         self.code.setPlainText(body.get("raw", "") or "")
+        self.code.set_language("xml" if mode == "xml" else None)
         self.form.set_rows(body.get("form", []) or [])
         path = body.get("file", "")
         self._file_path = path or ""
         self.file_name.setText(path or i18n.tr("未选择文件"))
         self.file_name.setToolTip(path)
-        if mode in ("json", "text"):
+        if mode in ("json", "xml", "text"):
             self.stack.set_current("code")
         elif mode in ("form", "urlencoded"):
             self.stack.set_current("form")
@@ -634,7 +671,7 @@ class BodyPage(QWidget):
         else:
             self.stack.set_current("code")
         self._sync_tools()
-        if mode == "json":
+        if mode in ("json", "xml"):
             self._validate_json()
         self._loading = False
 
@@ -760,6 +797,167 @@ class AuthPage(QWidget):
         }
 
 
+class ScriptPage(QWidget):
+    """前后置脚本编辑器：JavaScript 代码 + 可点击的代码片段 + API 速查。
+
+    前后置各有一份独立脚本，保存在请求的 scripts 字段里。编辑器用同一套
+    统一高亮的 CodeView，支持括号补全与缩进，写起来跟正式 IDE 一样顺。
+    """
+
+    changed = pyqtSignal()
+
+    SNIPPETS = [
+        ("Environment: Set an environment variable",
+         'pw.env.set("token", "abc123");'),
+        ("Environment: Set timestamp variable",
+         'pw.env.set("ts", String(Date.now()));'),
+        ("Environment: Set random number variable",
+         'pw.env.set("id", String(Math.floor(Math.random() * 10000)));'),
+        ("Request: Add a header",
+         'req.setHeader("X-Trace-Id", "123");'),
+        ("Console: Print a message",
+         'console.log("hello", req.method);'),
+    ]
+
+    def __init__(self, store: Store, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self._loading = False
+        self._kind = "pre"               # pre | post
+
+        # 前后置切换放在页面内部，跟顶层的「前置操作 / 后置操作」标签联动
+        self.kind_tabs = SegmentedTabs(
+            [("pre", i18n.tr("Pre-request Script")),
+             ("post", i18n.tr("Post-response Script"))],
+            style="underline", height=30, pad_h=10, font_size=12)
+        self.kind_tabs.changed.connect(self._on_kind)
+
+        self.code = CodeView(read_only=False, highlight=True, show_gutter=True, wrap=True)
+        self.code.set_language("javascript")
+        self.code.textChanged.connect(self._on_code_changed)
+        self.run_btn = Button("Run", "play", kind="ghost", height=24, padding=9, font_size=11.5)
+        self.run_btn.clicked.connect(self._run_test)
+        self.status = Label("", 10.5, theme().text_faint, mono_font=True)
+        self.status.setWordWrap(True)
+        tools = HBox(1, self.status, self.run_btn, spacing=6)
+
+        editor = Card(radius=9)
+        el = QVBoxLayout(editor)
+        el.setContentsMargins(0, 6, 0, 6)
+        el.addWidget(self.code, 1)
+
+        # 右侧：说明 + 一键插入的代码片段
+        self.doc = Label("", 11.2, theme().text_dim)
+        self.doc.setWordWrap(True)
+        self.snippet_host = QVBoxLayout()
+        self.snippet_host.setContentsMargins(0, 0, 0, 0)
+        self.snippet_host.setSpacing(6)
+        for title, snippet in self.SNIPPETS:
+            b = Button(i18n.tr(title), "plus", kind="subtle", height=25, padding=8, font_size=11)
+            b.clicked.connect(lambda _c=False, s=snippet: self._insert(s))
+            self.snippet_host.addWidget(b)
+        self.snippet_host.addStretch(1)
+        side = QWidget()
+        sl = QVBoxLayout(side)
+        sl.setContentsMargins(14, 12, 14, 12)
+        sl.setSpacing(10)
+        sl.addWidget(self.doc)
+        sl.addWidget(Divider())
+        sl.addWidget(Label(i18n.tr("Code snippets"), 11.4, theme().text_dim,
+                           weight=QFont.Weight.DemiBold))
+        sl.addLayout(self.snippet_host)
+
+        body = QHBoxLayout()
+        body.setContentsMargins(14, 8, 14, 12)
+        body.setSpacing(12)
+        body.addWidget(editor, 3)
+        body.addWidget(side, 2)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 8, 0, 0)
+        lay.setSpacing(8)
+        lay.addWidget(self.kind_tabs)
+        lay.addLayout(body, 1)
+        lay.addWidget(tools)
+        self._apply_doc()
+
+    def _apply_doc(self) -> None:
+        if self._kind == "pre":
+            self.doc.setText(
+                i18n.tr("Pre-request scripts run in JavaScript before the request is sent.\n"
+                        "Modify req.url, req.headers and req.params, or store values in the "
+                        "active environment with pw.env.set()."))
+        else:
+            self.doc.setText(
+                i18n.tr("Post-response scripts run in JavaScript after the response arrives.\n"
+                        "Read res.status / res.body, parse JSON and save values back to the "
+                        "active environment with pw.env.set()."))
+
+    def set_kind(self, kind: str) -> None:
+        """由顶层标签调用：pre / post。"""
+        kind = "post" if kind == "post" else "pre"
+        if kind == self._kind:
+            return
+        self._drafts[self._kind] = self.code.toPlainText()
+        self._kind = kind
+        self.kind_tabs.set_current(kind, emit=False)
+        self.code.setPlainText(self._drafts.get(kind, ""))
+        self.status.setText("")
+        self._apply_doc()
+
+    def _on_kind(self, kind: str) -> None:
+        self._drafts[self._kind] = self.code.toPlainText()
+        self._kind = kind
+        self.code.setPlainText(self._drafts.get(kind, ""))
+        self.status.setText("")
+        self._apply_doc()
+        self.changed.emit()
+
+    def _on_code_changed(self) -> None:
+        if not self._loading:
+            self.changed.emit()
+
+    def _insert(self, snippet: str) -> None:
+        cur = self.code.textCursor()
+        cur.insertText(snippet)
+        self.code.setTextCursor(cur)
+        self.code.setFocus()
+
+    def _run_test(self) -> None:
+        """试跑：不联网，只在临时请求对象上看日志与错误。"""
+        from .scripts import run_script
+
+        req = {"method": "GET", "url": "https://example.com", "headers": [],
+               "params": [], "body": {"raw": ""}}
+        result = run_script(self.code.toPlainText(), self.store, req)
+        self.status.setText(
+            i18n.tr("✓ Ran OK · see console output") if result.ok
+            else "✕ " + result.error[:180])
+        self.status.setStyleSheet(
+            f"color: {theme().success if result.ok else theme().danger}; background: transparent;")
+
+    @property
+    def _drafts(self) -> Dict[str, str]:
+        if not hasattr(self, "_script_drafts"):
+            self._script_drafts: Dict[str, str] = {"pre": "", "post": ""}
+        return self._script_drafts
+
+    def load(self, scripts: Dict[str, Any]) -> None:
+        self._loading = True
+        self._script_drafts = {
+            "pre": str((scripts or {}).get("pre") or ""),
+            "post": str((scripts or {}).get("post") or ""),
+        }
+        self.code.setPlainText(self._script_drafts[self._kind])
+        self.status.setText("")
+        self._loading = False
+
+    def dump(self) -> Dict[str, str]:
+        drafts = dict(self._drafts)
+        drafts[self._kind] = self.code.toPlainText()
+        return drafts
+
+
 # ---------------------------------------------------------------- 主编辑器
 
 
@@ -795,7 +993,8 @@ class RequestEditor(QWidget):
 
         self.tabs = SegmentedTabs(
             [("params", "参数"), ("body", "请求体"), ("headers", "请求头"),
-             ("cookies", "Cookies"), ("auth", "认证")],
+             ("cookies", "Cookies"), ("auth", "认证"),
+             ("pre", "前置操作"), ("post", "后置操作")],
             style="underline", height=32, pad_h=10, font_size=12.2)
         self.tabs.changed.connect(self._on_tab)
         self.count_label = Label("", 10.5, theme().text_faint, mono_font=True)
@@ -824,6 +1023,8 @@ class RequestEditor(QWidget):
         self.body.changed.connect(self._on_body)
         self.auth = AuthPage()
         self.auth.changed.connect(self._on_auth)
+        self.scripts = ScriptPage(store=self.store)
+        self.scripts.changed.connect(self._on_scripts)
 
         # Cookie 单独一栏：发送时拼成 Cookie 头，也能一键把响应里的 Set-Cookie 收进来
         self.cookies = KVEditor("Cookie 名", "值", empty_hint="添加 Cookie")
@@ -844,6 +1045,8 @@ class RequestEditor(QWidget):
         self.pages.add("headers", self._wrap(self.headers, self.headers_tools))
         self.pages.add("cookies", self._wrap(self.cookies, self.cookies_tools))
         self.pages.add("auth", self.auth)
+        self.pages.add("pre", self.scripts)
+        self.pages.add("post", self.scripts, alias=True)
         self.pages.set_current("params", animate=False)
 
         head = QWidget()
@@ -890,6 +1093,7 @@ class RequestEditor(QWidget):
             self.cookies.set_rows(request.get("cookies", []))
             self.body.load(request.get("body", {}))
             self.auth.load(request.get("auth", {}))
+            self.scripts.load(request.get("scripts", {}))
         finally:
             self._loading = False
         self._refresh_counts()
@@ -905,6 +1109,7 @@ class RequestEditor(QWidget):
         self.request["cookies"] = self.cookies.rows()
         self.request["body"] = self.body.dump()
         self.request["auth"] = self.auth.dump()
+        self.request["scripts"] = self.scripts.dump()
         if not self.request.get("name") or self.request.get("name") == "Untitled Request":
             self._auto_name()
         self._refresh_counts()
@@ -948,6 +1153,9 @@ class RequestEditor(QWidget):
         has_body = bool(body.get("raw") or body.get("form") or body.get("file")) and body.get("mode") != "none"
         self.tabs.set_badge("body", 1 if has_body else 0)
         self.tabs.set_badge("auth", 1 if self.auth.dump().get("type") != "none" else 0)
+        scripts = self.scripts.dump() if hasattr(self, "scripts") else {}
+        self.tabs.set_badge("pre", 1 if scripts.get("pre", "").strip() else 0)
+        self.tabs.set_badge("post", 1 if scripts.get("post", "").strip() else 0)
         p = len(self.params.rows())
         h = len(self.headers.rows())
         self.count_label.setText(i18n.trf("{p} 参数 · {h} 请求头", p=p, h=h) if (p or h) else "")
@@ -1066,7 +1274,13 @@ class RequestEditor(QWidget):
         if not self._loading:
             self._sync_request()
 
+    def _on_scripts(self) -> None:
+        if not self._loading:
+            self._sync_request()
+
     def _on_tab(self, key: str) -> None:
+        if key in ("pre", "post"):
+            self.scripts.set_kind(key)
         self.pages.set_current(key)
 
     def _toggle_bulk(self) -> None:

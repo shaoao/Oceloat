@@ -414,6 +414,53 @@ class HistoryRow(QWidget):
         p.end()
 
 
+class HistoryGroupHeader(QWidget):
+    """历史分组标题：Today / Yesterday / 2 days ago … 带折叠方向与计数。"""
+
+    def __init__(self, label: str, count: int, parent=None):
+        super().__init__(parent)
+        self.label = label
+        self.count = count
+        self.setFixedHeight(30)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+
+    def paintEvent(self, _e):
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        # 下拉箭头
+        p.setFont(mono(10))
+        p.setPen(C(t.text_faint))
+        p.drawText(QRectF(10, 0, 12, self.height()),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), "⌄")
+        p.setFont(font(11.2, QFont.Weight.Medium))
+        p.setPen(C(t.text_dim))
+        p.drawText(QRectF(26, 0, self.width() - 70, self.height()),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), self.label)
+        p.setFont(mono(10))
+        p.setPen(C(t.text_faint))
+        p.drawText(QRectF(self.width() - 40, 0, 30, self.height()),
+                   int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                   str(self.count))
+        p.end()
+
+
+def _history_group(ts: float) -> str:
+    """按本地日期把时间戳归到 Today / Yesterday / N days ago。"""
+    from datetime import datetime
+
+    day = datetime.fromtimestamp(ts or 0).date()
+    today = datetime.now().date()
+    delta = (today - day).days
+    if delta <= 0:
+        return i18n.tr("今天")
+    if delta == 1:
+        return i18n.tr("昨天")
+    if delta < 7:
+        return i18n.trf("{n} 天前", n=delta)
+    return datetime.fromtimestamp(ts or 0).strftime("%Y-%m-%d")
+
+
 # ---------------------------------------------------------------- 侧边栏
 
 
@@ -746,17 +793,27 @@ class Sidebar(QWidget):
         entries = self.store.history
         rows = list(getattr(self, "_hist_rows", []))
 
-        # 快速路径：每发一次请求只会在头部多一条、尾部裁一条。
-        # 以前不管三七二十一整列表重建，240 条历史就是 240 个新控件 —— 每发一次请求都卡一下。
+        # 快速路径：每发一次请求只会在头部多一条、尾部裁一条，且分组没变。
+        # 以前不管三七归一整列表重建，240 条历史就是 240 个新控件 —— 每发一次请求都卡一下。
         if entries and rows:
             incoming = [e.get("id") for e in entries]
             existing = [r.entry.get("id") for r in rows]
-            if incoming[0] not in existing and (incoming[1:] == existing
-                                               or incoming[1:] == existing[:-1]):
+            head_group = _history_group(entries[0].get("ts", 0))
+            first_header = getattr(self, "_hist_header", None)
+            if (incoming[0] not in existing
+                    and (incoming[1:] == existing or incoming[1:] == existing[:-1])
+                    and first_header == head_group):
                 row = HistoryRow(entries[0])
                 row.clicked.connect(self._restore_history)
                 row.removeRequested.connect(self._remove_history)
-                self.history_lay.insertWidget(0, row)
+                # 插到当前分组头之后，而不是列表最前
+                at = 0
+                for i in range(self.history_lay.count()):
+                    w = self.history_lay.itemAt(i).widget()
+                    if w is first_header or w is rows[0]:
+                        at = i + 1
+                        break
+                self.history_lay.insertWidget(at, row)
                 rows.insert(0, row)
                 while len(rows) > len(entries):
                     old = rows.pop()
@@ -773,13 +830,26 @@ class Sidebar(QWidget):
                 w.setParent(None)
                 w.deleteLater()
         self._hist_rows = []
+        self._hist_header = ""
         if not entries:
             from .widgets import EmptyState
 
             empty = EmptyState("clock", "暂无历史记录", "发送请求后会自动记录在这里", "⌘↵ 发送")
             self.history_lay.insertWidget(0, empty)
             return
+
+        # 按日期分组：一组一个标题 + 若干条记录，标题带条数
+        current_group = ""
+        group_count = 0
         for entry in entries:
+            group = _history_group(entry.get("ts", 0))
+            if group != current_group:
+                current_group = group
+                group_count = sum(1 for e in entries if _history_group(e.get("ts", 0)) == group)
+                header = HistoryGroupHeader(group, group_count)
+                self.history_lay.insertWidget(self.history_lay.count() - 1, header)
+                if not getattr(self, "_hist_header", ""):
+                    self._hist_header = group
             row = HistoryRow(entry)
             row.clicked.connect(self._restore_history)
             row.removeRequested.connect(self._remove_history)

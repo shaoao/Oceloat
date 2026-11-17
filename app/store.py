@@ -19,9 +19,29 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.22"
+VERSION = "1.0.23"
 
 CHANGELOG = [
+    {
+        "version": "1.0.23",
+        "date": "2026-11-17",
+        "items": [
+            "新增：前置 / 后置请求脚本 —— 内置 JavaScript 引擎（Qt QJSEngine，零额外依赖），"
+            "请求发送前可改 URL / 请求头 / 参数，响应到达后可解析结果；"
+            "pw.env.set 直接写环境变量并落盘，console.log 输出可查看，脚本出错不影响发请求",
+            "新增：Body 类型补齐为 none / form-data / x-www-form-urlencoded / JSON / XML / Text / Binary，"
+            "英文名与主流工具对齐；新增 XML 类型，带高亮、校验与一键格式化，发送时自动带 application/xml",
+            "改进：代码编辑器支持括号/引号自动配对、回车智能缩进、Tab 缩进与选中文本包裹；"
+            "JSON / XML 一键格式化，JSONC 行注释也能解析",
+            "改进：全局统一代码高亮 —— JSON 与 Python / JS / Go / Java 等语言共用同一套 One Dark 风格 token 配色"
+            "（关键字粉紫、函数名蓝、字符串黄绿、数字橙），请求体、响应、代码示例、脚本编辑器全部生效",
+            "改进：响应大小详情卡现在含状态行的真实头字节数，并新增「请求大小」分组，"
+            "Header / Body 分开显示；卡片背景调暗，不再抢眼",
+            "改进：历史记录按日期分组展示（Today / Yesterday / N days ago），每组带条数，"
+            "中文界面下显示「今天 / 昨天 / N 天前」",
+            "优化：自测 395 项全绿",
+        ],
+    },
     {
         "version": "1.0.22",
         "date": "2026-11-17",
@@ -503,6 +523,7 @@ def new_request(name: str = "Untitled Request", method: str = "GET", url: str = 
         "body": {"mode": "none", "raw": "", "form": [], "file": ""},
         "auth": {"type": "none", "token": "", "username": "", "password": "",
                  "key": "", "value": "", "add_to": "header"},
+        "scripts": {"pre": "", "post": ""},
         "note": "",
     }
 

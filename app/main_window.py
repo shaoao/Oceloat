@@ -565,6 +565,7 @@ class MainWindow(QWidget):
         super().__init__()
         self.store = store
         self.client = ApiClient(self)
+        self.client.set_store(store)
         self.client.started.connect(lambda: None)
         self.client.finished.connect(self._on_response)
 

@@ -57,7 +57,7 @@ class DetailCard(QWidget):
     def __init__(self, title: str, total: str, rows: List[Row],
                  bars: bool = False, parent=None,
                  head_icon: str = "clock", note: str = "",
-                 split: bool = False):
+                 split: bool = False, sections: Optional[List[tuple]] = None):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint
                             | Qt.WindowType.WindowTransparentForInput
@@ -70,6 +70,8 @@ class DetailCard(QWidget):
         self._split = split
         self._head_icon = head_icon
         self._note = note
+        # 附加分组：[(小标题, 总计, rows), ...]，画在主体下方，用分割线隔开
+        self._sections = sections or []
 
         fm = QFontMetricsF(font(11.5))
         label_w = max([fm.horizontalAdvance(r[0]) for r in rows] + [64])
@@ -93,6 +95,12 @@ class DetailCard(QWidget):
         self._note_y = y + 4 if note else None
         if note:
             y += 20
+        # 附加分组：小标题 + 总计 + 若干行
+        self._section_ys: List[tuple] = []
+        for sec_title, sec_total, sec_rows in self._sections:
+            y += 12
+            self._section_ys.append((y, sec_title, sec_total, sec_rows))
+            y += 22 + len(sec_rows) * self.ROW_H
         self._h = y + self.PAD
         self.setFixedSize(self._w, self._h)
 
@@ -121,7 +129,7 @@ class DetailCard(QWidget):
 
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         p.setPen(QPen(C(t.border_strong), 1))
-        p.setBrush(C(t.elevated))
+        p.setBrush(C(t.detail_bg))
         p.drawRoundedRect(r, 12, 12)
 
         x = self.PAD
@@ -217,6 +225,38 @@ class DetailCard(QWidget):
             p.setPen(C(t.text_faint))
             p.drawText(QRectF(x, self._note_y, self._w - 2 * x, 18),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), self._note)
+
+        # 附加分组（如「请求大小」）：分割线 + 小标题 + 行
+        for sy, sec_title, sec_total, sec_rows in self._section_ys:
+            p.setPen(QPen(C(t.border), 1))
+            p.drawLine(QPointF(x, sy), QPointF(self._w - x, sy))
+            hy = sy + 9
+            p.setFont(font(11.5, QFont.Weight.DemiBold))
+            p.setPen(C(t.text_dim))
+            p.drawText(QRectF(x, hy, 160, 22),
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), sec_title)
+            p.setFont(font(12.5, QFont.Weight.DemiBold))
+            p.setPen(C(t.text))
+            p.drawText(QRectF(self._w - self.PAD - 118, hy, 118, 22),
+                       int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), sec_total)
+            for i, (label, value, ratio) in enumerate(sec_rows):
+                ry = hy + 24 + i * self.ROW_H
+                box = QRectF(icon_x, ry + (self.ROW_H - self.ROW_ICON) / 2,
+                             self.ROW_ICON, self.ROW_ICON)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(C(t.hover))
+                p.drawRoundedRect(box, 5, 5)
+                pm = icons.pixmap(ROW_ICONS.get(label, "dot"), t.text_faint, 11, 1.7)
+                icons.draw_centered(p, pm, box.center().x(), box.center().y())
+                p.setFont(font(11.5))
+                p.setPen(C(t.text_dim))
+                p.drawText(QRectF(label_x, ry, self._label_w, self.ROW_H),
+                           int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), label)
+                p.setFont(font(11.5, QFont.Weight.Medium))
+                p.setPen(C(t.text))
+                p.drawText(QRectF(self._w - self.PAD - self._value_w, ry,
+                                  self._value_w, self.ROW_H),
+                           int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), value)
         p.end()
 
     def show_below(self, widget: QWidget, gap: int = 8) -> None:

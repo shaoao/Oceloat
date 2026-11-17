@@ -1,14 +1,21 @@
-"""代码视图：行号、JSON 语法高亮、查找高亮、JSON 树形浏览。"""
+"""代码视图：统一高亮、行号、自动补全/缩进、查找高亮、JSON 树形浏览。
+
+高亮方案全局统一：JSON 与九种语言共用同一套 token 配色（One Dark 风格），
+深色主题下关键字粉紫、函数名蓝、字符串黄绿、数字橙、注释灰 —— 跟现代
+编辑器一致，写起来更顺眼。浅色主题有对应的一套降饱和配色。
+"""
 from __future__ import annotations
 
 import json
+import re
 import weakref
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import QRect, QRectF, QSize, Qt
 from PyQt6.QtGui import (
     QColor,
     QFont,
+    QKeyEvent,
     QPalette,
     QTextCharFormat,
     QTextCursor,
@@ -29,40 +36,66 @@ from PyQt6.QtWidgets import (
 from . import i18n
 from .theme import C, font, mono, theme
 
-PUNCT = "#6E6E78"
-JSON_KEY_DARK = "#E4EAF3"
-JSON_STR_DARK = "#93C4A3"
-JSON_NUM_DARK = "#DCBF86"
-JSON_KW_DARK = "#8FA9C9"
+# ---------------------------------------------------------------- 统一 token 配色
+# 深色：One Dark / 现代 IDE 常见方案；浅色：对应的降饱和版本。
+# 顺序：函数定义 > 关键字 > 字符串 > 数字 > 参数 > 标点 > 注释
+_TOKENS_DARK: Dict[str, str] = {
+    "key": "#E06C9A",        # def / class / import / const / function —— 粉紫
+    "keyword": "#E06C75",    # return / if / else / true / null —— 红
+    "string": "#A8CE8F",     # 字符串 —— 黄绿
+    "number": "#D9A96B",     # 数字 —— 橙
+    "param": "#E5C07B",      # 函数参数 / flag —— 浅黄
+    "func": "#7FB4E6",       # 函数名 —— 蓝
+    "builtin": "#56B6C2",    # 内建 / 类型 —— 青
+    "punct": "#9BA0AC",      # 标点 —— 灰蓝
+    "comment": "#6E7681",    # 注释 —— 深灰
+    "url": "#7FB4E6",
+    "property": "#9BB8E0",   # JSON key —— 淡蓝
+}
 
-JSON_KEY_LIGHT = "#2C3E50"
-JSON_STR_LIGHT = "#2F6B4F"
-JSON_NUM_LIGHT = "#8A5A18"
-JSON_KW_LIGHT = "#2E5A8A"
+_TOKENS_LIGHT: Dict[str, str] = {
+    "key": "#A626A4",
+    "keyword": "#C0394B",
+    "string": "#3F7A3F",
+    "number": "#A06000",
+    "param": "#8A5A00",
+    "func": "#2C63B4",
+    "builtin": "#007C8C",
+    "punct": "#5A6070",
+    "comment": "#9096A0",
+    "url": "#2C63B4",
+    "property": "#2E5A8A",
+}
+
+
+def tokens() -> Dict[str, str]:
+    """当前主题下的一整套 token 颜色 —— 所有高亮器都从这里取，保证全局一致。"""
+    return _TOKENS_DARK if theme().is_dark else _TOKENS_LIGHT
 
 
 def _colors():
-    t = theme()
-    if t.is_dark:
-        return JSON_KEY_DARK, JSON_STR_DARK, JSON_NUM_DARK, JSON_KW_DARK, PUNCT, t.text_faint
-    return JSON_KEY_LIGHT, JSON_STR_LIGHT, JSON_NUM_LIGHT, JSON_KW_LIGHT, "#8A8A92", t.text_faint
+    c = tokens()
+    return (c["property"], c["string"], c["number"], c["keyword"],
+            c["punct"], c["comment"])
 
 
 class JsonHighlighter(QSyntaxHighlighter):
+    """JSON / JSONC 高亮：键、字符串、数字、字面量、标点（支持 // 注释）。"""
+
     def __init__(self, doc):
         super().__init__(doc)
 
     def highlightBlock(self, text: str) -> None:  # noqa: N802
-        import re
-
-        key, string, number, keyword, punct, comment = _colors()
+        c = tokens()
         # 注意顺序：后应用的规则会覆盖先前的，因此「键」必须放在「字符串」之后
         rules = [
-            (re.compile(r'"(?:[^"\\]|\\.)*"'), string, QFont.Weight.Normal),
-            (re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.])"), number, QFont.Weight.Normal),
-            (re.compile(r"\b(?:true|false|null)\b"), keyword, QFont.Weight.Medium),
-            (re.compile(r"[{}\[\],:]"), punct, QFont.Weight.Normal),
-            (re.compile(r'"(?:[^"\\]|\\.)*"(?=\s*:)'), key, QFont.Weight.Medium),
+            (re.compile(r"//[^\n]*"), c["comment"], QFont.Weight.Normal),
+            (re.compile(r'"(?:[^"\\]|\\.)*"'), c["string"], QFont.Weight.Normal),
+            (re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.])"),
+             c["number"], QFont.Weight.Normal),
+            (re.compile(r"\b(?:true|false|null)\b"), c["keyword"], QFont.Weight.DemiBold),
+            (re.compile(r"[{}\[\],:]"), c["punct"], QFont.Weight.Normal),
+            (re.compile(r'"(?:[^"\\]|\\.)*"(?=\s*:)'), c["property"], QFont.Weight.DemiBold),
         ]
         for pattern, color, weight in rules:
             for m in pattern.finditer(text):
@@ -105,32 +138,57 @@ class CodeHighlighter(QSyntaxHighlighter):
         self._rebuild()
         self.rehighlight()
 
+    _DECL = {
+        "python": "def class",
+        "javascript": "function class",
+        "go": "func type struct interface",
+        "java": "class interface",
+        "php": "function class",
+        "csharp": "class interface",
+        "kotlin": "fun class object",
+        "powershell": "function param",
+        "shell": "",
+    }
+    # 各语言的内建/类型名（青色）
+    _BUILTINS = {
+        "python": "str int float bool list dict set tuple self",
+        "javascript": "console JSON Math Promise window document",
+        "go": "string int bool error byte rune",
+        "java": "String Integer Boolean List Map",
+        "php": "array string int bool",
+        "csharp": "string int bool double var object",
+        "kotlin": "String Int Boolean Long Unit",
+        "powershell": "string int bool",
+        "shell": "",
+    }
+
     def _rebuild(self) -> None:
-        import re
-
-        t = theme()
-        key_col = "#9BB8E0" if t.is_dark else "#2E5A8A"
-        str_col = "#9CCEAE" if t.is_dark else "#2F6B4F"
-        num_col = "#D9BB86" if t.is_dark else "#8A5A18"
-        fn_col = "#B4C4DC" if t.is_dark else "#3B5A7A"
-        cmt_col = t.text_faint
-        flag_col = "#C8B48C" if t.is_dark else "#7A5A22"
+        c = tokens()
         words = self.KEYWORDS[self.language].split()
+        decl = self._DECL.get(self.language, "").split()
+        builtins = self._BUILTINS.get(self.language, "").split()
+        comment_pat = (r"//[^\n]*" if self.language in self._SLASH_COMMENT
+                       else r"#[^\n]*")
 
-        comment = (r"(?:^|\s)//[^\n]*" if self.language in self._SLASH_COMMENT
-                   else r"(?:^|\s)#[^\n]*")
         rules = [
-            (comment, cmt_col, QFont.Weight.Normal),
+            (comment_pat, c["comment"], QFont.Weight.Normal),
             # 字符串：双引号 / 单引号 / 反引号
-            (r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|`[^`]*`', str_col, QFont.Weight.Normal),
+            (r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|`[^`]*`', c["string"], QFont.Weight.Normal),
             # 裸 URL 单独染色，示例里一眼看到请求打到哪
-            (r"https?://[^\s'\"`\\]+", str_col, QFont.Weight.Normal),
+            (r"https?://[^\s'\"`\\]+", c["url"], QFont.Weight.Normal),
             # 命令行参数：-X / --data-raw
-            (r"(?<![\w-])--?[A-Za-z][\w-]*", flag_col, QFont.Weight.Medium),
-            (r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", num_col, QFont.Weight.Normal),
-            (r"\b(?:" + "|".join(re.escape(w) for w in words if not w.startswith("-"))
-             + r")\b", key_col, QFont.Weight.DemiBold),
-            (r"\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\()", fn_col, QFont.Weight.Normal),
+            (r"(?<![\w-])--?[A-Za-z][\w-]*", c["param"], QFont.Weight.Normal),
+            (r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", c["number"], QFont.Weight.Normal),
+            # 声明关键字（def / class / function）用粉紫，比普通关键字更醒目
+            (r"\b(?:" + "|".join(decl) + r")\b" if decl else r"(?!)",
+             c["key"], QFont.Weight.DemiBold),
+            (r"\b(?:" + "|".join(re.escape(w) for w in words if not w.startswith("-")
+                                 and w not in decl)
+             + r")\b", c["keyword"], QFont.Weight.Normal),
+            (r"\b(?:" + "|".join(builtins) + r")\b" if builtins else r"(?!)",
+             c["builtin"], QFont.Weight.Normal),
+            # 函数调用名 —— 蓝色
+            (r"\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\()", c["func"], QFont.Weight.Normal),
         ]
         self._rules = [(re.compile(pat), col, weight) for pat, col, weight in rules]
 
@@ -192,10 +250,132 @@ class CodeView(QPlainTextEdit):
         self._hl = None
         if highlight:
             self._hl = JsonHighlighter(self.document())
+        self._auto_pair = not read_only   # 只有可编辑视图才做补全
         self.blockCountChanged.connect(self._update_width)
         self.updateRequest.connect(self._update_gutter)
         self._update_width()
         CodeView._views.add(self)
+
+    # -------------------------------------------------- 输入补全 / 智能缩进
+    _PAIRS = {"{": "}", "[": "]", "(": ")", '"': '"', "'": "'"}
+    _CLOSE = {"}": "{", "]": "[", ")": "("}
+
+    def set_auto_pair(self, on: bool) -> None:
+        """开关括号/引号自动补全（只读视图恒为关）。"""
+        self._auto_pair = bool(on) and not self.isReadOnly()
+
+    def keyPressEvent(self, e: QKeyEvent) -> None:  # noqa: N802
+        """写代码的手感：括号/引号成对、回车继承缩进、Tab 缩进、退格删整对。
+
+        只在可编辑且开启补全时接管；其余按键原样交给 QPlainTextEdit，
+        查找/撤销/输入法等原生行为完全不受影响。
+        """
+        if not self._auto_pair or self.isReadOnly():
+            super().keyPressEvent(e)
+            return
+        key = e.text()
+        cur = self.textCursor()
+        pos = cur.position()
+        doc = self.document()
+
+        # 1) 输入闭合符：右边正好是这个闭合符时「跨过去」，不重复插入
+        if key in self._CLOSE and cur.atBlockEnd() is False:
+            nxt = doc.characterAt(pos)
+            if nxt == key:
+                cur.movePosition(QTextCursor.MoveOperation.Right)
+                self.setTextCursor(cur)
+                return
+
+        # 2) 输入起始符：成对插入；有选中文本时用一对符号把它包起来
+        if key in self._PAIRS:
+            close = self._PAIRS[key]
+            if cur.hasSelection():
+                start, end = cur.selectionStart(), cur.selectionEnd()
+                cur.insertText(key)
+                cur.setPosition(end + 1)
+                cur.insertText(close)
+                cur.setPosition(start + 1)
+                cur.setPosition(end + 1, QTextCursor.MoveMode.KeepAnchor)
+                self.setTextCursor(cur)
+                return
+            # 引号：后面紧跟字母/数字时不补（避免写英文缩写被打断）
+            if key in ('"', "'") and doc.characterAt(pos).isalnum():
+                super().keyPressEvent(e)
+                return
+            cur.insertText(key + close)
+            cur.setPosition(pos + 1)
+            self.setTextCursor(cur)
+            return
+
+        # 3) 回车：继承上一行缩进；开括号后回车多缩进一级，并把闭合符留到下一行
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            block = cur.block()
+            text = block.text()
+            indent = re.match(r"[ \t]*", text).group(0)
+            before = text[:cur.positionInBlock()]
+            opens = sum(before.count(k) - before.count(v) for k, v in (("{", "}"), ("[", "]"), ("(", ")")))
+            if opens > 0:
+                indent += "    "
+            nxt = doc.characterAt(pos)
+            cur.beginEditBlock()
+            if nxt in self._CLOSE and opens > 0:
+                # 先把原来的闭合符吃掉，再写到新行 —— 否则会留下两个
+                cur.setPosition(pos)
+                cur.setPosition(pos + 1, QTextCursor.MoveMode.KeepAnchor)
+                cur.removeSelectedText()
+                cur.insertText("\n" + indent + "\n" + indent[:-4] + nxt)
+                cur.setPosition(pos + 1 + len(indent))
+            else:
+                cur.insertText("\n" + indent)
+            cur.endEditBlock()
+            self.setTextCursor(cur)
+            return
+
+        # 4) 退格：光标夹在空的一对符号中间时一次删掉两个
+        if e.key() == Qt.Key.Key_Backspace and not cur.hasSelection():
+            prev = doc.characterAt(pos - 1)
+            nxt = doc.characterAt(pos)
+            if prev in self._PAIRS and self._PAIRS[prev] == nxt:
+                cur.setPosition(pos - 1)
+                cur.setPosition(pos + 1, QTextCursor.MoveMode.KeepAnchor)
+                cur.removeSelectedText()
+                self.setTextCursor(cur)
+                return
+
+        # 5) Tab：插入四个空格而不是跳焦点
+        if e.key() == Qt.Key.Key_Tab and not cur.hasSelection():
+            cur.insertText("    ")
+            self.setTextCursor(cur)
+            return
+
+        super().keyPressEvent(e)
+
+    def format_code(self) -> bool:
+        """格式化当前文本：JSON 走 indent=2，XML 做简单换行缩进，其余不处理。
+
+        返回是否真的改了内容 —— 调用方据此提示「已是最新格式」。
+        """
+        text = self.toPlainText()
+        if not text.strip():
+            return False
+        out: Optional[str] = None
+        if text.lstrip().startswith(("{", "[")):
+            formatted, ok = pretty_json(text)
+            if ok:
+                out = formatted
+        elif text.lstrip().startswith("<"):
+            out = _format_xml(text)
+        if out is None or out == text:
+            return False
+        cur = self.textCursor()
+        anchor = cur.anchor()
+        position = cur.position()
+        self.setPlainText(out)
+        cur = self.textCursor()
+        cur.setPosition(min(anchor, len(out)))
+        cur.setPosition(min(position, len(out)), QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cur)
+        return True
 
     # -------------------------------------------------- 语法高亮开关
     def set_highlight(self, on: bool) -> None:
@@ -429,6 +609,7 @@ class JsonTree(QTreeWidget):
         self.clear()
         self._data = obj
         t = theme()
+        c = tokens()
         if isinstance(obj, dict):
             for k, v in obj.items():
                 self._add(self.invisibleRootItem(), str(k), v, expand_depth, t)
@@ -439,6 +620,7 @@ class JsonTree(QTreeWidget):
             self._add(self.invisibleRootItem(), "value", obj, expand_depth, t)
 
     def _add(self, parent, key: str, value: Any, depth: int, t) -> None:
+        c = tokens()
         item = QTreeWidgetItem(parent)
         item.setSizeHint(0, QSize(120, ROW_H))
         item.setText(0, key)
@@ -466,16 +648,16 @@ class JsonTree(QTreeWidget):
         else:
             if isinstance(value, str):
                 item.setText(1, f'"{value}"')
-                item.setForeground(1, C(JSON_STR_DARK if t.is_dark else JSON_STR_LIGHT))
+                item.setForeground(1, C(c["string"]))
             elif isinstance(value, bool):
                 item.setText(1, "true" if value else "false")
-                item.setForeground(1, C(JSON_KW_DARK if t.is_dark else JSON_KW_LIGHT))
+                item.setForeground(1, C(c["keyword"]))
             elif value is None:
                 item.setText(1, "null")
                 item.setForeground(1, C(t.text_faint))
             else:
                 item.setText(1, str(value))
-                item.setForeground(1, C(JSON_NUM_DARK if t.is_dark else JSON_NUM_LIGHT))
+                item.setForeground(1, C(c["number"]))
             item.setFont(1, mono(11.5))
 
     def expand_all(self):
@@ -487,6 +669,19 @@ class JsonTree(QTreeWidget):
 
 # ---------------------------------------------------------------- 工具函数
 
+def _format_xml(text: str) -> Optional[str]:
+    """轻量 XML 缩进：用Qt 的 DOM 读写，失败（格式不对）就返回 None 不动原文。"""
+    try:
+        from PyQt6.QtXml import QDomDocument
+
+        doc = QDomDocument()
+        if not doc.setContent(text):
+            return None
+        return doc.toString(2)
+    except Exception:
+        return None
+
+
 def pretty_json(text: str) -> Tuple[str, bool]:
     """返回 (格式化文本, 是否成功)。超大文本直接原样返回以保流畅。"""
     if not text.strip():
@@ -496,7 +691,12 @@ def pretty_json(text: str) -> Tuple[str, bool]:
     try:
         data = json.loads(text)
     except Exception:
-        return text, False
+        # JSONC（带 // 注释）先剥掉行注释再试
+        stripped = re.sub(r"^\s*//[^\n]*$", "", text, flags=re.MULTILINE)
+        try:
+            data = json.loads(stripped)
+        except Exception:
+            return text, False
     try:
         return json.dumps(data, indent=2, ensure_ascii=False), True
     except Exception:

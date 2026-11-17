@@ -976,5 +976,30 @@ _EN.update({
     "在 Ocelot「Mock 服务」里新建一条，或把路径写成 /api/users/* 做前缀匹配":
         "Add one in Ocelot's Mock Server, or end the path with * to match by prefix.",
     "读取失败：{err}": "Couldn't read the file: {err}",
+    # 前后置脚本 / 代码编辑 / 历史分组
+    "前置操作": "Pre-request", "后置操作": "Post-response",
+    "Pre-request Script": "Pre-request Script",
+    "Post-response Script": "Post-response Script",
+    "Code snippets": "Code snippets",
+    "Environment: Set an environment variable": "Environment: Set an environment variable",
+    "Environment: Set timestamp variable": "Environment: Set timestamp variable",
+    "Environment: Set random number variable": "Environment: Set random number variable",
+    "Request: Add a header": "Request: Add a header",
+    "Console: Print a message": "Console: Print a message",
+    "Pre-request scripts run in JavaScript before the request is sent.\n"
+    "Modify req.url, req.headers and req.params, or store values in the "
+    "active environment with pw.env.set().":
+        "Pre-request scripts run in JavaScript before the request is sent.\n"
+        "Modify req.url, req.headers and req.params, or store values in the "
+        "active environment with pw.env.set().",
+    "Post-response scripts run in JavaScript after the response arrives.\n"
+    "Read res.status / res.body, parse JSON and save values back to the "
+    "active environment with pw.env.set().":
+        "Post-response scripts run in JavaScript after the response arrives.\n"
+        "Read res.status / res.body, parse JSON and save values back to the "
+        "active environment with pw.env.set().",
+    "✓ Ran OK · see console output": "✓ Ran OK · see console output",
+    "Header 含状态行 · Body 为正文": "Header includes the status line · Body is the raw payload",
+    "今天": "Today", "昨天": "Yesterday", "{n} 天前": "{n} days ago",
 })
 

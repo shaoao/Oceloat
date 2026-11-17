@@ -65,10 +65,12 @@ def _prepare(req: Dict[str, Any], env: Dict[str, str]) -> Dict[str, Any]:
     body: Optional[str] = None
     form: List[Tuple[str, str]] = []
     files: List[Tuple[str, str]] = []
-    if mode in ("json", "text"):
+    if mode in ("json", "text", "xml"):
         body = resolve_vars(bdata.get("raw", "") or "", env)
         if not any(k.lower() == "content-type" for k, _ in headers):
-            headers.append(("Content-Type", "application/json" if mode == "json" else "text/plain"))
+            headers.append(("Content-Type", {
+                "json": "application/json", "xml": "application/xml",
+                "text": "text/plain"}.get(mode, "text/plain")))
     elif mode == "urlencoded":
         form = [(resolve_vars(str(r["key"]), env), resolve_vars(str(r.get("value", "")), env))
                 for r in bdata.get("form", [])

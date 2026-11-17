@@ -941,8 +941,11 @@ class FadeStack(QWidget):
         self._lay.setContentsMargins(0, 0, 0, 0)
         self._lay.setSpacing(0)
 
-    def add(self, key: str, widget: QWidget) -> None:
+    def add(self, key: str, widget: QWidget, alias: bool = False) -> None:
+        """加入一页。alias=True 时只为另一个 key 复用同一控件，不再塞进布局。"""
         self._pages[key] = widget
+        if alias:
+            return
         widget.setParent(self)
         widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         widget.hide()
@@ -952,18 +955,20 @@ class FadeStack(QWidget):
         return self._current
 
     def set_current(self, key: str, animate: bool = True) -> None:
-        if key == self._current:
-            return
+        """切换页面；同一控件被多个 key 复用时，切到别名页也只更新内部状态。"""
         widget = self._pages.get(key)
         if widget is None:
             return
+        if key == self._current:
+            return
         old = self._pages.get(self._current) if self._current else None
         self._current = key
-        if old is not None:
-            old.hide()
-        widget.show()
-        if animate:
-            fade_in(widget, 150)
+        if old is not widget:
+            if old is not None:
+                old.hide()
+            widget.show()
+            if animate:
+                fade_in(widget, 150)
 
 
 # ---------------------------------------------------------------- 其它原子控件

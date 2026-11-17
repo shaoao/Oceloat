@@ -1,4 +1,32 @@
-# 更新内容
+# What's Changed
+
+## v1.0.23 — 2026-11-17
+
+**Added**
+- **Pre-request and post-response scripts** powered by Qt's built-in JavaScript engine
+  (QJSEngine, zero extra dependencies). Modify the URL, headers and query params before
+  sending; parse the response after it arrives. `pw.env.set()` writes variables into the
+  active environment and persists them, `console.log()` output is visible, and a broken
+  script never blocks the request.
+- **Complete body type set** — none / form-data / x-www-form-urlencoded / JSON / XML /
+  Text / Binary, with names aligned to mainstream API clients. XML is a new first-class
+  type with syntax highlighting, validation, one-click formatting and automatic
+  `application/xml` content type.
+
+**Improved**
+- Code editor now supports automatic bracket and quote pairing, smart indentation on
+  Enter, Tab indentation and wrapping a selection in a pair. JSON and XML can be
+  formatted in one click; JSONC line comments are handled.
+- One unified syntax highlighting scheme across the whole app — JSON and Python /
+  JavaScript / Go / Java and more share a single One Dark style token palette (declaration
+  keywords in pink, functions in blue, strings in green, numbers in orange). Request
+  bodies, responses, code examples and the script editor all use it.
+- The response size card now counts header bytes including the status line, and adds a
+  **Request Size** section with separate Header / Body figures. Card background is darker.
+- History is grouped by date (Today / Yesterday / N days ago) with a count per group.
+
+**Optimized**
+- All 395 self-tests pass.
 
 ## v1.0.22 — 2026-11-17
 
