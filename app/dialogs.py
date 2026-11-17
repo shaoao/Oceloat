@@ -2657,10 +2657,10 @@ class TransferDialog(GlassDialog):
     def _show_page(self, key: str) -> None:
         self.stack.set_current(key)
         self.back_btn.setVisible(key != "import")
-        titles = {"import": "集合", "file": "导入集合", "export": "导出集合"}
+        titles = {"import": "导入导出", "file": "导入集合", "export": "导出集合"}
         self._title_label.setText(i18n.tr(titles.get(key, "集合")))
         # 高度跟着内容走：列表页最高，选文件 / 导出页短一些，免得中间空一大块
-        height = {"import": 640, "file": 470, "export": 480}.get(key, 620)
+        height = {"import": 640, "file": 396, "export": 480}.get(key, 620)
         if self.height() != height:
             self.resize(self.width(), height)
 

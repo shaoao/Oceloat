@@ -826,7 +826,7 @@ _EN.update({
     "离线 · 点刷新节点": "Offline · hit Refresh Nodes",
 
     # 导入导出 / 文件对话框
-    "导入集合": "Import Collection", "导出集合": "Export Collection",
+    "导入导出": "Import / Export", "导入集合": "Import Collection", "导出集合": "Export Collection",
     "JSON (*.json);;所有文件 (*)": "JSON (*.json);;All Files (*)",
     "Markdown (*.md);;所有文件 (*)": "Markdown (*.md);;All Files (*)",
 
