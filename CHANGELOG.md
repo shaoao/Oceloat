@@ -1,5 +1,27 @@
 # What's Changed
 
+## v1.0.24 — 2026-11-17
+
+**Improved**
+- The script editor is now split into two dedicated pages, **Pre-request Script** and
+  **Post-response Script**; the redundant in-page tab switch is gone. The reference panel
+  on the right scrolls independently with a slim scrollbar, so overflow no longer pushes
+  the controls below out of place. `Run` becomes a clearer **Run test** button with a
+  tooltip explaining that it runs the script locally without sending a request.
+- History groups now use the same chevron as the collection tree. Click a group header to
+  collapse or expand it, and the state is remembered across restarts.
+
+**Added**
+- **JWT auth** — auto-generate a signed token with HS256 / HS384 / HS512 or paste one
+  manually. Payload and secret support environment variables, and the token is sent as
+  `Authorization: Bearer <token>`. Generated tokens match the jwt.io standard exactly.
+- **Inherit auth** — walk up the request's collection to find the nearest folder auth.
+  Configure it from the folder's right-click **Configure auth…** menu. Both JWT and Inherit
+  work on the direct and relay send paths.
+
+**Optimized**
+- All 395 self-tests pass.
+
 ## v1.0.23 — 2026-11-17
 
 **Added**
@@ -30,478 +52,614 @@
 
 ## v1.0.22 — 2026-11-17
 
-**修复**
-- **设置窗口里切换语言，右侧页面还是中文**：设置窗口是独立的顶层窗口，主窗口那遍翻译
-  扫不到它。现在切换时设置页自己也会跟着翻一遍，页标题、左侧导航宽度一起更新
-- **响应区上方多了一套横线**：指标条隐藏时它下面那条分隔线还留着，跟分割手柄的线叠在
-  一起。现在分隔线跟着指标条一起显隐，只保留一条
-- **「新建 Mock 路由」「新建条件规则」标题没翻译**：英文下这两个弹窗标题仍是中文
-- **时间线统计与「关闭换行」没翻译**：次数 / 成功率 / 平均 / P95 / 最慢，以及原始视图的
-  换行开关，在英文下还是中文
+**Fixed**
+- **Switching the language in Settings left the right-hand page in Chinese**: the Settings
+  window is a separate top-level window that the main window's translation pass could not
+  reach. It now re-translates itself on switch, including the page title and nav width.
+- **An extra divider line above the response area**: when the metrics bar was hidden, the
+  divider below it stayed visible and overlapped the splitter handle. The divider now shows
+  and hides together with the metrics bar, leaving a single line.
+- **"New Mock Route" / "New Condition Rule" dialog titles were not translated** in English.
+- **Timeline stats and "No Wrap" were not translated**: hit count / success rate / average /
+  P95 / slowest, plus the raw view's wrap toggle, stayed in Chinese under English.
 
-**改进**
-- 请求面板标签顺序调整为「参数 / 请求体 / 请求头 / Cookies / 认证」，最常用的请求体挪到
-  第二位
-- 接口文档的代码示例高度统一固定：之前切换语言时代码块会忽高忽低地跳，现在十种语言
-  共用同一个高度，超出部分内部滚动
+**Improved**
+- Request panel tab order is now Params / Body / Headers / Cookies / Auth, with the most
+  used Body tab moved to second place.
+- Code examples in the API doc now share one fixed height: switching languages no longer
+  makes the block jump between sizes; overflow scrolls inside.
 
-**优化**
-- 自测 395 项全绿
+**Optimized**
+- All 395 self-tests pass.
 
 ## v1.0.21 — 2026-11-17
 
-**修复**
-- **英文界面下历史列表整个空掉**：侧边栏的分段标签在语言切换后没重算宽度，`History`
-  那一段被裁掉半截，点不到。标签现在会按新文字重新量宽度
-- **命令面板动作名仍是中文**：新建请求 / 发送当前请求等在英文下没翻；格式菜单里的
-  「默认」、文件单元格的「点击选择文件…」同样漏了
-- **请求体选好的文件发不出去**：代码拿界面上显示的那行字当路径用，英文下那行变成
-  `No file chosen`，路径就被当成空值丢了。现在路径单独存一份，显示文字随便翻译
+**Fixed**
+- **The history list went blank in English**: the sidebar's segmented tabs did not recompute
+  their widths after a language switch, clipping the `History` segment. Tabs now re-measure.
+- **Command palette action names stayed in Chinese**: new request / send current request and
+  others were untranslated, as were "Default" in the format menu and "Click to choose a
+  file…" in file cells.
+- **A chosen file in the request body could not be sent**: the code used the display text
+  as the path, which becomes `No file chosen` in English and was treated as empty. The path
+  is now stored separately from its display text.
 
-**改进**
-- 设置页页头说明与底部提示改成自动换行，英文长文案不再被窗口边缘裁掉半截
-- 英文文案统一过一遍翻译表，术语继续对齐 Postman
+**Improved**
+- Settings header and footer hints wrap automatically, so long English text is no longer
+  clipped at the window edge.
+- English copy reviewed throughout; terminology keeps aligning with Postman.
 
-**优化**
-- 自测 395 项全绿
+**Optimized**
+- All 395 self-tests pass.
 
 ## v1.0.20 — 2026-11-17
 
-**修复**
-- **窗口三个角是直角**：内容区是矩形的，盖住了窗口自己画的圆角。现在内容层带圆角遮罩，
-  四角跟着窗口一起收圆，最大化时自动取消
-- **响应树选中行左侧冒出灰方块**：缩进格被系统样式刷了一层高亮底。把高亮改成全透明，
-  方块消失，选中文字仍然高亮
-- **连发两个请求时串台**：旧请求的 `finished` 会把新请求当成已结束，界面一直转圈或显示
-  错的那条响应。改为按信号来源判断，旧连接的结果直接丢掉
+**Fixed**
+- **Square window corners**: the rectangular content layer covered the window's own rounded
+  corners. The content layer now has a rounded mask that follows the window, disabled when
+  maximized.
+- **Gray squares next to selected response-tree rows**: the indent cell got a system hover
+  background. The highlight is now fully transparent while selected text stays highlighted.
+- **Two rapid requests crossed streams**: an old request's `finished` signal treated the new
+  request as done, leaving the spinner running or showing the wrong response. Results are
+  now matched by signal source and stale ones are discarded.
 
-**改进**
-- 设置页 / 更新内容底部那行 `Ocelot x.y.z · Python + PyQt6` 去掉
-- 关于页去掉运行时（Python / PyQt6）与「macOS 原生窗口」标签
-- 英文界面补全：提示条、占位符、悬浮说明、设置各页、Mock 中心；术语对齐 Postman
-  （Send / Params / Headers / Cookies / Environments / Mock Server），中英来回切不丢原文
+**Improved**
+- Settings / What's New footers no longer print `Ocelot x.y.z · Python + PyQt6`.
+- The About page drops the runtime (Python / PyQt6) and "native macOS window" tags.
+- Full English pass: toasts, placeholders, tooltips, Settings pages, Mock hub; terminology
+  aligned with Postman (Send / Params / Headers / Cookies / Environments / Mock Server),
+  with no source text lost when switching languages.
 
-**优化**
-- 大数组响应只铺前 300 条，末尾一行「… 还有 N 项」，20 万条也秒开
-- 新增崩溃日志：硬崩与未捕获异常写入数据目录 `crash.log`
-- 自测 395 项
+**Optimized**
+- Large arrays only render the first 300 items with a "… {n} more" trailing row; even
+  200,000 items open instantly.
+- Added a crash log: hard crashes and uncaught exceptions are written to `crash.log` in the
+  data directory.
+- 395 self-tests.
 
 ## v1.0.19 — 2026-11-17
 
-**修复**
-- **点「更多 → Mock 数据…」崩溃**：编辑器少声明了 `mockRequested` 信号，一点就抛
-  `AttributeError`；同一处的「复制请求」也有同样的问题，一并补上
-- 更多菜单的 Mock / 复制请求改为统一由编辑器转发，信号只连一次，不会点一下开两个窗口
+**Fixed**
+- **Clicking "More → Mock data…" crashed**: the editor was missing the `mockRequested`
+  signal and raised `AttributeError`; "Copy request" in the same menu had the same issue and
+  was fixed too.
+- Mock / Copy request in the More menu are now forwarded uniformly by the editor, with a
+  single signal connection — one click no longer opens two windows.
 
-**改进**
-- 响应「树形」视图：行高 16 → 21，键列按内容给宽度，`two_factor` 不再被截成 `two_fa…`
-- 接口文档左下角的状态行加上「状态」前缀，不再像飘出来的一串字
+**Improved**
+- Response tree view: row height 16 → 21; the key column is sized to its content so
+  `two_factor` is no longer truncated to `two_fa…`.
+- The API doc footer now prefixes the status line with a "Status" label instead of showing
+  a bare string of words.
 
 ## v1.0.18 — 2026-11-17
 
-**修复**
-- **在输入框点右键会崩掉**：`QApplication` 没有 `cursor()` 方法，取右键位置时抛
-  `AttributeError`。现在按事件自带的屏幕坐标弹菜单，取不到才退回鼠标位置
-- **Mock 显示「已停止」但浏览器刷新还能访问**：停止时只关了监听端口，浏览器那条 HTTP
-  keep-alive 老连接仍然活着，继续被服务响应。现在停止会主动断开所有活着的连接，
-  响应也不再要求复用连接，停就是真停
-- 停止服务时先断开在途连接再关端口，不会「停了之后又冒出一个响应」
+**Fixed**
+- **Right-clicking inside an input crashed**: `QApplication` has no `cursor()` method and
+  raised `AttributeError` when resolving the click position. The context menu now uses the
+  screen coordinates carried by the event, falling back to the mouse position only if needed.
+- **Mock showed "Stopped" but a browser refresh still worked**: stopping closed the listen
+  port, but an existing HTTP keep-alive connection kept being served. Stopping now actively
+  drops all live connections and responses no longer request connection reuse.
+- Stopping now disconnects in-flight connections before closing the port, so no response can
+  "arrive after stopping".
 
-**优化**
-- 自测扩到 382 项，新增右键菜单定位、停服务后老连接不再返回数据两项回归检查
+**Optimized**
+- Self-tests expanded to 382 checks, including right-click positioning and the guarantee
+  that stopped services return no data.
 
 ## v1.0.17 — 2026-11-17
 
-**新功能**
-- **Mock 条件规则**：一条路由可以按 请求头 / 查询参数 / 请求体 / 方法 分别返回不同结果 ——
-  带 `token` 返回 VIP 数据、不带返回 401，正常与异常分支一次测完。规则支持
-  等于 / 包含 / 存在 / 不存在，可单独设状态码、延迟与响应体
-- **Mock 动态数据**：响应体里写 `{{@id}}` `{{@uuid}}` `{{@name}}` `{{@cname}}`
-  `{{@email}}` `{{@now}}` `{{@int(1,99)}}` `{{@pick(a,b)}}` 等占位符，每个请求现算一次；
-  编辑路由时可「预览随机数据」确认写法
-- **Mock 请求日志**：新增「请求日志」页，实时显示每次请求的方法、路径、状态码、耗时、
-  命中的路由与规则；顶部统计 2xx / 4xx / 平均耗时，可一键清空
-- 路由列表显示每条路由的命中次数
+**Added**
+- **Mock conditional rules**: one route can return different results based on request
+  header / query param / body / method — return VIP data with a `token`, 401 without it,
+  covering both happy and error paths. Rules support equals / contains / exists / not
+  exists, with their own status code, delay and response body.
+- **Mock dynamic data**: write placeholders like `{{@id}}` `{{@uuid}}` `{{@name}}`
+  `{{@cname}}` `{{@email}}` `{{@now}}` `{{@int(1,99)}}` `{{@pick(a,b)}}` in the response body;
+  each request recomputes them. Editing a route offers "Preview random data".
+- **Mock request log**: a new "Request Log" page shows each request's method, path, status,
+  latency and matched route / rule in real time, with 2xx / 4xx / average-latency counters
+  and a one-click clear.
+- Route lists show a hit count per route.
 
-**改进**
-- 启动按钮跟随真实状态：未启动显示「启动服务」，启动后才显示「停止服务」（之前固定写死）
-- 接口文档表格重做：表头独立成淡底栏、行间分隔线、首列宽度实测后钳在 96~210、
-  长内容自动换行
-- 代码示例：语言标签与代码正文严格左对齐、代码紧贴标签；长行折行后按真实行数定高，
-  底部不再切半行或冒出多余滚动条
-- 设置菜单的「设置…」换成齿轮图标，去掉「切换浅色 / 深色」项（主题仍在 设置 → 外观）
-- 关于页去掉文件名与类名，改为面向用户的能力清单与「一次请求走完的流程」
+**Improved**
+- The start button now follows the real state: "Start Service" when stopped, "Stop Service"
+  when running (previously hard-coded).
+- The API doc table was rebuilt: a dedicated header bar, row dividers, a first column
+  measured and clamped to 96–210, and word wrap for long content.
+- Code examples: language labels align strictly with the code body; long lines are wrapped
+  and sized by their real line count, with no half-cut lines or stray scrollbars.
+- The Settings menu's "Settings…" is now a gear icon; "Switch Light / Dark" was removed
+  (the theme is still under Settings → Appearance).
+- The About page drops file names and class names for a user-facing capability list and a
+  "what one request goes through" walkthrough.
 
-**修复**
-- 停止服务后端口可能仍被占用（另一实例或上次没退干净）：现在等端口真正释放，
-  并如实提示；启动时若端口被别的 Ocelot 占用，会明确告知并自动换端口
-- 动态数据含中文时写进 HTTP 响应头会导致响应中断，现统一做安全编码
+**Fixed**
+- Stopping could leave the port occupied (another instance or a leftover process): it now
+  waits for the port to be truly released and reports honestly; if another Ocelot owns the
+  port, it says so and switches automatically.
+- Dynamic data containing Chinese characters broke the HTTP response when written into a
+  header; it is now safely encoded.
 
-**优化**
-- 自测扩到 **374 项**：菜单条目、按钮状态、占位符随机性、规则命中、日志耗时、
-  表格列宽与代码块对齐、超长代码滚动
+**Optimized**
+- Self-tests expanded to **374 checks**: menu entries, button states, placeholder randomness,
+  rule matching, log latency, table column widths, code-block alignment and long-code scroll.
 
 ## v1.0.16 — 2026-11-17
 
-**新功能**
-- **真正的本地 Mock 服务**：在 `127.0.0.1` 上起一个真的 HTTP 服务，路由、方法、状态码、
-  延迟、响应体全部自己写。支持前缀通配 `/api/users/*`、回显模式（把收到的请求原样返回）、
-  CORS，浏览器与脚本都能直接连；「试用」一键建请求，可设随应用启动，端口被占会自动换
-- **Mock 中心两页**：本地 Mock 管路由（新建 / 编辑 / 复制地址 / 删除），公开接口保留
-  28 个免费 API 清单（点一行就填好请求）
-- **快捷键设置页**：16 个动作全部可改 —— 点键帽录制、一键清除、恢复默认；两个动作抢
-  同一个键位时旧的那个自动让位，改完立刻生效
-- **接口文档内容补全**：概览（方法 / 地址 / 状态 / 耗时 / 体积 / 内容类型）、鉴权说明、
-  Cookies 表、响应头表、状态码语义；复制或保存出来就是一份能交付的文档
+**Added**
+- **A real local Mock service**: an actual HTTP server on `127.0.0.1` whose routes, methods,
+  status codes, delays and bodies you define. Supports prefix wildcards `/api/users/*`,
+  echo mode (returns the request verbatim), CORS, and can be reached directly from a browser
+  or script; "Try" builds a request in one click, and it can start with the app. If the port
+  is taken it switches automatically.
+- **Two Mock hub pages**: local Mock manages routes (create / edit / copy address / delete),
+  while the public API catalog keeps 28 free endpoints (click a row to fill a request).
+- **Shortcut settings**: all 16 actions are editable — click a keycap to record, clear in one
+  click, restore defaults. Two actions competing for the same key make the older one step
+  aside, and changes take effect immediately.
+- **Fuller API docs**: overview (method / URL / status / latency / size / content type), auth
+  notes, cookie table, response header table and status-code semantics; copying or saving
+  produces a deliverable document.
 
-**改进**
-- 接口文档窗口重排：顶部请求名片带状态 / 耗时 / 体积指标，左侧目录跟着滚动高亮，
-  代码示例按语言缓存
-- 代码示例十种语言统一语法高亮（命令行参数、URL、字符串、数字各自成色），
-  代码正文与语言标签严格左对齐
-- 命令面板条目不再被裁掉：列表可滚动、滚轮带缓动，键盘选中自动跟随，卡片按整行裁切
-- Mock 公开接口列表改为子控件 + 布局排版，方法 / 地址 / 说明严格对齐；搜索加 120ms 防抖
-- 标题栏设置按钮换成真正的齿轮图标（之前是一圈放射线，像太阳）
-- 设置对话框加宽到 940×700；关于页去掉快捷键表，换成「为什么是 Ocelot」四条优势
-  与六层架构说明
+**Improved**
+- API doc window reflowed: a request card on top with status / latency / size metrics, a left
+  outline that tracks scrolling, and cached code examples per language.
+- Ten languages in code examples share syntax highlighting (CLI flags, URLs, strings and
+  numbers each colored); code aligns strictly with the language label.
+- Command palette entries are no longer clipped: a scrollable list with eased wheel input,
+  keyboard selection auto-follow and cards clipped by whole rows.
+- Mock public API list rebuilt as sub-widgets + layout: method / URL / description align
+  strictly; search debounced at 120ms.
+- The title bar's settings button is a real gear icon (previously a sun-like set of rays).
+- Settings dialog widened to 940×700; About drops the shortcut table for four "Why Ocelot"
+  advantages and a six-layer architecture note.
 
-**修复**
-- 地址里已写同名同值参数时，代码生成与文档会重复拼接（`?a=1&a=1`），现在先比对再追加
-- Mock 面板在服务启停后，状态胶囊与按钮可用状态不同步
+**Fixed**
+- A query param already present in the URL was appended again in code generation and docs
+  (`?a=1&a=1`); it now compares first, then appends.
+- The Mock panel's status pill and button enable state were out of sync after start / stop.
 
-**优化**
-- 自测扩到 **351 项**：真起本地服务验证路由 / 回显 / 404、快捷键录制与冲突让位、
-  命令面板滚动、代码块左对齐与高亮类型、文档新章节
+**Optimized**
+- Self-tests expanded to **351 checks**: a real local service for route / echo / 404,
+  shortcut recording and conflict hand-off, command palette scroll, code-block alignment and
+  highlighting, and the new doc sections.
 
 ## v1.0.15 — 2026-11-17
 
-**新功能**
-- **接口文档窗口**：响应右上角「更多 → 查看接口文档」。方法 / 地址 / 参数表 / 请求头 /
-  请求体 / 响应示例排成一页，左侧大纲可跳转，底部十种语言的代码示例一键切换，
-  右上角开关决定要不要把 token 打码，支持复制与保存 `.md`
-- **Mock 数据面板**：内置 28 个免费公开接口（httpbin / JSONPlaceholder / DummyJSON /
-  ReqRes / 随机图片…），支持搜索与分组，点一行就变成一条填好方法和示例请求体的请求
-- **响应时间线**：响应面板新增「时间线」，同一地址的历史耗时画成柱子并按状态码上色，
-  顶部给出次数 / 成功率 / 平均 / P95 / 最慢，悬停看单次时间与耗时
-- **命令面板** 新增 Mock 数据、接口文档、复制当前请求、关闭标签
+**Added**
+- **API doc window**: "View API Doc" under "More →" at the top right of the response. Method /
+  URL / param table / headers / body / response example on one page, a left outline to jump
+  between sections, ten languages of code examples at the bottom with one-click switching,
+  a toggle to mask tokens, and copy / save as `.md`.
+- **Mock data panel**: 28 built-in free public APIs (httpbin / JSONPlaceholder / DummyJSON /
+  ReqRes / random images…), searchable and grouped; a click fills a ready-made request.
+- **Response timeline**: a new "Timeline" tab plots this URL's latency history as bars colored
+  by status code, with hit count / success rate / average / P95 / slowest on top and hover
+  details for each run.
+- Command palette ⌘K gains Mock Data, API Doc, Copy Current Request and Close Tab.
 
-**改进**
-- 参数表表头与数据行严格对齐（勾选框占位改为真控件，「类型」表头居中）
-- 地址栏历史补全改为自绘浮层：圆角、时钟图标、等宽地址、上下键选择
-- 设置页排版重做：云同步的地址 / Token / 同步按钮改为整行布局，不再被挤出卡片；
-  对话框加宽到 900×672
-- 关于页重做：大字标 + 版本胶囊 + 运行环境三列 + 快捷键两列 + 复制版本信息
+**Improved**
+- Param table headers align with data rows (checkbox placeholders are real controls, the
+  "Type" header is centered).
+- URL history completion is a custom-drawn overlay: rounded, clock icon, monospace URL,
+  up/down to select.
+- Settings reflowed: cloud sync address / token / button on one row, no longer squeezed;
+  dialog widened to 900×672.
+- About page rebuilt: a large title, version pill, three-column runtime info, two-column
+  shortcuts and a copy-version action.
 
-**修复**
-- 响应头与文档正文这类可选中文字的右键菜单仍是系统菜单（英文、半透明），已统一接管
+**Fixed**
+- Right-click on selectable text in response headers and doc bodies still used the system
+  menu (English, translucent); it is now taken over consistently.
 
-**优化**
-- 自测扩到 **312 项**
+**Optimized**
+- Self-tests expanded to 312 checks.
 
 ## v1.0.14 — 2026-11-17
 
-**新功能**
-- **一键接口文档**：响应右上角「更多」→ 复制整段 Markdown 文档（方法、地址、Query、请求头、
-  请求体、状态码、耗时、体积、响应示例）。标签右键也有「复制接口文档（Markdown）」，
-  每条请求可以单独导出，写完接口不用再手打一份文档
-- **秘密打码**：同一菜单里可「脱敏复制响应体」，或导出「密钥已打码」的文档。
-  `token` / `cookie` / `password` / `authorization` / JWT / `Bearer xxx` 自动换成 `••••••`
-  （长值保留末四位，方便确认「是不是同一把钥匙」）。贴群、发工单、截图都不怕漏密钥
+**Added**
+- **One-click API docs**: "More →" in the response copies a full Markdown document (method,
+  URL, query, headers, body, status code, latency, size, response example). A tab right-click
+  offers "Copy API Doc (Markdown)" so each request can be exported without hand-writing docs.
+- **Secret masking**: the same menu can "Copy response body (masked)" or export a doc with
+  "secrets masked". `token` / `cookie` / `password` / `authorization` / JWT / `Bearer xxx`
+  become `••••••` (long values keep the last four characters so you can confirm it is the
+  same key). Safe to paste into chat, tickets or screenshots.
 
-**改进**
-- 代码生成（cURL / Python / JavaScript / Go / Java / PHP / C# / Kotlin / PowerShell / HTTPie）
-  现在会把 Cookies 页里的行合并进 `Cookie` 请求头，被禁用的行不会带出去 ——
-  复制出来的代码和点「发送」的结果一致
+**Improved**
+- Code generation (cURL / Python / JavaScript / HTTPie) now merges rows from the Cookies tab
+  into the `Cookie` header; disabled rows are not exported, so generated code matches what
+  "Send" actually does.
 
-**修复**
-- 运行时日志前缀还剩 `Reqly` 的地方（保存响应 / 保存配置失败）统一成 `Ocelot`
+**Fixed**
+- Runtime log prefixes still saying `Reqly` (save response / save config failures) are
+  unified to `Ocelot`.
 
-**优化**
-- 自测扩到 **312 项**：文档生成每一段、脱敏规则、超长截断、JSON 结构对比、Cookie 进代码
+**Optimized**
+- Self-tests expanded to 312 checks: every doc section, masking rules, long-value truncation,
+  JSON structure comparison and cookies in generated code.
 
 ## v1.0.13 — 2026-11-17
 
-**改名**
-- Reqly → **Ocelot**。标题栏、关于页、菜单、User-Agent、数据目录全部换新；
-  首次启动自动把 `~/Library/Application Support/Reqly` 的旧数据搬到新目录，配置不丢
+**Renamed**
+- Reqly → **Ocelot**. Title bar, About page, menus, User-Agent and data directory all changed;
+  on first launch the old `~/Library/Application Support/Reqly` data is migrated so nothing
+  is lost.
 
-**新功能**
-- 请求新增 **Cookies** 一栏：表格里的 Cookie 自动合并成 `Cookie` 请求头（与手写 Cookie 头共存），
-  响应带 `Set-Cookie` 时可一键「从响应导入」，登录态跟着请求走
-- **云同步（Turso）**：设置里填数据库地址与 Auth Token，「测试连接」只跑一条 `SELECT 1`；
-  可上传 / 从云端恢复（恢复前自动备份 `state.json.bak`），也能勾选「退出时自动上传」。
-  只走 Turso 的 HTTP pipeline，不引入任何新依赖
-- 地址栏按历史补全：聚焦时列出用过的地址，包含匹配，敲几个字就能选
-- 命令面板 ⌘K 可以直接切换环境、直达外观 / 云同步设置
+**Added**
+- Requests gain a **Cookies** tab: table rows are merged into the `Cookie` header (coexisting
+  with a hand-written one), and `Set-Cookie` in a response can be imported in one click so
+  login sessions carry over.
+- **Cloud sync (Turso)**: set a database URL and Auth Token in Settings; "Test Connection"
+  runs a single `SELECT 1`; upload / restore from cloud (restoring backs up `state.json.bak`
+  first), with an option to auto-upload on exit. Uses only Turso's HTTP pipeline, no new
+  dependencies.
+- URL bar completes from history: focusing it lists previously used URLs containing the
+  current text, so a few keystrokes are enough.
+- Command palette ⌘K can switch environments and jump straight to Appearance / Cloud Sync.
 
-**改进**
-- 主题色不再只影响按钮：选中底、聚焦描边、悬停徽标、标签页标题与下划线、侧栏选中标记、
-  设置导航一起同步，正文文字也会朝强调色偏一点点，整块界面是同一个色温
-- 参数类型胶囊去掉描边，Auto 直接用它的暖沙色、字号加大到 10.2
-- 菜单窗口改为透明底，四个圆角之外的小方块消失
+**Improved**
+- The accent color now drives more than buttons: selection backgrounds, focus outlines,
+  hover badges, tab titles and underlines, sidebar selection markers and Settings nav all
+  follow it, with body text tinted slightly toward the accent — one coherent color temperature.
+- Param type pills drop their outline; Auto gets its own warm-sand color at a larger size,
+  clearly distinct from Null's gray and JSON's orange.
 
-**修复**
-- 勾选框选中时多出来的一圈黑边（默认画笔也画了一遍），现在勾选态只有实心块
-- 主题色第一颗色点的选中环被卡片边缘切掉
-- 标签右键「复制为 cURL」点了没反应（`to_curl` 没导入，NameError）
-- Qt 自带的隐式 Cookie 罐会把手写的 Cookie 头悄悄改写；现在一律不读不写，Cookie 由请求里的 Cookie 页显式管理
+**Fixed**
+- A black ring around checked checkboxes (the default pen also drew one) — the checked state
+  is now a solid block only.
+- The first accent swatch's selection ring was clipped by the card edge.
+- Tab right-click "Copy as cURL" did nothing (`to_curl` was not imported, `NameError`).
+- Qt's implicit cookie jar silently rewrote hand-written `Cookie` headers; it is now neither
+  read nor written, and cookies are managed explicitly by the Cookies tab.
 
-**优化**
-- 去掉设置里两段不可达代码、主窗口重复与未使用的导入、请求计数与 Cookie 提示合并成一次刷新
-
-**自测**
-- 255 项断言：Cookie 合并与从响应导入、Turso 地址归一化与未配置提示、主题色渗透、
-  菜单透明底、色点几何、勾选框无描边、Auto 胶囊配色
+**Optimized**
+- Removed two unreachable blocks in Settings, duplicate and unused imports in the main window;
+  request counts and cookie hints merge into one refresh.
 
 ## v1.0.12 — 2026-11-17
 
-**新功能**
-- 设置 · 外观新增「主题色」：7 个色点任选（自动 / 海蓝 / 松青 / 苔绿 / 陶橙 / 绯红 / 藤紫），
-  主按钮、开关、勾选框与发送键立刻跟着变；「自动」保持原来的黑白反色
+**Added**
+- Settings · Appearance gains an **Accent Color**: seven swatches (auto / ocean blue / pine /
+  moss / terracotta / crimson / violet); buttons, switches, checkboxes and the send key follow
+  immediately. "Auto" keeps the original black-and-white inversion.
 
-**改进**
-- 参数类型菜单里的 Auto 有了自己的颜色（暖沙），与 Null 的灰、JSON 的橙一眼分得开
+**Improved**
+- The param type menu's Auto now has its own color (warm sand), clearly distinct from Null's
+  gray and JSON's orange.
 
-**修复**
-- 切换配色 / 主题色时，已销毁的悬浮详情卡会被重新包一层空壳实例导致绘制崩溃 —— 现在自动跳过
-- 切换配色只刷新可见控件，隐藏控件等显示时自然重绘，大窗口下切换更顺
+**Fixed**
+- Switching color scheme / accent rebuilt a destroyed hover detail card and crashed while
+  painting — destroyed widgets are now skipped.
+- Switching schemes only refreshes visible widgets; hidden ones repaint naturally when shown,
+  making large windows much smoother.
 
-**自测**
-- 228 项断言：主题色切换与持久化、色点数量与点击、Auto 与 Null 色差
+**Self-tests**
+- 228 checks: accent switching and persistence, swatch count and clicks, Auto vs Null contrast.
 
-## v1.0.11 — 2026-11-17
+## v1.0.11 — 2026-11-16
 
-**修复**
-- 打开应用后标签点不动、内容切不过去：标签栏现在无条件发出切换信号；主窗口新增自愈机制，
-  编辑器挂错请求、标签栏出现幽灵标签都会自动修好，窗口重新获得焦点时再自检一次
-- 编辑器 `load` 中途出错会把加载标记卡住，之后所有编辑都不再回写 —— 改用 `finally` 兜底
+**Fixed**
+- After launch, tabs did not respond and content would not switch: the tab strip now emits
+  its change signal unconditionally; the main window also self-heals a wrong editor request
+  or a ghost tab, re-checking when the window regains focus.
+- An error midway through `RequestEditor.load` left the loading flag stuck at True, so every
+  later edit stopped writing back ("clicking does nothing") — a `finally` block now clears it.
 
-**优化**
-- 侧栏收起 / 展开卡顿：根因是分隔条按侧栏最小尺寸（≈158）卡住子控件，动画前三分之二时间完全不动、
-  最后一帧直接消失。现在动画期间放开最小尺寸与尺寸策略、收尾复原，真正逐帧滑动
-- 切标签、收到响应不再同步写磁盘（合并成 700ms 一次）；历史列表改为增量刷新，不再重建几百个控件
-- 重复点击当前标签不再重新格式化整段响应，大 JSON 下切换明显更顺
-- 大响应改为按需渲染：JSON 树与「原始」页点开才构建，190KB 响应从 1 秒降到 60 毫秒；
-  超过 600KB 只预览前 600KB 并提示用「另存为」取全文，超过 180KB 不再强行语法高亮
+**Optimized**
+- Sidebar collapse / expand stutter: the splitter was clamped to the sidebar's minimum size
+  (≈158), so the first two thirds of the animation did nothing and the last frame vanished.
+  During animation the minimum size and size policy are relaxed, then restored — the slide is
+  now truly frame-by-frame.
+- Switching tabs and receiving responses no longer writes to disk synchronously (batched to
+  one write per 700ms); the history list refreshes incrementally instead of rebuilding
+  hundreds of widgets.
+- Re-clicking the current tab no longer re-formats the whole response, making large JSON
+  switches noticeably smoother.
+- Large responses render on demand: the JSON tree and "Raw" tab are built only when opened —
+  a 190KB response drops from 1 second to 60ms. Above 600KB only the first 600KB is previewed
+  with a hint to "Save As" for the full text, and syntax highlighting is skipped above 180KB.
 
-**新功能**
-- 提取结果「存为变量」：一键写进当前环境变量，之后用 `{{名字}}` 引用，登录拿 token 不用再手抄
-- 中键点击标签直接关闭；双击请求 / 响应之间的分隔条恢复 50 / 50
-- 双击标签栏里斜体的预览标签即可转正固定（VSCode 行为），以前双击标签毫无反应
+**Added**
+- Extract results can be "Saved as Variable": one click writes into the current environment
+  for later `{{name}}` references, so a login token no longer needs copying by hand.
+- Middle-click a tab to close it; double-click the divider between request and response to
+  restore a 50/50 split.
+- Double-clicking an italic preview tab pins it (VSCode behavior); previously double-clicking
+  a tab did nothing.
 
-**自测**
-- 219 项断言：标签自愈、中键关闭、分栏复位、存为变量、侧栏逐帧动画、历史增量刷新
+**Self-tests**
+- 219 checks: tab self-healing, middle-click close, divider reset, save-as-variable,
+  frame-by-frame sidebar animation and incremental history refresh.
 
 ## v1.0.10 — 2026-11-16
 
-**新功能**
-- 集合运行器：右键集合文件夹「运行集合」或按 ⌘⇧R，按树里的顺序把整个集合跑一遍，逐条显示状态码 / 耗时 / 体积，
-  底部汇总成功失败与总耗时；可随时停止、一键复制结果表（TSV 直接粘进表格），点某一行就打开那条请求
-- 参数类型新增 File：表单里点一下选本地文件，走 multipart 真正上传，代码片段同步生成文件参数
-- cURL 导入对话框：粘贴即解析并实时预览，支持 `-X / -H / -d / -F / -u / -G / --data-urlencode` 与 `-sSL` 合并短选项
-- 请求标签右键菜单：关闭其他 / 关闭全部 / 复制标签 / 复制为 cURL
+**Added**
+- **Collection runner**: right-click a folder → "Run Collection" or ⌘⇧R to run every request
+  in tree order, showing status / latency / size per request and a success / failure / total
+  time summary; stop at any time, copy the whole result table (TSV pastes straight into a
+  spreadsheet), and click a row to open that request.
+- Param type gains File: pick a local file in a form row and upload it as real multipart, with
+  code generation reflecting the file param.
+- cURL import dialog: paste to parse with live preview, supporting `-X / -H / -d / -F / -u /
+  -G / --data-urlencode` and merged short flags like `-sSL`.
+- Request tab right-click: Close Others / Close All / Duplicate Tab / Copy as cURL.
 
-**改进**
-- 代码片段扩到 10 种语言（含 Go / Java / PHP / C# / Kotlin / PowerShell），全部带语法高亮
-- 格式 / 编码 / 类型下拉统一自绘，不再出现系统菜单的勾选乱码；方法色板按参考图重排并去掉「自定义」
+**Improved**
+- Code snippets expanded to 10 languages (adding Go / Java / PHP / C# / Kotlin /
+  PowerShell), all syntax highlighted.
+- Format / encoding / type dropdowns are custom-drawn, no more garbled native checkmarks;
+  the method palette was reordered to match the reference image and "Custom" removed.
 
-**修复**
-- 美化把 HTML 挤成一行、或缩成一路向右的楼梯 —— 改为标签 token 流解析：行内标签留在同一行、
-  `script` / `style` / `pre` 内容原样保留、CDATA 不被拆、未闭合标签自动容错
-- 详情卡图标始终对不准 —— 根因是 `QPixmap.width()` 返回设备像素（Retina 下是 2 倍），按 dpr 折算后真正居中
-- 鼠标点击请求标签内容不跟着切换、切回来东西丢失 —— 标签栏现在真的会发出切换事件
+**Fixed**
+- Pretty-printing squeezed HTML into one line, or into a staircase running right: it is now a
+  token stream — inline tags stay on one line, `script` / `style` / `pre` content is preserved,
+  CDATA is not split, and unclosed tags are tolerated.
+- Detail card icons never lined up — root cause was `QPixmap.width()` returning device pixels
+  (2× on Retina); the dpr is now factored in to center them correctly.
+- Clicking a request tab's content did not switch pages and edits were lost — the tab strip
+  now genuinely emits a change event.
 
-**自测**
-- 196 项断言：运行器顺序执行与结果汇总、文件类型、美化结构、图标居中、标签切换全部覆盖
+**Self-tests**
+- 196 checks: runner order and summary, file type, pretty-print structure, icon centering and
+  tab switching.
 
 ## v1.0.9 — 2026-11-16
 
-**改进**
-- 参数类型首字母大写（Auto / String / Number / Boolean / Null / JSON），每种类型一个语义色，String 为绿色
-- HTTP 方法色板对准参考图：GET 绿 / POST 橙 / PUT·HEAD·OPTIONS 蓝 / DELETE 红 / PATCH 粉 / TRACE 紫，去掉「自定义」
+**Improved**
+- Param types use capitalized English names (Auto / String / Number / Boolean / Null / JSON),
+  each with a semantic color; String is green.
+- HTTP method palette matches the reference: GET green / POST orange / PUT·HEAD·OPTIONS blue /
+  DELETE red / PATCH pink / TRACE purple, with "Custom" removed.
 
-**新功能**
-- 代码片段增加 Go / Java / PHP / C# / Kotlin / PowerShell，并启用多语言语法高亮
+**Added**
+- Code snippets add Go / Java / PHP / C# / Kotlin / PowerShell, with multilingual highlighting.
 
-**修复**
-- 类型 / 格式 / 编码下拉改为自绘菜单，macOS 原生勾选图标渲染成乱码的问题消失
-- 选中内容时冒出来的「全部展开 / 全部折叠」按钮彻底隐藏，工具栏只剩格式与编码
-- 详情卡图标错位与脚注压住 Body 行：标题/指标行图标同尺寸同 x，所有区块改为顺序累加排版
-- 鼠标点击请求标签时内容不跟着切换、切回来东西丢失 —— TabStrip 现在会正确发出 currentChanged
+**Fixed**
+- Type / format / encoding dropdowns switched to custom-drawn menus, eliminating garbled
+  macOS native checkmark glyphs.
+- The "Expand All / Collapse All" buttons that appeared when selecting text are now fully
+  hidden, leaving only format and encoding in the toolbar.
+- Detail card icons misaligned and footer text overlapping the Body row: the title and metric
+  row icons now share one size and x position, and all blocks accumulate sequentially.
+- Clicking a request tab did not switch content and lost edits — TabStrip now emits
+  currentChanged correctly.
 
-**自测**
-- 186 项断言：类型色、自绘菜单、详情卡对齐、代码语言、点击标签切换全部覆盖
+**Self-tests**
+- 186 checks: type colors, custom menus, detail-card alignment, code languages and tab
+  switching.
 
 ## v1.0.8 — 2026-11-16
 
-**改进**
-- 响应时间 / 响应大小悬浮卡改为固定锚点显示，不再跟着鼠标乱跑；重做自绘排版并加上分段图标
-- 格式 / 编码按钮统一为同一套自绘控件，只在「美化」页显示，其他页不再混入转换按钮
+**Improved**
+- Response Time / Size hover cards use a fixed anchor instead of following the mouse; the
+  custom-drawn layout was rebuilt with segmented icons.
+- Format / encoding buttons now use the same custom control, shown only on the "Pretty" tab.
 
-**新功能**
-- 大小卡新增 Header / Body 分配条，时间卡补充「估算」说明，避免误读每段耗时
+**Added**
+- The size card adds a Header / Body allocation bar; the time card adds an "estimated" note
+  so each segment is not misread.
 
-**修复**
-- 地址已经改成 time-tx 却还显示上一张图片响应 —— 请求一改动就作废旧响应
-- 多个请求标签点击后内容仍串在一起 —— 响应、格式、编码与当前响应子页全部按标签独立保存
-- 拖动左侧栏宽度后页面出现地址栏消失、描述行上浮 —— 动画被打断时未恢复绘制，现已完整复原
+**Fixed**
+- After changing the URL to time-tx, the previous image response was still shown — any
+  request edit now invalidates the old response.
+- After opening several request tabs their content merged together — responses, format,
+  encoding and the current response sub-tab are now stored per tab.
+- After dragging the sidebar width the URL bar disappeared and the description floated up —
+  an interrupted animation now restores its paint state completely.
 
-**自测**
-- 167 项断言：固定卡片、按钮隔离、标签响应独立、动画中断恢复全部覆盖
+**Self-tests**
+- 167 checks: fixed cards, button isolation, per-tab responses and animation-interrupt recovery.
 
 ## v1.0.7 — 2026-11-16
 
-**修复**
-- 侧栏折叠卡成两段 —— 根因是动画每帧触发 splitterMoved 同步写磁盘，现在动画期间断开信号、只落盘一次
-- 新建空标签再打开旧请求后两个页面内容变得一样 —— 每个标签改为独立快照，集合树变动只同步标题不覆盖编辑
-- 发请求时响应区不转圈像卡住 —— 加载页 Spinner 从未启动，现在真正旋转 + 骨架屏扫光
+**Fixed**
+- Sidebar collapse froze in two stages — the animation wrote to disk on every frame via
+  `splitterMoved`. The signal is now disconnected during animation with a single write at
+  the end.
+- A new empty tab and an opened old request ended up with identical content — each tab is now
+  an independent snapshot and collection tree changes only sync titles, not edits.
+- The spinner never started on send, making the app look stuck — it now really spins with a
+  skeleton shimmer.
 
-**新功能**
-- 侧栏单击进入 VSCode 式预览（标题斜体、复用预览标签），双击固定；编辑预览标签自动转正
-- 参数类型改为英文名（auto / string / number / boolean / null / JSON）
-- 设置 → 通用新增语言切换（简体中文 / English），自然翻译、立即生效，全界面适配
-- 节点测速覆盖全部节点（原只测 8 个），并发受控、显示进度，并注明速度不代表可用性与整体请求速度
-- 响应新增格式切换（Auto/JSON/XML/HTML/Text）与 11 种编码切换（UTF-8/GBK/Base64 等）
-- 悬浮响应时间 / 大小弹出详情卡：分段条形图（DNS/TCP/SSL/TTFB/下载）+ 大小分解
-- 更新内容入口收敛为唯一一处：设置 → 关于 Ocelot → 查看更新内容
+**Added**
+- Single-click a sidebar item enters VSCode-style preview (italic title, reused preview tab);
+  double-click pins it.
+- Param types use English names (auto / string / number / boolean / null / JSON).
+- Settings → General adds a language switch (简体中文 / English), translated naturally and
+  applied immediately across the whole UI.
+- Node speed tests now cover every node (previously only 8), with controlled concurrency,
+  a progress indicator, and a note that speed does not imply availability or overall latency.
+- Response gains a format switch (Auto/JSON/XML/HTML/Text) and 11 encodings (UTF-8/GBK/Base64…).
+- Hover detail cards over response time / size: segmented bar chart (DNS/TCP/SSL/TTFB/
+  download) plus size breakdown.
 
-**自测**
-- 155 项断言：标签隔离、预览打开、语言切换、格式编码、计时详情、转圈状态全部覆盖
+**Self-tests**
+- 155 checks: tab isolation, preview open, language switch, format / encoding, timing detail
+  and spinner state.
 
 ## v1.0.6 — 2026-11-16
 
-**修复**
-- 节点只有 22 个 —— 现在拉取完整的 221 个 IPv4 / 130 个 IPv6 节点，可随时刷新缓存
-- 方法菜单 / 命令面板的灰条在鼠标离开后还追着鼠标跑 —— 严格按控件内落点判断悬停
-- 侧栏折叠展开卡顿 —— 动画期间冻结内容区逐帧重绘，收尾不再重建整棵集合树
-- 图片 / 音频响应在「美化」「原始」页显示一排问号 —— 改为提示 + 十六进制，默认进预览
-- 标签标题变化后胶囊宽度没跟上，把新建「+」包进胶囊里；集合树出现左右箭头光标
-- 提示框底层对象析构后仍被调用导致崩溃
+**Fixed**
+- Only 22 nodes were listed — now the full 221 IPv4 / 130 IPv6 nodes are fetched, refreshable
+  at any time.
+- The gray bar in the method menu / command palette kept following the mouse after leaving —
+  hover is now strictly bounds-checked.
+- Sidebar collapse / expand stutter — the content repaint was frozen frame-by-frame during
+  animation and the collection tree was no longer fully rebuilt at the end.
+- Image / audio responses showed a row of question marks in Pretty / Raw — now a hint plus
+  hex view, defaulting to Preview.
+- After a title changed the pill width did not follow, swallowing the "+" into the pill; the
+  collection tree showed left/right arrow cursors.
+- A toast's underlying object was destroyed but still called, causing a crash.
 
-**新功能**
-- 在线节点真正可用：选中后请求经节点服务器转发，响应指标标注出口 IP、地区、耗时
-- 「本地」按钮移到发送按钮右边；节点面板新增刷新按钮与 IPv4 / IPv6 数量
-- 预览页新增「保存」：图片 / 音视频 / PDF / 二进制都能直接存到本地
-- 设置新增「关于 Ocelot」页与「查看更新内容」入口；更新内容按分类着色
-- 参数表新增「描述（可选）」列，只做备注不发送
-- 设置页导航改为显式映射，切换不再串页
+**Added**
+- Online nodes really work: the selected node forwards requests via a node server, with exit
+  IP, region and latency annotated in the response metrics.
+- The "Local" button moves to the right of Send; the node panel gains a refresh button and
+  IPv4 / IPv6 counts.
+- Preview gains "Save": images / audio / video / PDF / binary can all be saved locally.
+- Settings gains an "About Ocelot" page and a "View What's New" entry; the changelog panel
+  is color-coded by category.
+- Param table gains a "Description (optional)" column used only as a note, never sent.
 
-**自测**
-- 134 项断言：节点 PoW / 中继 payload / 越界悬停 / 二进制提示 / 关于页导航 / 参数描述 / 标签隔离
+**Self-tests**
+- 134 checks: indent gray block, menu reuse, zero-latency hover, toast sizing, three preview
+  types, node parsing and probing, Chinese right-click menu, gzip decompression, GBK decoding
+  and media container detection.
 
 ## v1.0.5 — 2026-11-16
 
-**修复**
-- 集合树选中行左侧的灰方块（基类把缩进区按选中色涂了一块）—— 现在不画缩进区、选中底色置全透明
-- 方法菜单第二次点开直接崩（`RuntimeError: MethodMenu has been deleted`）—— 菜单改为常驻复用
-- 折叠侧栏后重启应用直接报错（`sidebar_divider` 遗留在会话恢复代码里）—— 改走分栏宽度
-- 命令面板灰色悬停条跟不上鼠标 —— 去掉补间动画，零延迟跟手；键盘选中行改为细边，不再抢视觉
-- 系统提示框又大又空 —— 换成自绘提示框，尺寸严格贴合文字
-- 输入框右键弹出英文系统菜单 —— 换成中文自绘菜单（撤销 / 重做 / 剪切 / 复制 / 粘贴 / 删除所选 / 全选），带图标
-- 响应体是 gzip / deflate / br 压缩时显示成乱码或空白 —— 拿到后先按 `Content-Encoding`（并兜底嗅探 gzip 头）解压
-- GBK / GB18030 网页中文乱码 —— 没有声明 charset 时依次尝试 UTF-8、GB18030 解码
+**Fixed**
+- Gray blocks to the left of selected collection-tree rows (the base class painted the indent
+  area with the selection color) — the indent area is no longer painted and the selection
+  background is transparent.
+- Opening the method menu a second time crashed (`RuntimeError: MethodMenu has been deleted`)
+  — the menu is now reused as a persistent object.
+- The command palette's gray hover bar lagged behind the mouse — tweening was removed for
+  zero-latency following, and the keyboard row uses a thin border instead of stealing focus.
+- System toasts were large and empty — replaced with a custom-drawn toast sized to its text.
+- Right-clicking an input opened the English system menu — replaced with a custom Chinese menu
+  (Undo / Redo / Cut / Copy / Paste / Delete / Select All) with icons.
+- gzip / deflate / br compressed bodies showed as gibberish or blank — they are now decompressed
+  by `Content-Encoding` (with gzip-header sniffing as fallback).
+- GBK / GB18030 pages showed garbled Chinese — when no charset is declared, UTF-8 then
+  GB18030 are tried in order.
 
-**外观**
-- 全局统一底色：侧栏与工作区都用 `#19191C`，去掉「一半深一半浅」，只留一条 1px 分隔线
-- 设置新增「配色方案」六套：石墨（默认 `#19191C`）/ 岩蓝 / 暖灰 / 松绿 / 墨黑 / 浅色，点缩略图即切
-- 设置页整体重做：分区卡片、可滚动内容、更清晰的信息层级
-- 侧栏可拖拽调宽（200–420）并记忆宽度；标题栏新增折叠按钮（⌘B 仍可用）
-- 标签栏选中胶囊去掉描边
+**Appearance**
+- Unified base color: sidebar and workspace both use `#19191C`, removing the "half dark, half
+  lighter" look and leaving a single 1px divider.
+- Settings gains six color schemes: Graphite (default `#19191C`) / Slate / Warm Gray / Pine /
+  Ink / Light; click a thumbnail to switch.
+- Settings was rebuilt: section cards, scrollable content and a clearer information hierarchy.
+- Sidebar is draggable 200–420 px and remembers its width; the title bar gains a collapse
+  button (⌘B still works).
+- The selected tab pill drops its outline.
 
-**新功能**
-- 「预览」升级：图片滚轮缩放 / 拖拽平移 / 双击自适应 / 棋盘格透明底；音频视频内嵌播放；
-  PDF 与二进制给出十六进制视图；响应是图片 / 音频 / 视频时自动切到预览页
-- 音视频容器格式按魔术字节判定（wav / mp3 / ogg / flac / m4a / webm / mov），不再一律存成 `.bin` 播不出来
-- 「节点」：URL 栏右侧可选 IPv4 / IPv6 节点，支持搜索地区运营商、一键测速（TCP + DNS 往返），
-  默认「本地直连」；也可添加 socks5 / http 代理节点，选中后请求真正经由它发出，指标条会标注节点
-- 网络设置新增「默认 User-Agent」，数据设置新增历史记录上限
+**Added**
+- "Preview" upgraded: image wheel zoom / drag pan / double-click fit / checkerboard transparency;
+  embedded audio and video playback; PDF and binary get an "Open" and hex view; image / audio /
+  video responses auto-switch to Preview.
+- Media containers are detected by magic bytes (wav / mp3 / ogg / flac / m4a / webm / mov)
+  instead of all being saved as unplayable `.bin`.
+- "Nodes": the URL bar can select IPv4 / IPv6 nodes, searchable by region and ISP with one-click
+  speed tests (TCP + DNS round trip), defaulting to "Direct". socks5 / http proxy nodes can be
+  added and requests genuinely route through them, with metrics annotated.
+- Network settings gain a default User-Agent; data settings gain a history limit.
 
-**自测**
-- 108 项断言：缩进灰块、菜单复用、悬停零延迟、提示框尺寸、三类预览、节点解析与探测、中文右键菜单、
-  gzip 解压与 GBK 解码、音视频格式识别
+**Self-tests**
+- 108 checks: indent blocks, menu reuse, zero-latency hover, toast sizing, three preview types,
+  node parsing and probing, Chinese right-click menu, gzip decompression, GBK decoding and
+  media format detection.
 
 ## v1.0.4 — 2026-11-16
 
-**观感**
-- 深色主题改到 `#19191C` 体系重新配平：窗口 / 面板 / 卡片 / 悬浮 / 选中五级灰阶，
-  侧栏与工作区之间加了一层内容面，边界不再糊在一起
-- 方法菜单改为自绘：每个方法带颜色，当前项右侧打对号，行高对齐、无系统菜单的毛边
-- 去掉界面里所有彩色圆点（集合树、环境、标签栏），统一换成矢量图标与状态徽标
-- 悬浮提示框改为圆角胶囊样式（更小字、更松行距、无边框毛刺）
-- 命令面板悬浮改为软灰色层 + 120ms 缓动，选中行加细边，不再硬切
-- 标签栏右侧「关闭 ×」与「+」重新排版，间距拉到 10px 以上
+**Look & feel**
+- Dark theme rebalanced around `#19191C`: five levels of gray for window / panel / card /
+  overlay / selection; a content surface between sidebar and workspace so the boundary is no
+  longer blurred.
+- Method menu is custom-drawn: each method has a color, the current item shows a checkmark,
+  row heights align and there are no native-menu rough edges.
+- Removed all colored dots (collection tree, environments, tab strip) in favor of vector icons
+  and status badges.
+- Hover toasts use a rounded capsule style (smaller text, looser line height, no border burrs).
+- Command palette hover uses a soft gray layer with 120ms easing, selected row gets a thin
+  border instead of a hard cut.
+- The tab strip's "×" and "+" were reflowed with ≥10px spacing.
 
-**参数（重做）**
-- 任意参数随时增删，每行可上移 / 下移 / 复制 / 删除
-- 新增「类型」列：自动 / 文本 / 数字 / 布尔 / null / JSON，填进去就按正确类型生效
-- 智能粘贴：`token=abc&debug=true`、`{"q":"x"}`、多行 `k: v` 或 Tab 分隔、`#` 注释行，
-  粘一次全拆成参数行，注释自动置为禁用
-- URL 与参数表双向同步：带 `?a=1&b=2` 的地址自动拆进参数表、URL 只留 base；
-  参数清空后不会再残留幽灵参数把请求搞挂
+**Params (rebuilt)**
+- Add, remove, move up / down and copy / delete any row at any time.
+- A new "Type" column: Auto / String / Number / Boolean / null / JSON, applied with the correct
+  type when sent.
+- Smart paste: `token=abc&debug=true`, `{"q":"x"}`, multi-line `k: v` or Tab-separated and `#`
+  comment lines are split into rows in one paste, with comments auto-disabled.
+- URL ↔ param table two-way sync: a URL with `?a=1&b=2` is split into the table and the URL
+  keeps only the base; clearing params no longer leaves ghost params that break the request.
 
-**新功能**
-- 「对比」：同一地址的响应与上一次自动逐行 diff，标出状态码与耗时变化，也能手动「设为基准」
-- 「提取」：用 `a.b[0].c` 或 `*` 这类 JSON 路径直接取字段，填错给出可用顶层字段提示，一键复制
+**Added**
+- "Compare": auto line-by-line diff of this URL's response against the previous one, marking
+  status code and latency changes, with a manual "Set as baseline".
+- "Extract": use a JSON path like `a.b[0].c` or `*` to pull a field, with a hint listing valid
+  top-level fields on error and one-click copy.
 
-**设置**
-- 整合为单页六分区（通用 / 外观 / 网络 / 环境变量 / 数据 / 更新内容），不用再一层层开对话框
-- 新增「代码字号」小 / 标准 / 大三档，改完立即作用于所有已打开的代码区
-- 更新内容面板重做：按版本分块、分类计数、自动换行，长列表滚动不再卡顿重叠
+**Settings**
+- Consolidated into a single page of six sections (General / Appearance / Network /
+  Environments / Data / What's New) instead of nested dialogs.
+- Code font size in three steps (Small / Standard / Large), applied to all open code areas
+  immediately.
+- The changelog panel was rebuilt: blocks per version, colored by category, word-wrapped,
+  with a scroll that no longer stutters or overlaps.
 
-**自测**
-- 断言扩到 80 项：参数类型推断、URL 拆分、无幽灵参数、三种粘贴格式、六个设置分页、
-  Diff 统计、JSON 路径提取全覆盖
+**Self-tests**
+- 80 assertions: param type inference, URL split, no ghost params, three paste formats, six
+  Settings pages, diff stats and JSON path extraction.
 
 ## v1.0.3 — 2026-11-16
 
-- 修复崩溃：鼠标在集合树上移动时报 `RuntimeError: wrapped C/C++ object of type QVariantAnimation has been deleted`
-  （悬停动画改用常驻对象，不再随动画结束被销毁）
-- 自测补「反复悬停」回归：集合树来回扫三遍、每次等动画结束并销毁再触发，共 56 项断言
-- 侧栏折叠时相关交互测试会自动展开侧栏，避免测试漏跑
+- Fixed a crash when the mouse moved over the collection tree (`RuntimeError: wrapped C/C++
+  object of type QVariantAnimation has been deleted`) — the hover animation is now a
+  persistent object instead of being destroyed at animation end.
+- Added a "repeated hover" regression: sweep the collection tree three times, wait for each
+  animation to finish and destroy before triggering again — 56 assertions.
+- Sidebar-collapsed interaction tests now expand the sidebar first so no checks are skipped.
 
 ## v1.0.2 — 2026-11-16
 
-- 修复崩溃：鼠标移到标签栏就 `TypeError` 退出（`QRectF.contains` 只接受 `QPointF`，之前传了 `QPoint`），
-  从 IDE 点运行也会被这一条带崩
-- 启动自检：解释器版本过低或缺 PyQt6 时，打印当前解释器路径与修复命令，不再甩一堆 traceback
-- 从运行面板启动时主动置前窗口（`raise` + `activateWindow`）
-- 自测补鼠标交互回归：标签栏悬浮 / 点击切换 / 双击空白新建 / 侧栏与分段控件滑过，共 53 项断言
-- 截图脚本改用临时状态文件，不再覆盖真实会话（历史、主题、打开的标签）
+- Fixed a crash when hovering the tab strip (`TypeError`: `QRectF.contains` only accepts
+  `QPointF`, but got `QPoint`) that also killed the app when launched from the IDE.
+- Startup self-check: on an old interpreter or missing PyQt6, print the interpreter path and
+  a fix command instead of dumping a traceback.
+- When launched from the run panel, bring the window to the front (`raise` + `activateWindow`).
+- Added mouse-interaction regression: tab hover / click-to-switch / double-click blank to
+  create, sidebar and segmented control sweeps — 53 assertions.
+- Screenshot scripts now use a temporary state file instead of overwriting the real session
+  (history, theme, open tabs).
 
 ## v1.0.1 — 2026-11-16
 
-- 修复：深色切到浅色主题后，JSON 代码区的属性名变成近乎白色、在白底上看不见（切主题时重新着色）
-- 修复：截图脚本会覆盖真实会话数据（改为读写临时状态文件）
+- Fixed: after switching from dark to light theme, JSON property names became nearly white
+  and invisible on the light background (re-colored on theme switch).
+- Fixed: the screenshot script overwrote real session data (now reads / writes a temp file).
 
 ## v1.0.0 — 2026-11-16
 
-首个版本，macOS 原生质感的纯黑极简 API 调试工具。
+The first version: a pure-black, minimal API debugging tool with native macOS polish.
 
-**界面与动效**
-- 无边框圆角窗口 + 交通灯按钮（悬停显示图标）、边缘拖拽缩放、双击标题栏缩放
-- 深色 / 浅色双主题，纯黑层次、反色实心主按钮，无渐变无彩色光晕
-- 全部图标为 24×24 矢量描边自绘，随主题着色，Retina 锐利
-- 动画：窗口淡入、页面交叉淡入、响应到达淡入、分段标签滑动下划线、选中胶囊滑动、
-  耗时数字滚动、Toast 上滑、侧栏折叠、加载骨架屏扫光
+**Interface & motion**
+- Borderless rounded window + traffic-light buttons (icons on hover), edge drag-resize,
+  double-click title bar to zoom.
+- Dark / light themes, pure-black layers, inverted solid primary buttons, no gradients or
+  colored glows.
+- All icons are 24×24 custom-drawn vector strokes, theme-colored and crisp on Retina.
+- Animation: window fade-in, page cross-fade, response fade-in, segmented tab sliding underline,
+  sliding selection pill, counting latency numbers, toast slide-up, sidebar collapse and
+  loading skeleton shimmer.
 
-**请求构造**
-- 方法选择、URL 输入、查询参数与请求头（启用开关 / 自动追加空行 / Header 自动补全 / 批量编辑）
-- 请求体：none / JSON / 文本 / 表单（multipart，支持 @文件上传）/ x-www-form-urlencoded / 二进制
-- JSON 实时校验与格式化、压缩
-- 认证：Bearer / Basic / API Key（Header 或 Query 注入）
-- 环境变量与 {{$timestamp}} / {{$uuid}} / {{$randomInt}} 动态变量
+**Request building**
+- Method picker, URL input, query params and headers (enable switch / auto-append empty row /
+  header autocomplete / bulk edit).
+- Body: none / JSON / text / form (multipart with `@file` upload) / x-www-form-urlencoded /
+  binary.
+- Live JSON validation and format / minify.
+- Auth: Bearer / Basic / API Key (Header or Query injection).
+- Environment variables with `{{$timestamp}}` / `{{$uuid}}` / `{{$randomInt}}` dynamic variables.
 
-**发送与响应**
-- 异步发送可取消，超时 / 跟随重定向 / SSL 校验开关，代理（自动 / 系统 / 直连）
-- Cookie 保持与解析、响应指标（状态码、耗时、体积、类型、最终 URL）
-- 六种响应视图：美化 / 树形 / 原始 / 响应头 / Cookies / 预览；响应内查找与高亮
-- 复制响应体、另存为文件、错误态提示
+**Send & response**
+- Async cancellable send, timeout / follow-redirects / SSL-verify toggles, proxy (auto /
+  system / direct), cookie persistence and parsing.
+- Response metrics (status, latency, size, type, final URL).
+- Six response views: Pretty / Tree / Raw / Headers / Cookies / Preview; in-response find and
+  highlight.
+- Copy response body, save to file, error-state hints.
 
-**组织与复用**
-- 集合树（无限层级、拖拽排序、右键菜单、搜索过滤、打开态圆点）
-- 历史记录（点击回填、悬停删除、清空）
-- 多标签（拖拽重排、滑动指示器、会话恢复）
-- 环境变量管理与激活切换
-- 代码生成：cURL / Python / JavaScript / HTTPie
-- 导入 cURL 命令、集合导入导出（兼容 Postman v2.1）
-- 命令面板 ⌘K、全局快捷键、设置与更新内容对话框
+**Organization & reuse**
+- Collection tree (unlimited depth, drag sort, right-click menu, search filter, open-state dots).
+- History (click to restore, hover to delete, clear).
+- Multi-tab (drag reorder, sliding indicator, session restore).
+- Environment variable management with active switching.
+- Code generation: cURL / Python / JavaScript / HTTPie.
+- cURL import, collection import / export (Postman v2.1 compatible).
+- Command palette ⌘K, global shortcuts, Settings and What's New dialogs.

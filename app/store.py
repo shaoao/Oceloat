@@ -19,9 +19,24 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.23"
+VERSION = "1.0.24"
 
 CHANGELOG = [
+    {
+        "version": "1.0.24",
+        "date": "2026-11-17",
+        "items": [
+            "改进：脚本页改为「前置脚本 / 后置脚本」两个独立页面，去掉页内重复的子切换；"
+            "右侧说明加细滚动条，内容超出只滚右侧不挤下方；Run 改成更明确的「试运行」并说明用途",
+            "新功能：认证页新增 JWT —— HS256/384/512 自动生成签名令牌或手动粘贴，"
+            "Payload 与密钥支持环境变量，发送时作为 Bearer 携带；生成的令牌与 jwt.io 标准一致",
+            "新功能：认证页新增 Inherit（继承）—— 从所属集合向上找最近的文件夹认证，"
+            "集合右键「设置认证…」可配置；JWT 与继承对直连和中继两条路径都生效",
+            "改进：历史记录分组箭头换成与集合树同款的可折叠箭头，点击即可折叠/展开，"
+            "折叠状态自动记住，下次启动保持",
+            "优化：自测 395 项全绿",
+        ],
+    },
     {
         "version": "1.0.23",
         "date": "2026-11-17",
@@ -589,6 +604,7 @@ def _sample_state() -> Dict[str, Any]:
             "language": "zh",
             "code_font_size": 11.8,
             "history_limit": 240,
+            "history_collapsed": [],
             "auto_name": True,
             "restore_session": True,
             "animations": True,
@@ -701,6 +717,25 @@ class Store:
             for child in node.get("children") or []:
                 if child.get("id") == node_id:
                     return node.get("id")
+        return None
+
+    def inherited_auth(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """从请求所在集合向上找最近的「文件夹级认证」；没配置则返回 None。
+
+        文件夹节点可以带一个 auth 字典，字段与请求级认证完全一致。
+        优先级：直接父文件夹 → 更高层文件夹 → 顶层集合。
+        """
+        seen = set()
+        cur = self.parent_id(node_id)
+        while cur and cur not in seen:
+            seen.add(cur)
+            node = self.find(cur)
+            if node is None:
+                break
+            auth = node.get("auth")
+            if isinstance(auth, dict) and (auth.get("type") or "none") != "none":
+                return auth
+            cur = self.parent_id(cur)
         return None
 
     def find_request(self, node_id: str) -> Optional[Dict[str, Any]]:

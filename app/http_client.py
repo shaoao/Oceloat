@@ -216,6 +216,38 @@ class ApiClient(QObject):
         self._store = store
 
     # ------------------------------------------------------------ 请求脚本
+    def _effective_auth(self, req: Dict[str, Any], env_vars: Dict[str, str]) -> Dict[str, Any]:
+        """把 Inherit / JWT 归一化成标准的 bearer / basic / apikey 结构。
+
+        两条发送路径（直连与中继）共用，认证逻辑只写一份。
+        """
+        auth = dict(req.get("auth") or {})
+        kind = auth.get("type") or "none"
+
+        if kind == "inherit":
+            inherited = None
+            store = getattr(self, "_store", None)
+            if store is not None:
+                try:
+                    inherited = store.inherited_auth(req.get("id", ""))
+                except Exception:  # noqa: BLE001
+                    inherited = None
+            return dict(inherited) if isinstance(inherited, dict) else {"type": "none"}
+
+        if kind == "jwt":
+            from .jwt_auth import make_jwt
+
+            if auth.get("jwt_mode") == "manual" or not (auth.get("jwt_payload") or "").strip():
+                token = resolve_vars(auth.get("jwt_token", "") or "", env_vars)
+            else:
+                token, _err = make_jwt(
+                    auth.get("jwt_payload", ""), auth.get("jwt_secret", ""),
+                    auth.get("jwt_alg", "HS256"), env_vars,
+                    error_hint=i18n.tr("Payload 不是合法 JSON"))
+            return {"type": "bearer", "token": token} if token else {"type": "none"}
+
+        return auth
+
     def _run_pre_script(self, req: Dict[str, Any], env_vars: Dict[str, str]) -> None:
         scripts = req.get("scripts") or {}
         source = scripts.get("pre") or ""
@@ -334,7 +366,7 @@ class ApiClient(QObject):
             if row.get("enabled", True) and row.get("key"):
                 query.addQueryItem(resolve_vars(str(row["key"]), env_vars),
                                    resolve_vars(str(row.get("value", "")), env_vars))
-        auth = req.get("auth") or {}
+        auth = self._effective_auth(req, env_vars)
         if auth.get("type") == "apikey" and auth.get("add_to") == "query" and auth.get("key"):
             query.addQueryItem(resolve_vars(auth["key"], env_vars),
                                resolve_vars(auth.get("value", ""), env_vars))
@@ -459,7 +491,7 @@ class ApiClient(QObject):
                 resolve_vars(str(row.get("value", "")), env_vars),
             )
 
-        auth = req.get("auth") or {}
+        auth = self._effective_auth(req, env_vars)
         if auth.get("type") == "apikey" and auth.get("add_to") == "query" and auth.get("key"):
             query.addQueryItem(resolve_vars(auth["key"], env_vars),
                                resolve_vars(auth.get("value", ""), env_vars))

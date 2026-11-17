@@ -415,24 +415,39 @@ class HistoryRow(QWidget):
 
 
 class HistoryGroupHeader(QWidget):
-    """历史分组标题：Today / Yesterday / 2 days ago … 带折叠方向与计数。"""
+    """历史分组标题：与集合树同款折叠箭头 + 文案 + 条数，点击可折叠。"""
 
-    def __init__(self, label: str, count: int, parent=None):
+    clicked = pyqtSignal(str)             # 携带分组 key
+
+    def __init__(self, label: str, count: int, group_key: str = "",
+                 collapsed: bool = False, parent=None):
         super().__init__(parent)
         self.label = label
         self.count = count
+        self.group_key = group_key
+        self.collapsed = collapsed
         self.setFixedHeight(30)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, e):  # noqa: N802
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.group_key)
+        super().mousePressEvent(e)
 
     def paintEvent(self, _e):
         t = theme()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        # 下拉箭头
-        p.setFont(mono(10))
-        p.setPen(C(t.text_faint))
-        p.drawText(QRectF(10, 0, 12, self.height()),
-                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), "⌄")
+        # 与集合树同款 chevron_right：收起朝右，展开旋转 90° 朝下
+        icon_col = C(t.text_faint)
+        pm = icons.pixmap("chevron_right", icon_col.name(QColor.NameFormat.HexArgb), 11, 2.0)
+        p.save()
+        p.translate(12, self.height() / 2)
+        if not self.collapsed:
+            p.rotate(90)
+        p.drawPixmap(QPointF(-5.5, -5.5), pm)
+        p.restore()
         p.setFont(font(11.2, QFont.Weight.Medium))
         p.setPen(C(t.text_dim))
         p.drawText(QRectF(26, 0, self.width() - 70, self.height()),
@@ -443,6 +458,13 @@ class HistoryGroupHeader(QWidget):
                    int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
                    str(self.count))
         p.end()
+
+
+def _history_group_key(ts: float) -> str:
+    """分组的稳定 key（本地日期），与显示语言无关，用于持久化折叠状态。"""
+    from datetime import datetime
+
+    return datetime.fromtimestamp(ts or 0).strftime("%Y-%m-%d")
 
 
 def _history_group(ts: float) -> str:
@@ -722,6 +744,7 @@ class Sidebar(QWidget):
         act_run = menu.addAction(icons.icon("play", t.text, 14), "运行集合") if is_folder else None
         if act_run is not None:
             menu.addSeparator()
+        act_auth = menu.addAction(icons.icon("lock", t.text, 14), "设置认证…") if is_folder else None
         act_rename = menu.addAction(icons.icon("pencil", t.text, 14), "重命名…")
         act_dup = menu.addAction(icons.icon("copy", t.text, 14), "创建副本")
         if not is_folder:
@@ -744,6 +767,8 @@ class Sidebar(QWidget):
             self.changed.emit()
         elif act_run is not None and chosen is act_run:
             self.runFolder.emit(node_id)
+        elif act_auth is not None and chosen is act_auth:
+            self._auth_dialog(node)
         elif chosen is act_rename:
             self._rename_dialog(node)
         elif chosen is act_dup:
@@ -788,10 +813,53 @@ class Sidebar(QWidget):
                 self.refresh()
                 self.changed.emit()
 
+    def _auth_dialog(self, node: Dict[str, Any]) -> None:
+        """文件夹级认证：子请求选「继承」时从这里取凭据。"""
+        from .dialogs import GlassDialog
+        from .request_panel import AuthPage
+
+        dlg = GlassDialog(self.window(), 580, 540, i18n.tr("集合认证"))
+        lay = QVBoxLayout(dlg.body)
+        lay.setContentsMargins(14, 10, 14, 12)
+        lay.setSpacing(8)
+        lay.addWidget(Label(
+            i18n.tr("这里的认证会被子请求通过「继承」使用；留空则以请求自己的认证为准。"),
+            11.2, theme().text_faint))
+        page = AuthPage(store=self.store, parent=dlg.body)
+        page.load(node.get("auth") or {}, "")
+        lay.addWidget(page, 1)
+        cancel = Button("取消", None, kind="ghost", height=28, padding=12, font_size=12)
+        cancel.clicked.connect(dlg.reject)
+        ok = Button("确定", None, kind="primary", height=28, padding=16, font_size=12)
+        ok.clicked.connect(dlg.accept)
+        lay.addWidget(HBox(1, cancel, ok, spacing=6))
+        if dlg.exec():
+            auth = page.dump()
+            if (auth.get("type") or "none") == "none":
+                node.pop("auth", None)
+            else:
+                node["auth"] = auth
+            self.store.save()
+            self.notify.emit(i18n.tr("集合认证已更新"))
+
     # -------------------------------------------------- 历史
+    def _collapsed_groups(self) -> Set[str]:
+        return set(self.store.settings.get("history_collapsed") or [])
+
+    def _toggle_group(self, key: str) -> None:
+        collapsed = self._collapsed_groups()
+        if key in collapsed:
+            collapsed.discard(key)
+        else:
+            collapsed.add(key)
+        self.store.settings["history_collapsed"] = sorted(collapsed)
+        self.store.save()
+        self.refresh_history()
+
     def refresh_history(self) -> None:
         entries = self.store.history
         rows = list(getattr(self, "_hist_rows", []))
+        collapsed = self._collapsed_groups()
 
         # 快速路径：每发一次请求只会在头部多一条、尾部裁一条，且分组没变。
         # 以前不管三七归一整列表重建，240 条历史就是 240 个新控件 —— 每发一次请求都卡一下。
@@ -799,10 +867,12 @@ class Sidebar(QWidget):
             incoming = [e.get("id") for e in entries]
             existing = [r.entry.get("id") for r in rows]
             head_group = _history_group(entries[0].get("ts", 0))
+            head_key = _history_group_key(entries[0].get("ts", 0))
             first_header = getattr(self, "_hist_header", None)
             if (incoming[0] not in existing
                     and (incoming[1:] == existing or incoming[1:] == existing[:-1])
-                    and first_header == head_group):
+                    and first_header == head_group
+                    and head_key not in collapsed):
                 row = HistoryRow(entries[0])
                 row.clicked.connect(self._restore_history)
                 row.removeRequested.connect(self._remove_history)
@@ -838,18 +908,25 @@ class Sidebar(QWidget):
             self.history_lay.insertWidget(0, empty)
             return
 
-        # 按日期分组：一组一个标题 + 若干条记录，标题带条数
+        # 按日期分组：一组一个标题 + 若干条记录，标题带条数；折叠组只画标题
         current_group = ""
+        current_key = ""
         group_count = 0
         for entry in entries:
             group = _history_group(entry.get("ts", 0))
+            key = _history_group_key(entry.get("ts", 0))
             if group != current_group:
                 current_group = group
+                current_key = key
                 group_count = sum(1 for e in entries if _history_group(e.get("ts", 0)) == group)
-                header = HistoryGroupHeader(group, group_count)
+                is_collapsed = key in collapsed
+                header = HistoryGroupHeader(group, group_count, key, is_collapsed)
+                header.clicked.connect(self._toggle_group)
                 self.history_lay.insertWidget(self.history_lay.count() - 1, header)
                 if not getattr(self, "_hist_header", ""):
                     self._hist_header = group
+            if current_key in collapsed:
+                continue
             row = HistoryRow(entry)
             row.clicked.connect(self._restore_history)
             row.removeRequested.connect(self._remove_history)

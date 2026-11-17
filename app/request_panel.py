@@ -31,6 +31,7 @@ from .widgets import (
     Label,
     Menu,
     SegmentedTabs,
+    SmoothScrollArea,
     SuggestPopup,
     VBox,
     animate,
@@ -61,7 +62,8 @@ _MODE_ALIAS = {
     "application/json": "json", "raw": "text", "file": "binary",
 }
 
-AUTH_TYPES = [("none", "无"), ("bearer", "Bearer"), ("basic", "Basic"), ("apikey", "API Key")]
+AUTH_TYPES = [("none", "无"), ("inherit", "继承"), ("bearer", "Bearer"),
+              ("basic", "Basic"), ("apikey", "API Key"), ("jwt", "JWT")]
 
 
 # ---------------------------------------------------------------- 方法菜单
@@ -699,13 +701,15 @@ def icons_icon_label(name: str) -> Label:
 class AuthPage(QWidget):
     changed = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, store: Optional[Store] = None, parent=None):
         super().__init__(parent)
+        self.store = store
         self._loading = False
         self._type = "none"
+        self._request_id = ""
 
         self.types = SegmentedTabs([(k, l) for k, l in AUTH_TYPES], style="pill", height=28,
-                                   font_size=12, pad_h=13)
+                                   font_size=12, pad_h=11)
         self.types.changed.connect(self._on_type)
 
         self.bearer_token = self._field("Token", "粘贴 Bearer Token，例如 eyJhbGciOi…")
@@ -722,11 +726,70 @@ class AuthPage(QWidget):
         self.api_box = self._group("API Key", "选择一个位置注入密钥。", self.api_key, self.api_value, self.api_add)
         self.none_box = self._group("无认证", "该请求不携带任何认证凭据。")
 
+        # Inherit：显示从哪个集合继承、继承到哪种方式
+        self.inherit_source = Label("", 12.5, theme().text, weight=QFont.Weight.DemiBold)
+        self.inherit_detail = Label("", 11.5, theme().text_faint)
+        self.inherit_detail.setWordWrap(True)
+        self.inherit_box = self._group(
+            "继承", "从所属集合继承认证配置。集合未设置认证时不带任何凭据。",
+            self.inherit_source, self.inherit_detail)
+
+        # JWT：自动生成签名令牌 / 手动粘贴，两种模式
+        from .jwt_auth import ALGORITHMS
+
+        self.jwt_mode = SegmentedTabs(
+            [("auto", "自动生成"), ("manual", "手动输入")],
+            style="pill", height=26, font_size=11.5, pad_h=11)
+        self.jwt_mode.changed.connect(self._on_jwt_mode)
+        self.jwt_alg = SegmentedTabs(
+            [(a, a) for a in ALGORITHMS], style="pill", height=26, font_size=11.5, pad_h=10)
+        self.jwt_alg.set_current("HS256", emit=False)
+        self.jwt_alg.changed.connect(self._on_jwt_change)
+        self.jwt_payload = self._field("Payload", '{"sub": "123", "name": "Ocelot"}')
+        self.jwt_secret = self._field("密钥", "your-256-bit-secret", password=True)
+        self.jwt_token = self._field("Token", "粘贴现成的 JWT")
+        self.jwt_status = Label("", 10.8, theme().text_faint, mono_font=True)
+        self.jwt_status.setWordWrap(True)
+
+        auto_w = QWidget()
+        al = QVBoxLayout(auto_w)
+        al.setContentsMargins(0, 0, 0, 0)
+        al.setSpacing(9)
+        al.addWidget(Label("算法", 11.3, theme().text_dim, weight=QFont.Weight.DemiBold))
+        al.addWidget(self.jwt_alg)
+        al.addWidget(Label("载荷", 11.3, theme().text_dim, weight=QFont.Weight.DemiBold))
+        al.addWidget(self.jwt_payload)
+        al.addWidget(Label("密钥", 11.3, theme().text_dim, weight=QFont.Weight.DemiBold))
+        al.addWidget(self.jwt_secret)
+        manual_w = QWidget()
+        ml = QVBoxLayout(manual_w)
+        ml.setContentsMargins(0, 0, 0, 0)
+        ml.setSpacing(9)
+        ml.addWidget(self.jwt_token)
+        self.jwt_pages = FadeStack()
+        self.jwt_pages.add("auto", auto_w)
+        self.jwt_pages.add("manual", manual_w)
+        self.jwt_pages.set_current("auto", animate=False)
+
+        jwt_inner = QWidget()
+        jil = QVBoxLayout(jwt_inner)
+        jil.setContentsMargins(0, 0, 0, 0)
+        jil.setSpacing(10)
+        jil.addWidget(self.jwt_mode)
+        jil.addWidget(self.jwt_pages, 1)
+        jil.addWidget(self.jwt_status)
+        self.jwt_box = self._group(
+            "JWT",
+            "填写 Payload 与密钥后自动生成签名令牌，发送时作为 Authorization: Bearer <token> 携带。",
+            jwt_inner)
+
         self.stack = FadeStack()
         self.stack.add("none", self.none_box)
+        self.stack.add("inherit", self.inherit_box)
         self.stack.add("bearer", self.bearer_box)
         self.stack.add("basic", self.basic_box)
         self.stack.add("apikey", self.api_box)
+        self.stack.add("jwt", self.jwt_box)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 12)
@@ -765,16 +828,74 @@ class AuthPage(QWidget):
     def _on_type(self, key: str) -> None:
         self._type = key
         self.stack.set_current(key)
+        if key == "inherit":
+            self._refresh_inherit()
+        elif key == "jwt":
+            self._refresh_jwt()
         if not self._loading:
             self.changed.emit()
+
+    def _on_jwt_mode(self, mode: str) -> None:
+        self.jwt_pages.set_current(mode)
+        self._refresh_jwt()
+        if not self._loading:
+            self.changed.emit()
+
+    def _on_jwt_change(self, _key: str = "") -> None:
+        self._refresh_jwt()
+        if not self._loading:
+            self.changed.emit()
+
+    def _refresh_jwt(self) -> None:
+        from .jwt_auth import make_jwt
+
+        if self.jwt_mode.current() != "auto":
+            self.jwt_status.setText("")
+            return
+        payload = self.jwt_payload.text().strip()
+        if not payload:
+            self.jwt_status.setText("")
+            return
+        token, err = make_jwt(payload, self.jwt_secret.text(), self.jwt_alg.current(),
+                              self.store.env_vars() if self.store else {},
+                              error_hint=i18n.tr("Payload 不是合法 JSON"))
+        if err:
+            self.jwt_status.setText("✕ " + err)
+            self.jwt_status.setStyleSheet(f"color: {theme().danger}; background: transparent;")
+        else:
+            self.jwt_status.setText(i18n.trf("已生成 · {n} 字符", n=len(token)))
+            self.jwt_status.setStyleSheet(f"color: {theme().success}; background: transparent;")
+
+    def _refresh_inherit(self) -> None:
+        auth = None
+        if self.store and self._request_id:
+            try:
+                auth = self.store.inherited_auth(self._request_id)
+            except Exception:  # noqa: BLE001
+                auth = None
+        if auth:
+            kind = auth.get("type") or "none"
+            label = dict(AUTH_TYPES).get(kind, kind)
+            self.inherit_source.setText(i18n.trf("集合认证：{kind}", kind=i18n.tr(label)))
+            self.inherit_detail.setText(i18n.tr("从所属集合继承认证配置。集合未设置认证时不带任何凭据。"))
+            self.inherit_detail.setStyleSheet("")
+        else:
+            self.inherit_source.setText(i18n.tr("当前集合未设置认证，请求将不带凭据。"))
+            self.inherit_detail.setText(i18n.tr("从所属集合继承认证配置。集合未设置认证时不带任何凭据。"))
 
     def _on_change(self) -> None:
-        if not self._loading:
-            self.changed.emit()
+        if self._loading:
+            return
+        if self._type == "jwt":
+            self._refresh_jwt()
+        self.changed.emit()
 
-    def load(self, auth: Dict[str, Any]) -> None:
+    def load(self, auth: Dict[str, Any], request_id: str = "") -> None:
         self._loading = True
+        self._request_id = request_id or ""
         self._type = auth.get("type", "none") or "none"
+        if self._type not in dict(AUTH_TYPES):
+            self._type = "none"
         self.types.set_current(self._type, emit=False)
         self.stack.set_current(self._type, animate=False)
         self.bearer_token.setText(auth.get("token", ""))
@@ -783,7 +904,17 @@ class AuthPage(QWidget):
         self.api_key.setText(auth.get("key", ""))
         self.api_value.setText(auth.get("value", ""))
         self.api_add.set_current(auth.get("add_to", "header"), emit=False)
+        self.jwt_mode.set_current(auth.get("jwt_mode", "auto"), emit=False)
+        self.jwt_pages.set_current(auth.get("jwt_mode", "auto"), animate=False)
+        self.jwt_alg.set_current(auth.get("jwt_alg", "HS256"), emit=False)
+        self.jwt_payload.setText(auth.get("jwt_payload", ""))
+        self.jwt_secret.setText(auth.get("jwt_secret", ""))
+        self.jwt_token.setText(auth.get("jwt_token", ""))
         self._loading = False
+        if self._type == "inherit":
+            self._refresh_inherit()
+        elif self._type == "jwt":
+            self._refresh_jwt()
 
     def dump(self) -> Dict[str, Any]:
         return {
@@ -794,124 +925,100 @@ class AuthPage(QWidget):
             "key": self.api_key.text(),
             "value": self.api_value.text(),
             "add_to": self.api_add.current(),
+            "jwt_mode": self.jwt_mode.current(),
+            "jwt_alg": self.jwt_alg.current(),
+            "jwt_payload": self.jwt_payload.text(),
+            "jwt_secret": self.jwt_secret.text(),
+            "jwt_token": self.jwt_token.text(),
         }
 
 
 class ScriptPage(QWidget):
-    """前后置脚本编辑器：JavaScript 代码 + 可点击的代码片段 + API 速查。
+    """脚本编辑器：JavaScript 代码 + 一键插入的代码片段 + API 速查。
 
-    前后置各有一份独立脚本，保存在请求的 scripts 字段里。编辑器用同一套
-    统一高亮的 CodeView，支持括号补全与缩进，写起来跟正式 IDE 一样顺。
+    前置 / 后置各用本类的一份独立实例（由 RequestEditor 分别挂到 pre / post 页），
+    页内不再做二次切换 —— 顶层「前置脚本 / 后置脚本」标签本身就是切换。
+    编辑器用统一高亮的 CodeView，支持括号补全与缩进；右侧说明用可滚动容器，
+    内容超出时只滚动右侧，不会挤出或挡住下方按钮。
     """
 
     changed = pyqtSignal()
 
     SNIPPETS = [
-        ("Environment: Set an environment variable",
-         'pw.env.set("token", "abc123");'),
-        ("Environment: Set timestamp variable",
-         'pw.env.set("ts", String(Date.now()));'),
-        ("Environment: Set random number variable",
-         'pw.env.set("id", String(Math.floor(Math.random() * 10000)));'),
-        ("Request: Add a header",
-         'req.setHeader("X-Trace-Id", "123");'),
-        ("Console: Print a message",
-         'console.log("hello", req.method);'),
+        ("环境变量：设置一个变量", 'pw.env.set("token", "abc123");'),
+        ("环境变量：设置时间戳", 'pw.env.set("ts", String(Date.now()));'),
+        ("环境变量：设置随机数", 'pw.env.set("id", String(Math.floor(Math.random() * 10000)));'),
+        ("请求：添加一个请求头", 'req.setHeader("X-Trace-Id", "123");'),
+        ("控制台：打印一条消息", 'console.log("hello", req.method);'),
     ]
 
-    def __init__(self, store: Store, parent=None):
+    DOCS = {
+        "pre": "前置脚本在请求发送前用 JavaScript 运行。\n"
+               "可修改 req.url、req.headers 和 req.params，或用 pw.env.set() 把值存入当前环境。",
+        "post": "后置脚本在收到响应后用 JavaScript 运行。\n"
+                "可读取 res.status / res.body，解析结果，并用 pw.env.set() 把值存回当前环境。",
+    }
+
+    def __init__(self, store: Store, kind: str = "pre", parent=None):
         super().__init__(parent)
         self.store = store
         self._loading = False
-        self._kind = "pre"               # pre | post
-
-        # 前后置切换放在页面内部，跟顶层的「前置操作 / 后置操作」标签联动
-        self.kind_tabs = SegmentedTabs(
-            [("pre", i18n.tr("Pre-request Script")),
-             ("post", i18n.tr("Post-response Script"))],
-            style="underline", height=30, pad_h=10, font_size=12)
-        self.kind_tabs.changed.connect(self._on_kind)
+        self._kind = "post" if kind == "post" else "pre"
 
         self.code = CodeView(read_only=False, highlight=True, show_gutter=True, wrap=True)
         self.code.set_language("javascript")
         self.code.textChanged.connect(self._on_code_changed)
-        self.run_btn = Button("Run", "play", kind="ghost", height=24, padding=9, font_size=11.5)
-        self.run_btn.clicked.connect(self._run_test)
-        self.status = Label("", 10.5, theme().text_faint, mono_font=True)
-        self.status.setWordWrap(True)
-        tools = HBox(1, self.status, self.run_btn, spacing=6)
 
         editor = Card(radius=9)
         el = QVBoxLayout(editor)
         el.setContentsMargins(0, 6, 0, 6)
         el.addWidget(self.code, 1)
 
-        # 右侧：说明 + 一键插入的代码片段
-        self.doc = Label("", 11.2, theme().text_dim)
+        # 右侧：说明 + 一键插入的代码片段（内容多时自己滚动，不挤压下方）
+        self.doc = Label(self.DOCS[self._kind], 11.2, theme().text_dim)
         self.doc.setWordWrap(True)
-        self.snippet_host = QVBoxLayout()
-        self.snippet_host.setContentsMargins(0, 0, 0, 0)
-        self.snippet_host.setSpacing(6)
+        snippets = QWidget()
+        sh = QVBoxLayout(snippets)
+        sh.setContentsMargins(0, 0, 0, 0)
+        sh.setSpacing(6)
         for title, snippet in self.SNIPPETS:
-            b = Button(i18n.tr(title), "plus", kind="subtle", height=25, padding=8, font_size=11)
+            b = Button(title, "plus", kind="subtle", height=25, padding=8, font_size=11)
             b.clicked.connect(lambda _c=False, s=snippet: self._insert(s))
-            self.snippet_host.addWidget(b)
-        self.snippet_host.addStretch(1)
+            sh.addWidget(b)
+        sh.addStretch(1)
+
         side = QWidget()
         sl = QVBoxLayout(side)
         sl.setContentsMargins(14, 12, 14, 12)
         sl.setSpacing(10)
         sl.addWidget(self.doc)
         sl.addWidget(Divider())
-        sl.addWidget(Label(i18n.tr("Code snippets"), 11.4, theme().text_dim,
+        sl.addWidget(Label("代码片段", 11.4, theme().text_dim,
                            weight=QFont.Weight.DemiBold))
-        sl.addLayout(self.snippet_host)
+        sl.addWidget(snippets, 1)
+        self.side_scroll = SmoothScrollArea()
+        self.side_scroll.setWidget(side)
 
         body = QHBoxLayout()
-        body.setContentsMargins(14, 8, 14, 12)
+        body.setContentsMargins(14, 8, 14, 8)
         body.setSpacing(12)
         body.addWidget(editor, 3)
-        body.addWidget(side, 2)
+        body.addWidget(self.side_scroll, 2)
+
+        # 底部：运行结果 + 简短的「试运行」按钮（tooltip 说明用途）
+        self.status = Label("", 10.5, theme().text_faint, mono_font=True)
+        self.status.setWordWrap(True)
+        self.run_btn = Button(
+            "试运行", "play", kind="ghost", height=26, padding=11, font_size=11.5,
+            tooltip="不联网，只在临时请求上执行当前脚本，查看日志与错误。")
+        self.run_btn.clicked.connect(self._run_test)
+        tools = HBox(self.status, 1, self.run_btn, spacing=8)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 8, 0, 0)
         lay.setSpacing(8)
-        lay.addWidget(self.kind_tabs)
         lay.addLayout(body, 1)
         lay.addWidget(tools)
-        self._apply_doc()
-
-    def _apply_doc(self) -> None:
-        if self._kind == "pre":
-            self.doc.setText(
-                i18n.tr("Pre-request scripts run in JavaScript before the request is sent.\n"
-                        "Modify req.url, req.headers and req.params, or store values in the "
-                        "active environment with pw.env.set()."))
-        else:
-            self.doc.setText(
-                i18n.tr("Post-response scripts run in JavaScript after the response arrives.\n"
-                        "Read res.status / res.body, parse JSON and save values back to the "
-                        "active environment with pw.env.set()."))
-
-    def set_kind(self, kind: str) -> None:
-        """由顶层标签调用：pre / post。"""
-        kind = "post" if kind == "post" else "pre"
-        if kind == self._kind:
-            return
-        self._drafts[self._kind] = self.code.toPlainText()
-        self._kind = kind
-        self.kind_tabs.set_current(kind, emit=False)
-        self.code.setPlainText(self._drafts.get(kind, ""))
-        self.status.setText("")
-        self._apply_doc()
-
-    def _on_kind(self, kind: str) -> None:
-        self._drafts[self._kind] = self.code.toPlainText()
-        self._kind = kind
-        self.code.setPlainText(self._drafts.get(kind, ""))
-        self.status.setText("")
-        self._apply_doc()
-        self.changed.emit()
 
     def _on_code_changed(self) -> None:
         if not self._loading:
@@ -929,9 +1036,13 @@ class ScriptPage(QWidget):
 
         req = {"method": "GET", "url": "https://example.com", "headers": [],
                "params": [], "body": {"raw": ""}}
-        result = run_script(self.code.toPlainText(), self.store, req)
+        source = self.code.toPlainText()
+        if not source.strip():
+            self.status.setText("")
+            return
+        result = run_script(source, self.store, req)
         self.status.setText(
-            i18n.tr("✓ Ran OK · see console output") if result.ok
+            i18n.tr("✓ 运行成功 · 查看下方日志") if result.ok
             else "✕ " + result.error[:180])
         self.status.setStyleSheet(
             f"color: {theme().success if result.ok else theme().danger}; background: transparent;")
@@ -956,6 +1067,10 @@ class ScriptPage(QWidget):
         drafts = dict(self._drafts)
         drafts[self._kind] = self.code.toPlainText()
         return drafts
+
+    def refresh_theme(self) -> None:
+        """语言切换后重译自绘控件里的动态文案（tooltip 不走 QLabel 机制）。"""
+        self.run_btn.setToolTip(i18n.tr("不联网，只在临时请求上执行当前脚本，查看日志与错误。"))
 
 
 # ---------------------------------------------------------------- 主编辑器
@@ -994,7 +1109,7 @@ class RequestEditor(QWidget):
         self.tabs = SegmentedTabs(
             [("params", "参数"), ("body", "请求体"), ("headers", "请求头"),
              ("cookies", "Cookies"), ("auth", "认证"),
-             ("pre", "前置操作"), ("post", "后置操作")],
+             ("pre", "前置脚本"), ("post", "后置脚本")],
             style="underline", height=32, pad_h=10, font_size=12.2)
         self.tabs.changed.connect(self._on_tab)
         self.count_label = Label("", 10.5, theme().text_faint, mono_font=True)
@@ -1021,10 +1136,12 @@ class RequestEditor(QWidget):
 
         self.body = BodyPage()
         self.body.changed.connect(self._on_body)
-        self.auth = AuthPage()
+        self.auth = AuthPage(store=self.store)
         self.auth.changed.connect(self._on_auth)
-        self.scripts = ScriptPage(store=self.store)
-        self.scripts.changed.connect(self._on_scripts)
+        self.scripts_pre = ScriptPage(store=self.store, kind="pre")
+        self.scripts_pre.changed.connect(self._on_scripts)
+        self.scripts_post = ScriptPage(store=self.store, kind="post")
+        self.scripts_post.changed.connect(self._on_scripts)
 
         # Cookie 单独一栏：发送时拼成 Cookie 头，也能一键把响应里的 Set-Cookie 收进来
         self.cookies = KVEditor("Cookie 名", "值", empty_hint="添加 Cookie")
@@ -1045,8 +1162,8 @@ class RequestEditor(QWidget):
         self.pages.add("headers", self._wrap(self.headers, self.headers_tools))
         self.pages.add("cookies", self._wrap(self.cookies, self.cookies_tools))
         self.pages.add("auth", self.auth)
-        self.pages.add("pre", self.scripts)
-        self.pages.add("post", self.scripts, alias=True)
+        self.pages.add("pre", self.scripts_pre)
+        self.pages.add("post", self.scripts_post)
         self.pages.set_current("params", animate=False)
 
         head = QWidget()
@@ -1092,8 +1209,10 @@ class RequestEditor(QWidget):
             self.headers.set_rows(request.get("headers", []))
             self.cookies.set_rows(request.get("cookies", []))
             self.body.load(request.get("body", {}))
-            self.auth.load(request.get("auth", {}))
-            self.scripts.load(request.get("scripts", {}))
+            self.auth.load(request.get("auth", {}), request.get("id", ""))
+            scripts = request.get("scripts", {}) or {}
+            self.scripts_pre.load({"pre": scripts.get("pre", "")})
+            self.scripts_post.load({"post": scripts.get("post", "")})
         finally:
             self._loading = False
         self._refresh_counts()
@@ -1109,7 +1228,10 @@ class RequestEditor(QWidget):
         self.request["cookies"] = self.cookies.rows()
         self.request["body"] = self.body.dump()
         self.request["auth"] = self.auth.dump()
-        self.request["scripts"] = self.scripts.dump()
+        self.request["scripts"] = {
+            "pre": self.scripts_pre.dump().get("pre", ""),
+            "post": self.scripts_post.dump().get("post", ""),
+        }
         if not self.request.get("name") or self.request.get("name") == "Untitled Request":
             self._auto_name()
         self._refresh_counts()
@@ -1153,9 +1275,10 @@ class RequestEditor(QWidget):
         has_body = bool(body.get("raw") or body.get("form") or body.get("file")) and body.get("mode") != "none"
         self.tabs.set_badge("body", 1 if has_body else 0)
         self.tabs.set_badge("auth", 1 if self.auth.dump().get("type") != "none" else 0)
-        scripts = self.scripts.dump() if hasattr(self, "scripts") else {}
-        self.tabs.set_badge("pre", 1 if scripts.get("pre", "").strip() else 0)
-        self.tabs.set_badge("post", 1 if scripts.get("post", "").strip() else 0)
+        pre_script = self.scripts_pre.dump().get("pre", "").strip() if hasattr(self, "scripts_pre") else ""
+        post_script = self.scripts_post.dump().get("post", "").strip() if hasattr(self, "scripts_post") else ""
+        self.tabs.set_badge("pre", 1 if pre_script else 0)
+        self.tabs.set_badge("post", 1 if post_script else 0)
         p = len(self.params.rows())
         h = len(self.headers.rows())
         self.count_label.setText(i18n.trf("{p} 参数 · {h} 请求头", p=p, h=h) if (p or h) else "")
@@ -1279,8 +1402,6 @@ class RequestEditor(QWidget):
             self._sync_request()
 
     def _on_tab(self, key: str) -> None:
-        if key in ("pre", "post"):
-            self.scripts.set_kind(key)
         self.pages.set_current(key)
 
     def _toggle_bulk(self) -> None:

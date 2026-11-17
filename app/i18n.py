@@ -977,29 +977,51 @@ _EN.update({
         "Add one in Ocelot's Mock Server, or end the path with * to match by prefix.",
     "读取失败：{err}": "Couldn't read the file: {err}",
     # 前后置脚本 / 代码编辑 / 历史分组
-    "前置操作": "Pre-request", "后置操作": "Post-response",
-    "Pre-request Script": "Pre-request Script",
-    "Post-response Script": "Post-response Script",
-    "Code snippets": "Code snippets",
-    "Environment: Set an environment variable": "Environment: Set an environment variable",
-    "Environment: Set timestamp variable": "Environment: Set timestamp variable",
-    "Environment: Set random number variable": "Environment: Set random number variable",
-    "Request: Add a header": "Request: Add a header",
-    "Console: Print a message": "Console: Print a message",
-    "Pre-request scripts run in JavaScript before the request is sent.\n"
-    "Modify req.url, req.headers and req.params, or store values in the "
-    "active environment with pw.env.set().":
+    "前置脚本": "Pre-request Script", "后置脚本": "Post-response Script",
+    "代码片段": "Code snippets",
+    "环境变量：设置一个变量": "Environment: Set an environment variable",
+    "环境变量：设置时间戳": "Environment: Set timestamp variable",
+    "环境变量：设置随机数": "Environment: Set random number variable",
+    "请求：添加一个请求头": "Request: Add a header",
+    "控制台：打印一条消息": "Console: Print a message",
+    "试运行": "Run test",
+    "不联网，只在临时请求上执行当前脚本，查看日志与错误。":
+        "Run the current script locally without sending a request, then show logs and errors.",
+    "前置脚本在请求发送前用 JavaScript 运行。\n"
+    "可修改 req.url、req.headers 和 req.params，或用 pw.env.set() 把值存入当前环境。":
         "Pre-request scripts run in JavaScript before the request is sent.\n"
         "Modify req.url, req.headers and req.params, or store values in the "
         "active environment with pw.env.set().",
-    "Post-response scripts run in JavaScript after the response arrives.\n"
-    "Read res.status / res.body, parse JSON and save values back to the "
-    "active environment with pw.env.set().":
+    "后置脚本在收到响应后用 JavaScript 运行。\n"
+    "可读取 res.status / res.body，解析结果，并用 pw.env.set() 把值存回当前环境。":
         "Post-response scripts run in JavaScript after the response arrives.\n"
         "Read res.status / res.body, parse JSON and save values back to the "
         "active environment with pw.env.set().",
-    "✓ Ran OK · see console output": "✓ Ran OK · see console output",
+    "✓ 运行成功 · 查看下方日志": "✓ Ran OK · see logs below",
     "Header 含状态行 · Body 为正文": "Header includes the status line · Body is the raw payload",
     "今天": "Today", "昨天": "Yesterday", "{n} 天前": "{n} days ago",
+    # JWT / Inherit 认证
+    "继承": "Inherit", "JWT": "JWT",
+    "从所属集合继承认证配置。集合未设置认证时不带任何凭据。":
+        "Inherit the auth settings from the parent collection. No credential is sent if "
+        "the collection has none.",
+    "当前集合未设置认证，请求将不带凭据。":
+        "No auth configured on the parent collection; no credential will be sent.",
+    "集合认证": "Collection auth", "集合认证：{kind}": "Collection auth: {kind}",
+    "设置认证…": "Configure auth…",
+    "这里的认证会被子请求通过「继承」使用；留空则以请求自己的认证为准。":
+        "Auth set here is used by child requests via Inherit; leave it unset to use each "
+        "request's own auth.",
+    "集合认证已更新": "Collection auth updated",
+    "算法": "Algorithm", "密钥": "Secret", "载荷": "Payload",
+    "令牌": "Token", "自动生成": "Auto-generate", "手动输入": "Enter manually",
+    "JWT 头": "JWT header", "签名": "Signature",
+    "填写 Payload 与密钥后自动生成签名令牌，发送时作为 Authorization: Bearer <token> 携带。":
+        "Fill in the payload and secret to auto-generate a signed token, sent as "
+        "Authorization: Bearer <token>.",
+    "直接粘贴一个现成的 JWT，发送时作为 Authorization: Bearer <token> 携带。":
+        "Paste an existing JWT to be sent as Authorization: Bearer <token>.",
+    "Payload 不是合法 JSON": "Payload is not valid JSON",
+    "已生成 · {n} 字符": "Generated · {n} chars",
 })
 
