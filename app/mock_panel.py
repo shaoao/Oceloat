@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from . import i18n
 from .code_editor import CodeView
 from .dialogs import GlassDialog
 from .mock_server import DEFAULT_PORT, MockServer, default_routes, render_placeholders
@@ -1097,7 +1098,8 @@ class MockDialog(GlassDialog):
             self.routes_box.insertWidget(self.routes_box.count() - 1, row)
         self.empty_label.setVisible(not routes)
         self.scroll.setVisible(bool(routes))
-        self.hint.setText(f"{len(routes)} 条路由" if self.tabs.current() == "local" else "")
+        self.hint.setText(
+            i18n.tr("{n} 条路由").format(n=len(routes)) if self.tabs.current() == "local" else "")
 
     def _add_route(self) -> None:
         dlg = RouteDialog(self.store, None, self)
@@ -1206,7 +1208,8 @@ class MockDialog(GlassDialog):
         self.stack.setCurrentIndex({"local": 0, "public": 1, "logs": 2}.get(key, 0))
         if key == "local":
             self._sync_local()
-            self.hint.setText(f"{len(self._cfg().get('routes') or [])} 条路由")
+            self.hint.setText(
+                i18n.tr("{n} 条路由").format(n=len(self._cfg().get("routes") or [])))
         elif key == "logs":
             self._refresh_logs(force=True)
             self.log_timer.start()
@@ -1303,8 +1306,8 @@ class MockDialog(GlassDialog):
         self.log_scroll.setWidget(holder)
         cl.addWidget(self.log_scroll)
         self.logs_empty = Label(
-            "还没有请求。启动本地服务后，任何打到它的请求都会出现在这里 —— "
-            "包括方法、路径、状态码、耗时，以及命中了哪条规则。",
+            i18n.tr("还没有请求。启动本地服务后，任何打到它的请求都会出现在这里 —— "
+                    "包括方法、路径、状态码、耗时，以及命中了哪条规则。"),
             11.2, t.text_faint)
         self.logs_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.logs_empty.setWordWrap(True)
@@ -1342,12 +1345,13 @@ class MockDialog(GlassDialog):
     @staticmethod
     def _log_summary(entries: List[Dict[str, Any]]) -> str:
         if not entries:
-            return "还没有请求"
+            return i18n.tr("还没有请求")
         ok = sum(1 for e in entries if 200 <= int(e.get("status") or 0) < 300)
         bad = sum(1 for e in entries if int(e.get("status") or 0) >= 400)
         avg = int(sum(int(e.get("ms") or 0) for e in entries) / len(entries))
-        return (f"共 {len(entries)} 次 · 2xx {ok} · 4xx/5xx {bad} · 平均 {avg} ms · "
-                f"最近一条 {entries[0].get('time', '')}")
+        return (f"{i18n.tr('共')} {len(entries)} {i18n.tr('次')} · 2xx {ok} · "
+                f"4xx/5xx {bad} · {i18n.tr('平均')} {avg} ms · "
+                f"{i18n.tr('最近一条')} {entries[0].get('time', '')}")
 
     # -------------------------------------------------- 生命周期
     def showEvent(self, e):

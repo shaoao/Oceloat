@@ -11,6 +11,7 @@ from PyQt6.QtCore import QEvent, QObject, QPoint, QRectF, Qt, QTimer
 from PyQt6.QtGui import QCursor, QFontMetricsF, QGuiApplication, QPainter, QPen
 from PyQt6.QtWidgets import QApplication, QWidget
 
+from . import i18n
 from .theme import C, font, theme
 
 PAD_X = 8
@@ -125,7 +126,8 @@ class TipController(QObject):
     def eventFilter(self, obj, ev):  # noqa: N802
         et = ev.type()
         if et == QEvent.Type.ToolTip and not self._should_skip(obj):
-            text = (obj.toolTip() or "").strip()
+            # 提示语在这里翻译：控件可能在语言切完之后才建出来，逐个打补丁容易漏
+            text = i18n.tr((obj.toolTip() or "").strip())
             if not text:
                 return False
             pos = QCursor.pos() + QPoint(10, 18)

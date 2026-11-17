@@ -801,6 +801,7 @@ def main() -> int:
         print("[15] 语言 / 详情卡 / 编码 / 预览标签 / 转圈")
 
         # 1) 标签独立快照：侧栏预览打开不会改到别的标签
+        from app.store import VERSION as _V
         from app.store import new_request as _nr
 
         w.new_request()
@@ -1752,7 +1753,9 @@ def main() -> int:
         texts = [lab.text() for lab in about.findChildren(QLabel)]
         check("关于页有字标与版本", "Ocelot" in texts and any(_VER in x for x in texts),
               str(texts[:6]))
-        check("关于页有运行环境", any("Python" in x for x in texts), str(texts[:4]))
+        # 关于页改成面向用户的内容：不再暴露 Python / PyQt6 运行时信息
+        check("关于页不写运行时与 Python 版本", not any("Python" in x or "PyQt6" in x
+                                                    for x in texts), str(texts[:4]))
         check("关于页有优势与能力说明", any("为什么是 Ocelot" in x for x in texts)
               and any("它能做什么" in x for x in texts)
               and not any(".py" in x for x in texts), str(texts[-4:]))
@@ -2102,7 +2105,8 @@ def main() -> int:
         still = False
         try:
             sock.sendall(b"GET /api/user HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-            still = bool(sock.recv(65536))
+            # 缓冲里可能还有上一条响应的剩余 body，所以只认「又出现了一个状态行」
+            still = b"HTTP/1." in sock.recv(65536)
         except OSError:
             still = False
         finally:
@@ -2163,6 +2167,78 @@ def main() -> int:
         req_ed.deleteLater()
         return 0
 
+    def step32():
+        print("[29] 圆角遮罩 / 树选中底色 / 英文文案 / 大树截断")
+        from PyQt6.QtGui import QPalette as _Pal
+
+        from app import i18n as _i18n
+        from app.code_editor import MAX_TREE_CHILDREN, JsonTree
+        from app.dialogs import SettingsDialog, WhatsNewDialog
+        from app.store import VERSION as _V
+        from app.store import new_request
+
+        # 1) 内容层必须被裁成圆角，否则四个角是直角
+        check("内容层有圆角遮罩", not w.root.mask().isEmpty(),
+              str(w.root.mask().boundingRect()))
+        check("遮罩尺寸跟内容层一致", w.root.mask().boundingRect().size() == w.root.size(),
+              f"{w.root.mask().boundingRect().size()} vs {w.root.size()}")
+
+        # 2) 树选中行不该在缩进格上涂一块底色
+        tree = JsonTree()
+        tree.set_data({"a": 1}, 2)
+        check("树的高亮底是透明的",
+              tree.palette().color(_Pal.ColorRole.Highlight).alpha() == 0,
+              str(tree.palette().color(_Pal.ColorRole.Highlight).alpha()))
+
+        # 3) 大数组只铺前 N 条，末尾留一行提示
+        big = {"list": {f"k{i}": i for i in range(MAX_TREE_CHILDREN + 40)}}
+        tree2 = JsonTree()
+        tree2.set_data(big, 2)
+        root_item = tree2.topLevelItem(0)
+        check("大对象只铺前 N 个子项", root_item.childCount() == MAX_TREE_CHILDREN + 1,
+              str(root_item.childCount()))
+        last = root_item.child(root_item.childCount() - 1)
+        check("末尾提示还有多少项", "40" in last.text(0), last.text(0))
+        tree.deleteLater()
+        tree2.deleteLater()
+
+        # 4) 设置页与更新内容里不再写 Python / PyQt6
+        sd = SettingsDialog(w.store, w)
+        sd.show()
+        app.processEvents()
+        all_text = [lb.text() for lb in sd.findChildren(QLabel)]
+        check("设置页不写 Python + PyQt6",
+              not any("Python + PyQt6" in x for x in all_text), str(all_text[-3:]))
+        wn = WhatsNewDialog(w)
+        wn.show()
+        app.processEvents()
+        check("更新内容窗口不写 Python + PyQt6",
+              not any(lb.text().strip() == f"Ocelot {_V} · Python + PyQt6"
+                      for lb in wn.findChildren(QLabel)))  # noqa: E501
+        wn.close()
+        sd.close()
+
+        # 5) 英文：提示语走翻译，占位符能来回切
+        _i18n.set_language("en", notify=False)
+        _i18n.apply_language(w)
+        w.toast.show_message("已创建请求", "success")
+        check("英文模式下提示语是英文", w.toast._text == "Request created", w.toast._text)
+        req = w.editor.urlbar.url
+        check("英文模式下地址栏占位是英文", "Enter a request URL" in req.placeholderText(),
+              req.placeholderText())
+        _i18n.set_language("zh", notify=False)
+        _i18n.apply_language(w)
+        check("切回中文占位符也还原", "输入请求地址" in req.placeholderText(),
+              req.placeholderText())
+        _i18n.set_language("en", notify=False)
+        _i18n.apply_language(w)
+
+        # 6) 请求对象本身不参与翻译（数据不能被改）
+        from app.i18n import tr as _tr
+        check("翻译不动用户数据", _tr("我的接口") == "我的接口", _tr("我的接口"))
+        _i18n.set_language("zh", notify=False)
+        return 0
+
     def finish():
         try:
             _SERVER.shutdown()
@@ -2176,7 +2252,7 @@ def main() -> int:
 
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

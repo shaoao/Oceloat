@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import icons
+from . import i18n, icons
 from .code_editor import CodeView, pretty_json
 from .kv_editor import COMMON_CONTENT_TYPES, COMMON_HEADERS, KVEditor
 from .store import Store, kv, resolve_vars
@@ -255,7 +255,7 @@ class UrlBar(QWidget):
 
         self.url = QLineEdit()
         self.url.setObjectName("Url")
-        self.url.setPlaceholderText("输入请求地址，例如 https://httpbin.org/get")
+        i18n.placeholder(self.url, "输入请求地址，例如 https://httpbin.org/get")
         self.url.setFont(mono(12.2))
         self.url.setFixedHeight(30)
         self.url.textChanged.connect(self.urlChanged.emit)

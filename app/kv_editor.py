@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import icons
+from . import i18n, icons
 from .anim import running as _anim_running, stop as _anim_stop
 from .theme import C, S, font, method_color, mono, theme
 from .widgets import Label, Menu
@@ -463,17 +463,17 @@ class KVRow(QWidget):
 
         self.key_edit = QLineEdit(key)
         self.key_edit.setObjectName("Bare")
-        self.key_edit.setPlaceholderText(key_ph)
+        i18n.placeholder(self.key_edit, key_ph)
         self.key_edit.setFont(mono(11.8))
         self.val_edit = QLineEdit(value)
         self.val_edit.setObjectName("Bare")
-        self.val_edit.setPlaceholderText(value_ph)
+        i18n.placeholder(self.val_edit, value_ph)
         self.val_edit.setFont(mono(11.8))
         self.desc_edit = None
         if with_desc:
             self.desc_edit = QLineEdit(desc)
             self.desc_edit.setObjectName("Bare")
-            self.desc_edit.setPlaceholderText("描述（可选，不发送）")
+            i18n.placeholder(self.desc_edit, "描述（可选，不发送）")
             self.desc_edit.setFont(font(11))
         from PyQt6.QtGui import QPalette
         for e in (self.key_edit, self.val_edit, self.desc_edit):
@@ -695,7 +695,7 @@ class KVEditor(QWidget):
 
         self._bulk_edit = QPlainTextEdit()
         self._bulk_edit.setFont(mono(12))
-        self._bulk_edit.setPlaceholderText("每行一条：key: value\n以 # 开头的行为注释，可留空")
+        i18n.placeholder(self._bulk_edit, "每行一条：key: value\n以 # 开头的行为注释，可留空")
         self._bulk_edit.textChanged.connect(self._on_bulk_changed)
         self._bulk_edit.hide()
 

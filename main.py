@@ -34,6 +34,42 @@ except ModuleNotFoundError as exc:  # 运行按钮用的解释器没装依赖时
           f"    {sys.executable} -m pip install PyQt6\n"
           f"  或者用装了依赖的解释器启动：python3 main.py")
 
+_CRASH_FILE = None
+
+
+def _install_crash_log() -> None:
+    """把崩溃现场留下来。
+
+    硬崩（段错误、栈溢出，终端里只会看到 bus error / abort）用 faulthandler 抓，
+    普通异常用 excepthook 抓，都写进数据目录的 crash.log —— 否则用户只能贴一句
+    「闪退了」，没法查。
+    """
+    global _CRASH_FILE
+    import traceback
+
+    from app.store import APP_DIR
+
+    try:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        _CRASH_FILE = open(APP_DIR / "crash.log", "a", buffering=1)  # noqa: SIM115
+        import faulthandler
+
+        faulthandler.enable(file=_CRASH_FILE, all_threads=True)
+    except Exception:                                  # noqa: BLE001
+        _CRASH_FILE = None
+
+    def hook(exc_type, exc, tb):
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        print(text, file=sys.stderr, flush=True)
+        if _CRASH_FILE is not None:
+            try:
+                _CRASH_FILE.write(text + "\n")
+            except Exception:                          # noqa: BLE001
+                pass
+
+    sys.excepthook = hook
+
+
 from app.main_window import MainWindow  # noqa: E402
 from app.store import Store  # noqa: E402
 from app.theme import apply_theme, set_accent, theme_by_name  # noqa: E402
@@ -47,6 +83,7 @@ def main() -> int:
     app.setOrganizationName("Ocelot")
     app.setStyle("Fusion")
 
+    _install_crash_log()
     Store.migrate_legacy()          # 旧版 Reqly 的数据目录搬过来
     store = Store.load()
     set_accent(store.settings.get("accent", "auto"))

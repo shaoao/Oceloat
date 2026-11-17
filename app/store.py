@@ -19,9 +19,31 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.19"
+VERSION = "1.0.20"
 
 CHANGELOG = [
+    {
+        "version": "1.0.20",
+        "date": "2026-11-17",
+        "items": [
+            "修复：窗口右下角（还有右上、左下）是直角 —— 里面的内容区是方的，盖住了窗口自己的"
+            "圆角。现在给内容层加了一层圆角遮罩，四个角跟着窗口一起收圆，最大化时自动取消",
+            "修复：响应「树形」里点中某一行，缩进那一格会冒出一小块灰方块。选中高亮改成全透明，"
+            "方块没有了，选中的文字照样是亮的",
+            "修复：请求还在路上又发了一条时，旧请求的结束回调会把新请求当成已经结束，界面可能一直"
+            "转圈或者显示错的那条响应。现在按信号来源判断，旧连接的结果直接丢弃",
+            "改进：设置页和更新内容窗口底部那行「Ocelot 1.0.19 · Python + PyQt6」去掉了",
+            "改进：关于页去掉运行时（Python / PyQt6）一栏和「macOS 原生窗口」标签，只留版本与系统",
+            "改进：英文界面补全 —— 提示条、输入框占位、悬浮说明、设置各页、Mock 中心都走翻译，"
+            "术语对齐 Postman（Send / Params / Headers / Cookies / Environments / Mock Server），"
+            "切回中文时原话也不会丢",
+            "优化：几万个元素的响应只铺前 300 条，末尾一行「… 还有 N 项」，二十万条也是秒开，"
+            "原文视图里照样能看全",
+            "优化：新增崩溃日志 —— 硬崩（bus error / abort）和未捕获异常都写进数据目录的 crash.log，"
+            "下次再闪退能直接看是哪一行",
+            "优化：自测扩到 395 项",
+        ],
+    },
     {
         "version": "1.0.19",
         "date": "2026-11-17",

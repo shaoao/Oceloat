@@ -593,8 +593,16 @@ class ApiClient(QObject):
             self._reply.abort()
 
     def _on_finished(self) -> None:
-        reply = self._reply
-        if reply is None:
+        reply = self.sender()
+        if reply is None or reply is not self._reply:
+            # 旧请求被新请求顶掉时，它的 finished 还是会来。这时候如果照着
+            # self._reply 往下走，就会把「新请求」当成结束、把响应记错，
+            # 新请求的响应反而再也等不到（界面一直转圈）。
+            if reply is not None:
+                try:
+                    reply.deleteLater()
+                except RuntimeError:
+                    pass
             return
         self._reply = None
         if self._timer is not None:

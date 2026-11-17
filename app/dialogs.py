@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import icons
+from . import i18n, icons
 from .anim import stop as _anim_stop
 from .code_editor import CodeView
 from .codegen import LANGUAGES
@@ -111,6 +111,9 @@ class GlassDialog(QDialog):
 
     def showEvent(self, e):
         super().showEvent(e)
+        # 对话框多半是在语言切完以后才建的，这里补一次翻译，否则英文界面里会混着中文
+        if i18n.current() == "en":
+            i18n.apply_language(self)
         fade_in(self, 140)
 
 
@@ -575,11 +578,10 @@ class SettingsDialog(GlassDialog):
         self.stack.addWidget(self._page_about_app())
         right.addWidget(self.stack, 1)
 
-        foot = HBox(Label(f"Ocelot {VERSION} · Python + PyQt6", 10.5, theme().text_faint,
-                          mono_font=True), 1, spacing=8)
         done = Button("完成", None, kind="primary", height=28, padding=18, font_size=12)
         done.clicked.connect(self._done)
-        foot.layout().addWidget(done)
+        foot = HBox(1, done, spacing=8)
+        foot.layout().setContentsMargins(0, 0, 4, 0)
         right.addWidget(foot)
         root.addLayout(right, 1)
 
@@ -1014,7 +1016,9 @@ class SettingsDialog(GlassDialog):
         self.limit_seg.changed.connect(self._on_history_limit)
         block = self._card(
             self._row("本地数据", path, open_dir, mono_desc=True),
-            self._row("历史记录上限", f"当前 {len(self.store.history or [])} 条，超出后自动丢弃最旧的。",
+            self._row("历史记录上限",
+                  i18n.tr("当前 {n} 条，超出后自动丢弃最旧的。").format(
+                      n=len(self.store.history or [])),
                       self.limit_seg),
             self._row("清空历史", "只删历史记录，集合与环境变量不受影响。", clear_hist),
         )
@@ -1023,9 +1027,6 @@ class SettingsDialog(GlassDialog):
     def _page_about_app(self) -> QWidget:
         """关于页：品牌区 + 运行环境 + 常用入口，做得像一张「应用名片」。"""
         import platform as _platform
-        import sys as _sys
-
-        from PyQt6.QtCore import QT_VERSION_STR
 
         from .store import APP_DIR
 
@@ -1035,7 +1036,6 @@ class SettingsDialog(GlassDialog):
                     11.8, t.text_dim)
         tag.setWordWrap(True)
         pills = HBox(Pill(f"v{VERSION}", t.text_dim, font_size=10.2),
-                     Pill("macOS 原生窗口", t.text_faint, font_size=10.2),
                      Pill("纯本地", t.text_faint, font_size=10.2),
                      1, spacing=6)
         hero = Card(radius=12)
@@ -1065,11 +1065,6 @@ class SettingsDialog(GlassDialog):
         eh.setContentsMargins(18, 14, 18, 14)
         eh.setSpacing(18)
         eh.addWidget(metric("版本", f"Ocelot {VERSION}"), 2)
-        line = QWidget()
-        line.setFixedWidth(1)
-        line.setStyleSheet(f"background: {t.border};")
-        eh.addWidget(line)
-        eh.addWidget(metric("运行时", f"Python {_sys.version.split()[0]} · PyQt6 {QT_VERSION_STR}"), 3)
         line2 = QWidget()
         line2.setFixedWidth(1)
         line2.setStyleSheet(f"background: {t.border};")
@@ -1186,7 +1181,7 @@ class SettingsDialog(GlassDialog):
         flow.setWordWrap(True)
         al.addWidget(HBox(flow, 1, margins=(0, 10, 0, 0)))
 
-        foot = Label(f"数据目录 · {APP_DIR}", 10.4, t.text_faint, mono_font=True)
+        foot = Label(f"{i18n.tr('数据目录')} · {APP_DIR}", 10.4, t.text_faint, mono_font=True)
         return self._page_shell("关于 Ocelot", "它是什么、能做什么、为什么这么做。",
                                 hero, env_card, grid, grid2, arch, actions, foot)
 
@@ -1792,8 +1787,7 @@ class WhatsNewDialog(GlassDialog):
         lay.addWidget(WhatsNewPanel(), 1)
         ok = Button("关闭", None, kind="primary", height=28, padding=20, font_size=12)
         ok.clicked.connect(self.accept)
-        foot = HBox(Label(f"Ocelot {VERSION} · Python + PyQt6", 10.5, theme().text_faint,
-                          mono_font=True), 1, ok, spacing=8)
+        foot = HBox(1, ok, spacing=8)
         foot.layout().setContentsMargins(4, 0, 6, 0)
         lay.addWidget(foot)
 

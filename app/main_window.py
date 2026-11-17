@@ -25,7 +25,9 @@ from PyQt6.QtGui import (
     QGuiApplication,
     QKeySequence,
     QPainter,
+    QPainterPath,
     QPen,
+    QRegion,
     QShortcut,
 )
 from PyQt6.QtWidgets import (
@@ -251,6 +253,8 @@ class Toast(QWidget):
         self._anim: Optional[QVariantAnimation] = None
 
     def show_message(self, text: str, kind: str = "info") -> None:
+        # 提示语统一在这里翻译：调用点几十处，逐个包 tr() 容易漏
+        text = i18n.tr(text)
         self._text = text
         self._kind = kind
         self._dy = 10.0
@@ -394,6 +398,21 @@ class SideHandle(QSplitterHandle):
         w = 1 if not self._hover else 2
         p.fillRect(QRect(self.width() // 2 - (w // 2), 0, w, self.height()), col)
         p.end()
+
+
+class CardRoot(QWidget):
+    """内容根容器：尺寸一变就请主窗重裁一次圆角。
+
+    窗口的布局是异步的 —— 窗口 resize 时 root 还没跟上，那时候按旧尺寸裁，
+    右边和下边就会留出一条没裁掉的直角。所以把裁剪挂到 root 自己的 resizeEvent 上。
+    """
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        win = self.window()
+        fn = getattr(win, "_round_corners", None)
+        if callable(fn):
+            fn()
 
 
 class ContentSurface(QWidget):
@@ -613,7 +632,7 @@ class MainWindow(QWidget):
         outer.setContentsMargins(self._margin, self._margin, self._margin, self._margin)
         outer.setSpacing(0)
 
-        self.root = QWidget()
+        self.root = CardRoot()
         self.root.setObjectName("Root")
         self.root.setStyleSheet("#Root { background: transparent; }")
         outer.addWidget(self.root)
@@ -793,6 +812,31 @@ class MainWindow(QWidget):
             self.close()
 
     # -------------------------------------------------- 窗口绘制 / 交互
+    def _round_corners(self) -> None:
+        """把内容层裁成圆角。
+
+        窗口自己是按圆角画的，但里面的侧栏 / 内容区都是矩形，会盖在圆角上，
+        四个角看起来就成了直角。这里给内容容器加一层圆角遮罩，让子控件收在弧线内。
+        遮罩边沿的锯齿在「卡片和内容同色」的前提下看不出来。
+        """
+        root = getattr(self, "root", None)
+        if root is None:
+            return
+        if self.isMaximized():
+            if getattr(self, "_mask_size", None) is not None:
+                self._mask_size = None
+                root.clearMask()
+            return
+        w, h = root.width(), root.height()
+        if w < 32 or h < 32:
+            return
+        if getattr(self, "_mask_size", None) == (w, h):
+            return
+        self._mask_size = (w, h)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, w, h), 12, 12)
+        root.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
     def paintEvent(self, _e):
         t = theme()
         p = QPainter(self)
@@ -869,6 +913,7 @@ class MainWindow(QWidget):
             lay = self.layout()
             if lay is not None:
                 lay.setContentsMargins(self._margin, self._margin, self._margin, self._margin)
+            self._round_corners()
             self.update()
         elif e.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
             # 从别的窗口回来后自检一次：万一标签栏和编辑器错位，立刻拉回正轨
@@ -1863,6 +1908,7 @@ class MainWindow(QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        self._round_corners()
         if hasattr(self, "toast") and self.toast.isVisible():
             self.toast._place()
         if hasattr(self, "palette") and self.palette.isVisible():

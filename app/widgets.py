@@ -46,7 +46,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import icons
+from . import i18n, icons
 from .anim import running as _anim_running, stop as _anim_stop
 from .theme import C, S, font, mono, theme
 
@@ -1153,22 +1153,24 @@ class EmptyState(QWidget):
         p.drawPixmap(QPointF(cx - 11, cy - 62 + 16), pm)
         p.setFont(font(13.5, QFont.Weight.DemiBold))
         p.setPen(C(t.text_dim))
-        p.drawText(QRectF(cx - 200, cy + 2, 400, 22), int(Qt.AlignmentFlag.AlignCenter), self._title)
+        p.drawText(QRectF(cx - 200, cy + 2, 400, 22), int(Qt.AlignmentFlag.AlignCenter),
+                   i18n.tr(self._title))
         p.setFont(font(11.5))
         p.setPen(C(t.text_faint))
         p.drawText(QRectF(cx - 220, cy + 24, 440, 40),
                    int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap),
-                   self._subtitle)
+                   i18n.tr(self._subtitle))
         if self._hint:
             fm = QFontMetricsF(mono(10.5))
-            w = fm.horizontalAdvance(self._hint) + 20
+            hint = i18n.tr(self._hint)
+            w = fm.horizontalAdvance(hint) + 20
             hr = QRectF(cx - w / 2, cy + 70, w, 21)
             p.setPen(QPen(C(t.border), 1))
             p.setBrush(C(t.panel_alt))
             p.drawRoundedRect(hr, 5, 5)
             p.setFont(mono(10.5))
             p.setPen(C(t.text_faint))
-            p.drawText(hr, int(Qt.AlignmentFlag.AlignCenter), self._hint)
+            p.drawText(hr, int(Qt.AlignmentFlag.AlignCenter), hint)
         p.end()
 
 

@@ -9,6 +9,7 @@ from PyQt6.QtCore import QRect, QRectF, QSize, Qt
 from PyQt6.QtGui import (
     QColor,
     QFont,
+    QPalette,
     QTextCharFormat,
     QTextCursor,
     QTextDocument,
@@ -25,6 +26,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from . import i18n
 from .theme import C, font, mono, theme
 
 PUNCT = "#6E6E78"
@@ -378,6 +380,8 @@ class CodeView(QPlainTextEdit):
 
 # 树行高：默认 16px 会让 11.5pt 的等宽字挤在一起，值也容易和下一行贴住
 ROW_H = 21
+# 一个容器最多铺多少个子节点：再多就只显示前 N 条，避免大数组把界面卡死
+MAX_TREE_CHILDREN = 300
 
 
 class JsonTree(QTreeWidget):
@@ -402,6 +406,24 @@ class JsonTree(QTreeWidget):
         self.setVerticalScrollMode(QTreeWidget.ScrollMode.ScrollPerPixel)
         self._key_font = mono(11.5, QFont.Weight.Medium)
         self._data: Any = None
+        self._quiet_palette()
+
+    def _quiet_palette(self) -> None:
+        """把「选中高亮」调成全透明。
+
+        系统样式会在左边缩进那一小块上刷一层高亮底 —— 行本身是透明的，于是
+        只有那 14px 宽的地方冒出一块灰方块，看着像脏点。高亮透明后条目不铺底，
+        方块消失，选中文字仍走高亮前景色（保持可读）。
+        """
+        t = theme()
+        pal = self.palette()
+        pal.setColor(QPalette.ColorRole.Highlight, QColor(0, 0, 0, 0))
+        pal.setColor(QPalette.ColorRole.HighlightedText, C(t.text))
+        self.setPalette(pal)
+
+    def refresh_theme(self) -> None:
+        self._quiet_palette()
+        self.update()
 
     def set_data(self, obj: Any, expand_depth: int = 2) -> None:
         self.clear()
@@ -428,8 +450,17 @@ class JsonTree(QTreeWidget):
             item.setText(1, f"{'{}' if isinstance(value, dict) else '[]'}  {n} {'keys' if isinstance(value, dict) else 'items'}")
             item.setForeground(1, C(t.text_faint))
             item.setFont(1, mono(10.5))
-            for k, v in (value.items() if isinstance(value, dict) else enumerate(value)):
+            pairs = list(value.items()) if isinstance(value, dict) else list(enumerate(value))
+            # 两万条数据一口气铺进树里会把界面卡住；只铺前 MAX_TREE_CHILDREN 条，
+            # 末尾留一行「还有 N 项」，原文视图里照样能看全。
+            for k, v in pairs[:MAX_TREE_CHILDREN]:
                 self._add(item, str(k), v, depth - 1, t)
+            if len(pairs) > MAX_TREE_CHILDREN:
+                more = QTreeWidgetItem(item)
+                more.setText(0, i18n.tr("… 还有 {n} 项").format(n=len(pairs) - MAX_TREE_CHILDREN))
+                more.setForeground(0, C(t.text_faint))
+                more.setFont(0, mono(10.5))
+                more.setSizeHint(0, QSize(120, ROW_H))
             if depth > 0:
                 item.setExpanded(True)
         else:
