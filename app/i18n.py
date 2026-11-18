@@ -1217,6 +1217,8 @@ _EN.update({
     "已导出到 {name}": "Exported to {name}",
 
     # ---- WebSocket
+    "单击展开详情（可同时展开多条），双击填回编辑器":
+        "Click to expand (several at once), double-click to load into the editor",
     "握手头": "Handshake headers",
     "握手头 · {n}": "Headers · {n}",
     "握手请求头": "Handshake headers",

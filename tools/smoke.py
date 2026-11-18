@@ -2940,6 +2940,14 @@ def main() -> int:
               w.response.pill._title())
         check("响应区切到 WebSocket 日志页",
               w.response.center.currentWidget() is w.response.ws_view)
+        check("已连接时地址栏按钮显示「断开」",
+              w.editor.urlbar.send_btn.text() == "断开",
+              w.editor.urlbar.send_btn.text())
+        # 刷新 / 切回标签也不能把按钮打回「连接」
+        w.editor.load(tab["request"])
+        check("重新加载后按钮仍是「断开」",
+              w.editor.urlbar.send_btn.text() == "断开",
+              w.editor.urlbar.send_btn.text())
         check("能收到服务端推送",
               wait_until(lambda: any(getattr(f, "preview", lambda: "")() == "hello"
                                      for f in tab["ws_session"]["log"]), 4000))
@@ -2958,6 +2966,53 @@ def main() -> int:
               bool(w.response.ws_view.list.frames)
               and all(f.dir == "out" for f in w.response.ws_view.list.frames))
         w.response.ws_view.filter.set_current("all", emit=True)
+
+        # 日志详情：点行展开，可同时展开多条，页签能切换内容
+        view = w.response.ws_view
+        rows = [i for i, f in enumerate(view.list.frames)
+                if f.kind in ("text", "json")][:2]
+        check("日志里有可展开的消息", len(rows) == 2, str(len(rows)))
+        if len(rows) == 2:
+            view.list.toggle(rows[0])
+            view.list.toggle(rows[1])
+            app.processEvents()
+            check("多条消息能同时展开",
+                  len(view.list._cards) == 2
+                  and all(c.isVisible() for c in view.list._cards.values()),
+                  str(len(view.list._cards)))
+            card = view.list._cards[id(view.list.frames[rows[0]])]
+            if card.tabs.has("json"):
+                card.tabs.set_current("json", emit=True)
+                check("JSON 页签显示分行排版", "\n" in card.body.toPlainText())
+            check("统计数字带补间动画", view.stats._num_anim is not None)
+
+        # 输入法组词时不能把占位提示透出来
+        from PyQt6.QtGui import QInputMethodEvent
+
+        edit = w.editor.ws.editor
+        had_ph = bool(edit.placeholderText())
+        edit.setFocus()
+        edit.inputMethodEvent(QInputMethodEvent("ni'hao", []))
+        check("中文输入法组词时占位提示隐藏",
+              had_ph and not edit.placeholderText(), edit.placeholderText())
+        commit = QInputMethodEvent("", [])
+        commit.setCommitString("你好")
+        edit.inputMethodEvent(commit)
+        app.processEvents()
+        check("组词结束后占位提示恢复", bool(edit.placeholderText()))
+
+        # 草稿：切到别的标签再回来，输入内容还在
+        edit.setPlainText("切换标签也要在")
+        app.processEvents()
+        check("正在输入的内容写回请求",
+              tab["request"]["ws"].get("draft") == "切换标签也要在",
+              str(tab["request"]["ws"].get("draft")))
+        w.new_request()
+        w._on_tab_changed(tab["id"])
+        check("切走再切回消息还在",
+              w.editor.ws.editor.toPlainText() == "切换标签也要在",
+              w.editor.ws.editor.toPlainText()[:40])
+        w.editor.ws.editor.setPlainText("")
 
         # 常用消息：存下来、能重发
         w.editor.ws.editor.setPlainText('{"hello": "ws"}')

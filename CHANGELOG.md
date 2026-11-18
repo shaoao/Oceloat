@@ -1,5 +1,27 @@
 # What's Changed
 
+## v1.0.34 — 2026-11-18
+
+**Fixed**
+- The URL-bar button still read **Connect** while a WebSocket was open (and after switching
+  tabs); it now reads **Disconnect** and stays that way.
+- Messages in progress were lost when switching tabs. Drafts and the text / JSON / binary
+  choice are stored with the request.
+- The input hint showed through Chinese IME preedit text (e.g. `ni'hao` overlaid the hint).
+  The placeholder now hides while composing and returns afterwards.
+
+**Changed**
+- Log rows expand into inline detail cards: Raw / JSON / Hex tabs, line numbers and a copy
+  button. Several rows can stay open at once (capped at 12, oldest closes first so the UI
+  never accumulates thousands of text documents).
+- JSON details keep their indented layout; row previews stay on a single elided line.
+- Counters (received / sent / bytes, uptime / traffic) animate over 280ms instead of jumping.
+
+**Improved**
+- Appending frames is incremental and stats use cached counters: 4000 frames append in
+  ~2ms, and painting remains limited to visible rows.
+- Self-test suite extended to 539 checks.
+
 ## v1.0.33 — 2026-11-18
 
 **Fixed**

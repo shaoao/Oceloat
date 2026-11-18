@@ -957,8 +957,10 @@ class ResponsePanel(QWidget):
                              "closing": t.warning, "closed": t.text_faint}.get(state, t.text_faint))
         stats = stats or {}
         up = float(stats.get("uptime") or 0)
-        self.time_label.setText(human_elapsed(int(up * 1000)) if up >= 0.05 else "")
-        self.size_label.setText(human_size(int(stats.get("bytes_in") or 0)))
+        self.time_label.animate_number(
+            up * 1000, lambda ms: human_elapsed(int(ms)) if ms >= 50 else "")
+        self.size_label.animate_number(
+            int(stats.get("bytes_in") or 0), lambda b: human_size(int(b)))
         self.type_label.setText("WebSocket")
         self._set_metrics_visible(bool(up >= 0.05))
         self._set_dots(True)

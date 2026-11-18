@@ -463,7 +463,11 @@ class UrlBar(QWidget):
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
         if self._ws_mode:
-            self.set_ws_state("connecting" if busy else "idle")
+            # HTTP 那条 busy 收尾不能把一条活着的 WS 连接显示成 idle
+            if self._ws_state in ("open", "connecting", "closing"):
+                self.set_ws_state(self._ws_state)
+            else:
+                self.set_ws_state("idle")
             return
         if busy:
             self.send_btn.setText("取消")
@@ -486,7 +490,12 @@ class UrlBar(QWidget):
             "支持 ws:// wss://；直接粘 http(s) 地址会自动改写"))
         self.method.set_locked(ws)
         if ws:
-            self.set_ws_state(self._ws_state if self._busy else "idle")
+            # 已连接时重新 load（切标签 / 刷新界面）不能把按钮打回「连接」。
+            # 只有真的不在连接过程中才回到 idle。
+            if self._ws_state not in ("open", "connecting", "closing"):
+                self.set_ws_state("idle")
+            else:
+                self.set_ws_state(self._ws_state)
         else:
             self.set_busy(False)
             self.send_btn.setToolTip("发送请求  ⌘↵")

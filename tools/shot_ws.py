@@ -55,6 +55,26 @@ def main() -> int:
                 return
             QTimer.singleShot(420, lambda: (grab(w, f"shot_{st}"), run(i + 1)))
             return
+        if st == "cards":
+            from app.ws_client import WsFrame
+
+            w.new_websocket()
+            w.editor.urlbar.set_url("wss://echo.websocket.org")
+            w.editor._on_url("x")
+            w.editor.set_ws_state("open")
+            w.response.ws_set_state("open", {"uptime": 64.2, "bytes_in": 58})
+            view = w.response.ws_view
+            import time
+
+            for k, text in enumerate(("hello", '{"123":23,"128793":23,"167823":23}',
+                                      "ni'hs'i'shei")):
+                view.add_frame(WsFrame("in" if k % 2 == 0 else "out", "json" if k == 1 else "text",
+                                       text.encode(), time.time() + k * 0.3, len(text)))
+            app.processEvents()
+            view.list.toggle(0)
+            view.list.toggle(1)
+            QTimer.singleShot(420, lambda: (grab(w, "shot_ws_cards"), run(i + 1)))
+            return
         if st == "method_menu":
             w.new_request()
             QTimer.singleShot(320, lambda: menu_step(i))

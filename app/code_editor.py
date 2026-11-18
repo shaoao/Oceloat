@@ -256,6 +256,23 @@ class CodeView(QPlainTextEdit):
         self._update_width()
         CodeView._views.add(self)
 
+    # -------------------------------------------------- 输入法 / 占位提示
+    def inputMethodEvent(self, e) -> None:  # noqa: N802
+        """中文输入法组词时先藏掉占位提示。
+
+        Qt 的 placeholder 只看「文档是否为空」，拼音还在预编辑区时文档仍是空的，
+        于是提示文字会透过正在输入的拼音显示出来（用户截图里 `ni'hao` 和提示
+        叠成一团）。组词结束或取消后恢复，不影响普通输入。
+        """
+        pre = e.preeditString()
+        if pre and self.placeholderText():
+            self._ime_placeholder = self.placeholderText()
+            super().setPlaceholderText("")
+        super().inputMethodEvent(e)
+        if not pre and hasattr(self, "_ime_placeholder"):
+            super().setPlaceholderText(self._ime_placeholder)
+            del self._ime_placeholder
+
     # -------------------------------------------------- 输入补全 / 智能缩进
     _PAIRS = {"{": "}", "[": "]", "(": ")", '"': '"', "'": "'"}
     _CLOSE = {"}": "{", "]": "[", ")": "("}

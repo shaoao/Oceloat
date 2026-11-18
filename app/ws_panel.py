@@ -9,11 +9,14 @@ import datetime
 import json
 from typing import Any, Dict, List
 
-from PyQt6.QtCore import QPoint, QRectF, Qt, pyqtSignal
+from bisect import bisect_left, bisect_right
+
+from PyQt6.QtCore import QPoint, QRect, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetricsF, QPainter, QPen
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QSizePolicy,
     QStackedWidget,
@@ -144,6 +147,7 @@ class WsComposer(QWidget):
         super().__init__(parent)
         self._ws: Dict[str, Any] = default_ws()
         self._connected = False
+        self._loading = False
         self._chips: List[MsgChip] = []
 
         # --- 连接选项（子协议 / 心跳 / 重连）
@@ -211,6 +215,8 @@ class WsComposer(QWidget):
         self.editor.setMinimumHeight(68)
         self.editor.setPlaceholderText(i18n.tr(
             "输入要发送的内容。连接成功后 ⌘↵ 直接发送；JSON 会自动识别高亮。"))
+        # 输入中的草稿写回请求：切走标签再切回来，内容还在。
+        self.editor.textChanged.connect(self._on_draft_changed)
 
         # --- 常用消息：横向一条胶囊，放不下就横向滚
         self.saved_note = Label("常用消息", 10.4, theme().text_faint)
@@ -237,19 +243,30 @@ class WsComposer(QWidget):
 
     # -------------------------------------------------- 数据
     def load(self, req: Dict[str, Any]) -> None:
-        self._ws = ensure_ws(req)
-        for w, value in ((self.proto, self._ws.get("subprotocol", "")),
-                         (self.ping, str(self._ws.get("ping", 0) or 0))):
-            w.blockSignals(True)
-            w.setText(str(value or ""))
-            w.blockSignals(False)
-        for sw, key, default in ((self.reconnect_sw, "auto_reconnect", True),
-                                 (self.clear_sw, "clear_after_send", False)):
-            sw.blockSignals(True)
-            sw.setChecked(bool(self._ws.get(key, default)))
-            sw.blockSignals(False)
-        self.editor.setPlainText("")
-        self._refresh_saved()
+        self._loading = True
+        try:
+            self._ws = ensure_ws(req)
+            for w, value in ((self.proto, self._ws.get("subprotocol", "")),
+                             (self.ping, str(self._ws.get("ping", 0) or 0))):
+                w.blockSignals(True)
+                w.setText(str(value or ""))
+                w.blockSignals(False)
+            for sw, key, default in ((self.reconnect_sw, "auto_reconnect", True),
+                                     (self.clear_sw, "clear_after_send", False)):
+                sw.blockSignals(True)
+                sw.setChecked(bool(self._ws.get(key, default)))
+                sw.blockSignals(False)
+            kind = str(self._ws.get("kind") or "text")
+            self.kind.blockSignals(True)
+            self.kind.set_current(kind, emit=False)
+            self.kind.blockSignals(False)
+            self._on_kind(kind)
+            self.editor.blockSignals(True)
+            self.editor.setPlainText(str(self._ws.get("draft") or ""))
+            self.editor.blockSignals(False)
+            self._refresh_saved()
+        finally:
+            self._loading = False
 
     def dump(self, req: Dict[str, Any]) -> None:
         ws = ensure_ws(req)
@@ -260,6 +277,16 @@ class WsComposer(QWidget):
             ws["ping"] = 0
         ws["auto_reconnect"] = self.reconnect_sw.isChecked()
         ws["clear_after_send"] = self.clear_sw.isChecked()
+        ws["kind"] = self.kind_key()
+        ws["draft"] = self.editor.toPlainText()
+
+    def _on_draft_changed(self) -> None:
+        if self._loading:
+            return
+        # 只改内存里的请求字典，落盘由主窗口已有的 debounce 定时器负责，
+        # 每敲一个字不再多起一个定时器。
+        self._ws["draft"] = self.editor.toPlainText()
+        self.changed.emit()
 
     def set_headers_count(self, n: int) -> None:
         self.headers_btn.setText(i18n.trf("握手头 · {n}", n=n) if n
@@ -432,13 +459,106 @@ KIND_LABEL = {"text": "TEXT", "json": "JSON", "binary": "BIN",
               "close": "CLOSE", "error": "ERR"}
 
 
+class FrameCard(QWidget):
+    """一条消息展开后的详情卡：表头 + Raw / JSON 页签 + 内容。
+
+    只给展开的那几条建控件，没展开的消息仍然只是画一行字，所以几百条日志
+    也不会多出几百个 QTextDocument。
+    """
+
+    H = 156
+
+    def __init__(self, frame, parent=None):
+        super().__init__(parent)
+        self.frame = frame
+        self.setObjectName("FrameCard")
+        self._raw = frame.preview(20000)
+        preview = self._raw.splitlines()[0] if self._raw else ""
+        arrow = {"in": "↓", "out": "↑"}.get(frame.dir, "·")
+        arrow_l = Label(arrow, 12, theme().success if frame.dir == "in" else theme().info,
+                        QFont.Weight.DemiBold)
+        arrow_l.setFixedWidth(16)
+        stamp = Label(datetime.datetime.fromtimestamp(frame.at).strftime("%H:%M:%S"),
+                      10, theme().text_faint, mono_font=True)
+        stamp.setFixedWidth(58)
+        self.preview = Label("", 10.6, theme().text_dim, mono_font=True)
+        self.preview.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                   QSizePolicy.Policy.Fixed)
+        copy = icon_button("copy", "复制这条消息", 20, 11)
+        copy.clicked.connect(self._copy)
+
+        head = QWidget()
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(8, 2, 6, 2)
+        hl.setSpacing(6)
+        hl.addWidget(arrow_l, 0)
+        hl.addWidget(stamp, 0)
+        hl.addWidget(self.preview, 1)
+        hl.addWidget(copy, 0)
+
+        if frame.kind == "json":
+            tabs_items = [("pretty", "JSON"), ("raw", "Raw")]
+        elif frame.kind == "binary":
+            tabs_items = [("hex", "Hex"), ("raw", "Raw")]
+        else:
+            tabs_items = [("raw", "Raw")]
+        self.tabs = SegmentedTabs(tabs_items, style="underline", height=22,
+                                  font_size=10.5, pad_h=8, show_badges=False)
+        self.body = CodeView(read_only=True, highlight=(frame.kind == "json"),
+                             show_gutter=True)
+        self.body.setFixedHeight(84)
+        self.tabs.changed.connect(self._render)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 2, 8, 6)
+        lay.setSpacing(2)
+        lay.addWidget(head, 0)
+        lay.addWidget(self.tabs, 0)
+        lay.addWidget(self.body, 1)
+        self._render(self.tabs.current())
+
+    def paintEvent(self, e):  # noqa: N802
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(C(t.border), 1))
+        p.setBrush(C(t.panel_alt))
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 7, 7)
+        p.end()
+
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        # 表头单行省略，绝不换行把卡片撑高（撑高会打乱懒绘制的行偏移）
+        available = max(40, self.width() - 110)
+        fm = QFontMetricsF(self.preview.font())
+        QLabel.setText(self.preview, fm.elidedText(self._raw.splitlines()[0] if self._raw else "",
+                                                   Qt.TextElideMode.ElideRight, int(available)))
+
+    def _render(self, key: str) -> None:
+        text = self._raw
+        if key == "pretty":
+            try:
+                text = json.dumps(json.loads(self._raw), ensure_ascii=False, indent=2)
+            except Exception:  # noqa: BLE001
+                pass
+        elif key == "hex":
+            text = " ".join(f"{b:02X}" for b in self.frame.data[:2048])
+        self.body.setPlainText(text)
+
+    def _copy(self) -> None:
+        from PyQt6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(self._raw)
+
+
 class FrameList(QWidget):
-    """按视口绘制的帧列表：几万帧也只画看得见的那几十行。"""
+    """帧列表：只画视口内的行；展开的详情卡是独立控件，可同时开多条。"""
 
     picked = pyqtSignal(int)
     activated = pyqtSignal(int)      # 双击：把这条内容填回编辑器（重放）
 
     ROW_H = 30
+    CARD_H = FrameCard.H
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -446,29 +566,101 @@ class FrameList(QWidget):
         self.index = -1
         self._hover = -1
         self._tops: List[float] = []
+        # dict 保留点击顺序：最多同时展开 12 条，再点新的就收起最早那条，
+        # 避免用户一路点下去把几千条消息都变成 QTextDocument。
+        self._expanded: Dict[int, None] = {}
+        self._cards: Dict[int, FrameCard] = {}
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
+    # -------------------------------------------------- 布局
+    def _relayout(self) -> None:
+        top = 4.0
+        self._tops = []
+        for frame in self.frames:
+            self._tops.append(top)
+            top += self.ROW_H + (self.CARD_H if id(frame) in self._expanded else 0)
+        self.setFixedHeight(max(1, int(top + 4)))
+        self._sync_cards()
+
+    def _sync_cards(self) -> None:
+        if not self._expanded and not self._cards:
+            return
+        live = set()
+        for i, frame in enumerate(self.frames):
+            key = id(frame)
+            if key not in self._expanded:
+                continue
+            live.add(key)
+            card = self._cards.get(key)
+            if card is None:
+                card = FrameCard(frame, self)
+                self._cards[key] = card
+            card.setGeometry(QRect(4, int(self._tops[i] + self.ROW_H),
+                                   max(80, self.width() - 8), self.CARD_H))
+            card.show()
+        for key, card in list(self._cards.items()):
+            if key not in live:
+                card.hide()
+                card.deleteLater()
+                self._cards.pop(key, None)
+
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        if self._cards:
+            self._sync_cards()
+
+    # -------------------------------------------------- 数据
     def set_frames(self, frames: List[Any]) -> None:
-        self.frames = frames
-        self._tops = [4 + i * self.ROW_H for i in range(len(frames))]
-        self.setFixedHeight(max(1, 8 + len(frames) * self.ROW_H))
+        self.frames = list(frames or [])
+        self._relayout()
         self.update()
 
     def append(self, frame) -> None:
+        # 增量追加：不要每来一帧就重新遍历几千行算偏移
+        key = id(frame)
+        if self._tops:
+            prev = self.frames[-1] if self.frames else None
+            prev_h = self.ROW_H + (self.CARD_H if prev is not None
+                                   and id(prev) in self._expanded else 0)
+            top = self._tops[-1] + prev_h
+        else:
+            top = 4.0
         self.frames.append(frame)
-        self._tops.append(4 + (len(self.frames) - 1) * self.ROW_H)
-        self.setFixedHeight(max(1, 8 + len(self.frames) * self.ROW_H))
+        self._tops.append(top)
+        height = top + self.ROW_H + (self.CARD_H if key in self._expanded else 0) + 4
+        self.setFixedHeight(max(1, int(height)))
+        self._sync_cards()
         self.update()
 
     def clear(self) -> None:
-        self.set_frames([])
+        self.frames = []
         self.index = -1
+        self._expanded.clear()
+        self._relayout()
+
+    def toggle(self, index: int) -> None:
+        """点一行 = 展开 / 收起这一条；可以同时展开多条。"""
+        if not (0 <= index < len(self.frames)):
+            return
+        key = id(self.frames[index])
+        if key in self._expanded:
+            self._expanded.pop(key, None)
+        else:
+            self._expanded[key] = None
+            if len(self._expanded) > 12:
+                self._expanded.pop(next(iter(self._expanded)))
+        self.index = index
+        self._relayout()
+        self.picked.emit(index)
+        self.update()
 
     def _row_at(self, y: float) -> int:
-        i = int((y - 4) // self.ROW_H)
-        return i if 0 <= i < len(self.frames) else -1
+        i = bisect_right(self._tops, y) - 1
+        if i < 0 or i >= len(self.frames):
+            return -1
+        return i if y < self._tops[i] + self.ROW_H else -1
 
     def visible_range(self) -> tuple:
         from .widgets import _scroll_host
@@ -482,10 +674,11 @@ class FrameList(QWidget):
                 height = view.viewport().height()
             except RuntimeError:
                 pass
-        start = max(0, int((offset - 4) // self.ROW_H) - 1)
-        end = min(len(self.frames), int((offset + height) // self.ROW_H) + 2)
+        start = max(0, bisect_right(self._tops, offset) - 1)
+        end = min(len(self.frames), bisect_left(self._tops, offset + height) + 1)
         return start, end
 
+    # -------------------------------------------------- 交互
     def mouseMoveEvent(self, e):  # noqa: N802
         idx = self._row_at(e.position().y())
         if idx != self._hover:
@@ -499,9 +692,7 @@ class FrameList(QWidget):
     def mouseReleaseEvent(self, e):  # noqa: N802
         idx = self._row_at(e.position().y())
         if idx >= 0:
-            self.index = idx
-            self.picked.emit(idx)
-            self.update()
+            self.toggle(idx)
 
     def mouseDoubleClickEvent(self, e):  # noqa: N802
         idx = self._row_at(e.position().y())
@@ -516,25 +707,23 @@ class FrameList(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         if not self.frames:
-            # 空态由 WsLogView 单独那一页负责，这里不用再画一遍
             p.end()
             return
         start, end = self.visible_range()
         for i in range(start, end):
             frame = self.frames[i]
-            top = 4 + i * self.ROW_H
+            top = self._tops[i]
             r = QRectF(4, top, self.width() - 8, self.ROW_H - 2)
-            if i == self.index or i == self._hover:
+            opened = id(frame) in self._expanded
+            if i == self.index or i == self._hover or opened:
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(C(t.selected if i == self.index else t.hover))
+                p.setBrush(C(t.selected if (i == self.index or opened) else t.hover))
                 p.drawRoundedRect(r, 6, 6)
-            # 时间
             p.setFont(mono(9.4))
             p.setPen(C(t.text_faint))
             stamp = datetime.datetime.fromtimestamp(frame.at).strftime("%H:%M:%S")
             p.drawText(QRectF(r.left() + 8, r.top(), 62, r.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), stamp)
-            # 方向
             arrow = {"in": "↓", "out": "↑"}.get(frame.dir, "·")
             col = {"in": t.success, "out": t.info}.get(frame.dir, t.text_faint)
             if frame.kind == "error":
@@ -543,27 +732,28 @@ class FrameList(QWidget):
             p.setPen(C(col))
             p.drawText(QRectF(r.left() + 74, r.top(), 14, r.height()),
                        int(Qt.AlignmentFlag.AlignCenter), arrow)
-            # 类型标签
             tag = KIND_LABEL.get(frame.kind, frame.kind.upper())
             p.setFont(mono(9.0, QFont.Weight.DemiBold))
             p.setPen(C(col if frame.dir != "sys" else t.text_dim))
             p.drawText(QRectF(r.left() + 92, r.top(), 46, r.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), tag)
-            # 大小
             p.setFont(mono(9.4))
             p.setPen(C(t.text_faint))
             p.drawText(QRectF(r.left() + 138, r.top(), 60, r.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                        human_size(frame.size) if frame.kind not in ("open", "close") else "—")
-            # 内容预览
             p.setFont(mono(10.2))
             p.setPen(C(t.text_dim) if frame.dir != "sys" else C(t.text_faint))
             left = r.left() + 202
-            p.drawText(QRectF(left, r.top(), max(20.0, r.right() - left - 8), r.height()),
+            avail = max(20.0, r.right() - left - 24)
+            p.drawText(QRectF(left, r.top(), avail, r.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                        QFontMetricsF(p.font()).elidedText(
-                           frame.preview(), Qt.TextElideMode.ElideRight,
-                           int(max(20.0, r.right() - left - 8))))
+                           frame.preview(), Qt.TextElideMode.ElideRight, int(avail)))
+            p.setFont(font(10))
+            p.setPen(C(t.text_faint))
+            p.drawText(QRectF(r.right() - 20, r.top(), 16, r.height()),
+                       int(Qt.AlignmentFlag.AlignCenter), "⌄" if opened else "›")
         p.end()
 
 
@@ -575,6 +765,7 @@ class WsLogView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._frames: List[Any] = []
+        self._n_in = self._n_out = self._size_in = 0
         self._filter = "all"
         self._query = ""
         self._auto_scroll = True
@@ -613,16 +804,12 @@ class WsLogView(QWidget):
         bl.addWidget(self.clear_btn, 0)
 
         self.list = FrameList()
-        self.list.setToolTip(i18n.tr("单击看完整内容，双击把收到的消息填回编辑器"))
-        self.list.picked.connect(self._show_detail)
+        self.list.setToolTip(i18n.tr("单击展开详情（可同时展开多条），双击填回编辑器"))
+        self.list.picked.connect(self._on_picked)
         self.list.activated.connect(self._replay)
         self.scroll = SmoothScrollArea()
         self.scroll.setWidget(self.list)
         self.scroll.verticalScrollBar().rangeChanged.connect(self._stick)
-
-        self.detail = CodeView(read_only=True, highlight=True, show_gutter=False)
-        self.detail.setFixedHeight(112)
-        self.detail.hide()
 
         # 空态单独一页：列表在没帧时高度只有 8px，把提示画在列表里会被压成一条线
         self.empty = QWidget()
@@ -647,15 +834,22 @@ class WsLogView(QWidget):
         lay.addWidget(bar)
         lay.addWidget(Divider())
         lay.addWidget(self.body, 1)
-        lay.addWidget(self.detail)
 
     # -------------------------------------------------- 数据
     def set_frames(self, frames: List[Any]) -> None:
         self._frames = list(frames or [])
+        self._n_in = sum(1 for f in self._frames if f.dir == "in")
+        self._n_out = sum(1 for f in self._frames if f.dir == "out")
+        self._size_in = sum(f.size for f in self._frames if f.dir == "in")
         self._rebuild()
 
     def add_frame(self, frame) -> None:
         self._frames.append(frame)
+        if frame.dir == "in":
+            self._n_in += 1
+            self._size_in += frame.size
+        elif frame.dir == "out":
+            self._n_out += 1
         if self._match(frame):
             self.list.append(frame)
             self._update_stats()
@@ -663,8 +857,8 @@ class WsLogView(QWidget):
 
     def clear(self) -> None:
         self._frames = []
+        self._n_in = self._n_out = self._size_in = 0
         self.list.clear()
-        self.detail.hide()
         self._update_stats()
         self._update_empty(False)
 
@@ -701,11 +895,12 @@ class WsLogView(QWidget):
                 i18n.tr("还没有消息。连接后收发的内容会实时出现在这里。"))
 
     def _update_stats(self) -> None:
-        n_in = sum(1 for f in self._frames if f.dir == "in")
-        n_out = sum(1 for f in self._frames if f.dir == "out")
-        size_in = sum(f.size for f in self._frames if f.dir == "in")
-        self.stats.setText(i18n.trf("接收 {i} · 发送 {o} · {size}",
-                                    i=n_in, o=n_out, size=human_size(size_in)))
+        # 统计数字做一次 280ms 补间：新消息进来是「跳」出来的，不是硬闪一下
+        self.stats.animate_number(
+            (self._n_in, self._n_out, self._size_in),
+            lambda i, o, size: i18n.trf("接收 {i} · 发送 {o} · {size}",
+                                        i=int(round(i)), o=int(round(o)),
+                                        size=human_size(int(round(size)))))
 
     def _on_filter(self, key: str) -> None:
         self._filter = key
@@ -727,14 +922,13 @@ class WsLogView(QWidget):
         if bar is not None:
             bar.setValue(bar.maximum())
 
-    def _show_detail(self, index: int) -> None:
-        items = self.list.frames
-        if not (0 <= index < len(items)):
-            return
-        frame = items[index]
-        self.detail.setPlainText(frame.preview(20000))
-        self.detail.set_language("json" if frame.kind == "json" else None)
-        self.detail.show()
+    def _on_picked(self, index: int) -> None:
+        """点一行更新复制目标；展开时把这条滚到眼前，别被自动跟随拽走。"""
+        self.list.index = index
+        if (0 <= index < len(self.list.frames)
+                and id(self.list.frames[index]) in self.list._expanded):
+            bar = self.scroll.verticalScrollBar()
+            bar.setValue(max(0, int(self.list._tops[index]) - 4))
 
     def _replay(self, index: int) -> None:
         items = self.list.frames

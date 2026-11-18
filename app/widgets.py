@@ -1309,6 +1309,42 @@ class Label(QLabel):
         else:
             self.setStyleSheet("background: transparent;")
 
+    # -------------------------------------------------- 数字过渡
+    def animate_number(self, value, fmt: Callable[..., str], duration: int = 280) -> None:
+        """数字变化时做一次短补间（一条动画，不额外起定时器）。
+
+        value 可以是数字，也可以是一组数字；fmt 收到补间后的当前值并返回文案。
+        连续调用会从当前显示值接着走，不会突然跳回起点。
+        """
+        values = tuple(float(v) for v in value) if isinstance(value, (tuple, list)) \
+            else (float(value),)
+        anim = getattr(self, "_num_anim", None)
+        if anim is None:
+            anim = QVariantAnimation(self)
+            anim.setDuration(duration)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._num_value = values
+            self._num_from = values
+            self._num_to = values
+            self._num_fmt = fmt
+            anim.valueChanged.connect(self._apply_number)
+            self._num_anim = anim
+        anim.stop()
+        self._num_from = self._num_value
+        self._num_to = values
+        self._num_fmt = fmt
+        anim.setDuration(duration)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.start()
+
+    def _apply_number(self, progress) -> None:
+        t = float(progress)
+        vals = tuple(a + (b - a) * t for a, b in zip(self._num_from, self._num_to))
+        self._num_value = vals
+        # 直接走 QLabel：数字不是文案，不该每次补间都过一遍 i18n 字典
+        QLabel.setText(self, self._num_fmt(*vals))
+
 
 class Pill(QWidget):
     """状态胶囊：文本 + 语义色，带轻微底色。"""
