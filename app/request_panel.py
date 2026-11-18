@@ -1539,8 +1539,8 @@ class RequestEditor(QWidget):
             return
         self.request["method"] = self.urlbar.method.method()
         self.request["url"] = self.urlbar.url_text()
-        self.request["params"] = self.params.rows()
         if self._mode == "http":
+            self.request["params"] = self.params.rows()
             # 实时协议的握手头是弹层直接写进 request 的，这里不要去覆盖它
             self.request["headers"] = self.headers.rows()
         self.request["cookies"] = self.cookies.rows()
@@ -1563,8 +1563,11 @@ class RequestEditor(QWidget):
         else:
             self.changed.emit()
 
-    def _final_url(self) -> str:
-        """把 base URL 与启用的查询参数拼成最终地址（与发送时同一套算法，并解析环境变量）。"""
+    def _final_url(self, params: Optional[List[Dict]] = None) -> str:
+        """把 base URL 与启用的查询参数拼成最终地址（与发送时同一套算法，并解析环境变量）。
+
+        params=None 时用 HTTP 参数表；实时协议传自己的参数表，避免混用两套数据。
+        """
         from urllib.parse import urlencode
 
         env = self.store.env_vars() if self.store else {}
@@ -1573,8 +1576,9 @@ class RequestEditor(QWidget):
             return ""
         if "://" not in raw:
             raw = "http://" + raw
+        rows = self.params.rows() if params is None else params
         pairs = [(resolve_vars(str(r["key"]), env), resolve_vars(str(r.get("value", "")), env))
-                 for r in self.params.rows() if r.get("enabled", True) and r.get("key")]
+                 for r in rows if r.get("enabled", True) and r.get("key")]
         if not pairs:
             return raw
         sep = "&" if "?" in raw else "?"
@@ -1598,7 +1602,13 @@ class RequestEditor(QWidget):
             composer = self.ws if self._mode == "ws" else self.sio
             composer.set_headers_count(headers)
             self.count_label.setText("")
-            self.params_preview.setText("")
+            # 参数页底部的最终地址预览：实时协议与 HTTP 用同一套拼接算法。
+            rows = composer.params.rows()
+            final = self._final_url(rows)
+            preview = final if rows else ""
+            self.params_preview.setText(preview)
+            self.params_preview.setToolTip(preview or "")
+            composer.set_params_preview(preview)
             return
         for key in ("body", "cookies", "post", "auth", "pre"):
             if self.tabs.has(key):
@@ -1716,7 +1726,10 @@ class RequestEditor(QWidget):
             return
         base, _, _qs = text.partition("?")
         query = QUrlQuery(QUrl(text))
-        rows = self.params.rows()
+        # 实时协议用自己「参数」页的表，HTTP 用 HTTP 的表，互不串数据
+        editor = self.params if self._mode == "http" else (
+            self.ws.params if self._mode == "ws" else self.sio.params)
+        rows = editor.rows()
         known = {(r.get("key"), r.get("value")) for r in rows}
         added = 0
         for key, value in query.queryItems():
@@ -1729,7 +1742,7 @@ class RequestEditor(QWidget):
             self.urlbar.set_url(base)
             return
         self._syncing = True
-        self.params.set_rows(rows)
+        editor.set_rows(rows)
         self._syncing = False
         self.urlbar.set_url(base)
         self._refresh_counts()

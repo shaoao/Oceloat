@@ -113,6 +113,60 @@ class TrashFly(QWidget):
         p.end()
 
 
+# ---------------------------------------------------------------- 新建文件夹聚焦动画
+class FocusPulse(QWidget):
+    """新建文件夹后，在目标行画一圈扩散的高亮细环，随后淡出。
+
+    单个 QVariantAnimation 驱动，动画结束即隐藏，不占常驻定时器。
+    """
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self._p = 0.0
+        self._rect = QRectF()
+        self.hide()
+
+    def play(self, rect: QRectF) -> None:
+        host = self.parentWidget()
+        if host is None:
+            return
+        self._rect = rect
+        self.setGeometry(host.rect())
+        self.raise_()
+        self.show()
+
+        def _set(v):
+            self._p = float(v)
+            self.update()
+
+        def _done():
+            self.hide()
+            self._p = 0.0
+
+        _anim_stop(getattr(self, "_anim", None))
+        self._anim = animate(self, 0.0, 1.0, 520, _set,
+                             QEasingCurve.Type.OutCubic, on_done=_done)
+
+    def paintEvent(self, _e):  # noqa: N802
+        if not (0.0 < self._p < 1.0) or self._rect.isNull():
+            return
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        fade = 1.0 - self._p
+        grow = 3.0 + self._p * 5.0
+        r = self._rect.adjusted(-grow, -grow, grow, grow)
+        pen = QPen(C(t.accent))
+        pen.setWidthF(1.6 * fade + 0.4)
+        pen.setAlphaF(fade)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(r, 8, 8)
+        p.end()
+
+
 # ---------------------------------------------------------------- 历史删除动画
 class HistoryVanish(QWidget):
     """历史行删除时的轻量消散动画：抓一张快照，细扫线掠过 + 细环扩散 + 淡出收拢。
@@ -273,6 +327,37 @@ class TreeDelegate(QStyledItemDelegate):
         # 行高跟着文字大小走：150% 时 29px 会把两行字挤在一起
         return QSize(0, px(29))
 
+    # -------------------------------------------------- 就地重命名
+    def createEditor(self, parent, option, index):  # noqa: N802
+        """新建文件夹后直接就地输入名字；样式与列表的纯色卡片一致。"""
+        item = self.tree.itemFromIndex(index)
+        editor = QLineEdit(parent)
+        editor.setObjectName("Bare")
+        editor.setFont(font(12.5))
+        editor.setText(str((item.data(0, ROLE_DATA) or {}).get("name", "")))
+        editor.setFrame(False)
+        editor.setStyleSheet(
+            f"QLineEdit {{ background: {theme().elevated}; color: {theme().text};"
+            f" border: 1px solid {theme().accent}; border-radius: 6px; padding: 0 6px; }}")
+        editor.selectAll()
+        return editor
+
+    def updateEditorGeometry(self, editor, option, index):  # noqa: N802
+        item = self.tree.itemFromIndex(index)
+        rect = QRectF(option.rect).adjusted(5, 2, -6, -2)
+        # 文件夹的文字起点在缩进箭头之后
+        if (item.data(0, ROLE_DATA) or {}).get("type") == "folder":
+            rect.adjust(24, 0, 0, 0)
+        editor.setGeometry(rect.toRect())
+
+    def setModelData(self, editor, model, index):  # noqa: N802
+        text = editor.text().strip()
+        if not text:
+            return
+        item = self.tree.itemFromIndex(index)
+        if item is not None:
+            self.tree.renameCommitted.emit(str(item.data(0, ROLE_ID)), text)
+
     def paint(self, p: QPainter, option, index: QModelIndex) -> None:
         t = theme()
         p.save()
@@ -366,6 +451,7 @@ class CollectionsTree(QTreeWidget):
     previewRequest = pyqtSignal(dict)       # 单击：VSCode 式预览（复用预览标签）
     structureChanged = pyqtSignal()
     requestContext = pyqtSignal(str, QPoint)  # node_id, global pos
+    renameCommitted = pyqtSignal(str, str)   # 就地重命名：node_id, 新名字
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -383,6 +469,9 @@ class CollectionsTree(QTreeWidget):
         self.setDropIndicatorShown(True)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setExpandsOnDoubleClick(False)
+        # 编辑只在新建文件夹后由代码显式 editItem 触发；双击仍按原来的
+        # 预览 / 折叠语义走，不会因为加了 ItemIsEditable 就误进改名框。
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -739,12 +828,15 @@ class Sidebar(QWidget):
         # 删除飞入动画：挂在最上层，鼠标事件穿透，不影响集合树交互
         self._trash_fly = TrashFly(self)
         self._history_vanish = HistoryVanish(self)
+        self._focus_pulse = FocusPulse(self)
+        self.tree.renameCommitted.connect(self.rename_node)
         self.refresh()
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
         for overlay in (getattr(self, "_trash_fly", None),
-                        getattr(self, "_history_vanish", None)):
+                        getattr(self, "_history_vanish", None),
+                        getattr(self, "_focus_pulse", None)):
             if overlay is not None and not overlay.isHidden():
                 overlay.setGeometry(self.rect())
 
@@ -765,14 +857,11 @@ class Sidebar(QWidget):
 
         self.search = SearchField("搜索请求、URL 或方法")
         self.search.changed.connect(self._apply_filter)
-        # 搜索框右侧：导入 / 导出（一个按钮，一个对话框，导入导出都在里面切换）
+        # 搜索框右侧只留导入 / 导出；回收站移到底部操作条原来「新建文件夹」的位置，
+        # 因为「新建请求」下拉里已经包含新建文件夹，两处重复。
         self.transfer_btn = icon_button("transfer", "导入 / 导出集合", 28, 14)
         self.transfer_btn.clicked.connect(self.transferRequested.emit)
-        # 回收站入口：带一个角标显示条目数（0 时隐藏）
-        self.trash_btn = icon_button("trash", i18n.tr("回收站"), 28, 14)
-        self.trash_btn.clicked.connect(self.trashRequested.emit)
-        # 搜索框吃掉全部剩余宽度，紧贴右侧按钮 —— 中间留一段空白既浪费又难看
-        root.addWidget(HBox((self.search, 1), self.transfer_btn, self.trash_btn, spacing=6))
+        root.addWidget(HBox((self.search, 1), self.transfer_btn, spacing=6))
 
         # 集合树
         self.tree = CollectionsTree()
@@ -804,14 +893,14 @@ class Sidebar(QWidget):
         self.history_scroll.viewport().unsetCursor()
         root.addWidget(self.history_scroll, 1)
 
-        # 底部操作条
+        # 底部操作条：新建请求（下拉里含新建文件夹）+ 回收站。
+        # 回收站入口带一个角标显示条目数（0 时隐藏），删除动画也飞向这里。
         self.new_btn = Button("新建请求", "plus", kind="subtle", height=28, padding=10,
                               radius=7, font_size=12, parent=self)
         self.new_btn.clicked.connect(self._new_menu)
-        self.folder_btn = icon_button("folder", "新建文件夹", 28, 14)
-        self.folder_btn.clicked.connect(self._new_folder)
-        # 历史模式下 new_btn 本身就是「清空历史」，不再额外放一颗图标按钮（会重复）
-        bottom = HBox(self.new_btn, 1, self.folder_btn, spacing=4,
+        self.trash_btn = icon_button("trash", i18n.tr("回收站"), 28, 14)
+        self.trash_btn.clicked.connect(self.trashRequested.emit)
+        bottom = HBox(self.new_btn, 1, self.trash_btn, spacing=4,
                       margins=(0, 2, 0, 0))
         root.addWidget(bottom)
 
@@ -821,10 +910,10 @@ class Sidebar(QWidget):
         is_col = key == "collections"
         self.tree.setVisible(is_col)
         self.history_scroll.setVisible(not is_col)
-        self.folder_btn.setVisible(is_col)
         self.new_btn.setText("新建请求" if is_col else "清空历史")
         self.new_btn.set_icon("plus" if is_col else "trash")
-        self.search.clear()
+        # 切换集合 / 历史时保留搜索词，让搜索对两个页面都直接生效
+        self._apply_filter(self.search.text())
         if is_col:
             self.refresh()
         else:
@@ -866,7 +955,7 @@ class Sidebar(QWidget):
         item.setData(0, ROLE_DATA, node)
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsDragEnabled
         if node.get("type") == "folder":
-            flags |= Qt.ItemFlag.ItemIsDropEnabled
+            flags |= Qt.ItemFlag.ItemIsDropEnabled | Qt.ItemFlag.ItemIsEditable
         item.setFlags(flags)
         if node.get("type") == "folder":
             for child in node.get("children", []):
@@ -891,8 +980,27 @@ class Sidebar(QWidget):
 
         return [walk(self.tree.topLevelItem(i)) for i in range(self.tree.topLevelItemCount())]
 
+    def _history_match(self, entry: Dict[str, Any], text: str) -> bool:
+        """历史条目是否命中搜索词：方法 / URL / 名称 / 状态码都算。"""
+        if not text:
+            return True
+        req = entry.get("request") or {}
+        fields = (str(entry.get("method") or req.get("method") or ""),
+                  str(entry.get("url") or req.get("url") or ""),
+                  str(req.get("name") or ""),
+                  str(entry.get("status") or ""))
+        return any(text in f.lower() for f in fields)
+
     def _apply_filter(self, text: str) -> None:
         text = (text or "").strip().lower()
+
+        # 历史模式：按数据过滤行，空组头一起隐藏，切到「历史」后搜索框直接生效
+        if self._mode == "history":
+            for row in getattr(self, "_hist_rows", []):
+                row.setVisible(self._history_match(row.entry, text))
+            for header, rows in getattr(self, "_hist_groups", []):
+                header.setVisible(not text or any(r.isVisible() for r in rows))
+            return
 
         def walk(item: QTreeWidgetItem) -> bool:
             node = item.data(0, ROLE_DATA) or {}
@@ -928,7 +1036,6 @@ class Sidebar(QWidget):
     def refresh_theme(self) -> None:
         """语言 / 主题切换后：重译 tooltip 并重绘（行内文案在 paintEvent 里实时翻译）。"""
         self.transfer_btn.setToolTip(i18n.tr("导入 / 导出集合"))
-        self.folder_btn.setToolTip(i18n.tr("新建文件夹"))
         self._sync_trash_badge()
         self.tree.viewport().update()
         if self._mode == "history":
@@ -1018,12 +1125,45 @@ class Sidebar(QWidget):
         self.notify.emit("已创建请求")
         self.changed.emit()
 
-    def _new_folder(self) -> None:
+    def _new_folder(self, parent_id: Optional[str] = None) -> None:
         node = new_folder("New Folder")
-        self.store.add_node(self._selected_folder(), node)
+        target = parent_id if parent_id is not None else self._selected_folder()
+        self.store.add_node(target, node)
         self.store.save()
         self.refresh()
         self.changed.emit()
+        self._focus_new_node(node.get("id"))
+
+    def _focus_new_node(self, node_id: Optional[str]) -> None:
+        """焦点跳到新建节点：滚动居中 + 高亮脉冲 + 就地改名输入框。
+
+        默认名字已经写进数据；用户直接回车 / 点别处就保留默认，输入则替换。
+        """
+        if not node_id or self._mode != "collections":
+            return
+        item = self._find_item(node_id)
+        if item is None:
+            return
+        parents = []
+        parent = item.parent()
+        while parent is not None:
+            parents.append(parent)
+            parent = parent.parent()
+        for p in reversed(parents):
+            p.setExpanded(True)
+        self.tree.setCurrentItem(item)
+        self.tree.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+        self.tree.viewport().update()
+        rect = self.tree.visualItemRect(item)
+        if rect.isValid() and not rect.isEmpty():
+            local = self.tree.mapTo(self, QRectF(rect).center().toPoint())
+            pulse = getattr(self, "_focus_pulse", None)
+            if pulse is not None:
+                pulse.play(QRectF(local.x() - rect.width() / 2 + 8,
+                                  local.y() - rect.height() / 2,
+                                  rect.width() - 16, rect.height()))
+        # 就地编辑：编辑框里已选中默认名，输入即替换，不输入保持默认
+        self.tree.editItem(item, 0)
 
     def create_request_in(self, parent_id: Optional[str], method: str = "GET", url: str = "") -> Dict:
         node = new_request("Untitled Request", method, url)
@@ -1179,10 +1319,7 @@ class Sidebar(QWidget):
             parent = node_id if is_folder else (self._parent_of(node_id) or None)
             self.create_request_in(parent)
         elif act_folder and chosen is act_folder:
-            self.store.add_node(node_id, new_folder("New Folder"))
-            self.store.save()
-            self.refresh()
-            self.changed.emit()
+            self._new_folder(node_id)
         elif act_run is not None and chosen is act_run:
             self.runFolder.emit(node_id)
         elif act_auth is not None and chosen is act_auth:
@@ -1316,6 +1453,7 @@ class Sidebar(QWidget):
                     old.setParent(None)
                     old.deleteLater()
                 self._hist_rows = rows
+                self._apply_filter(self.search.text())
                 return
 
         while self.history_lay.count() > 1:
@@ -1325,6 +1463,7 @@ class Sidebar(QWidget):
                 w.setParent(None)
                 w.deleteLater()
         self._hist_rows = []
+        self._hist_groups = []
         self._hist_header = ""
         self._hist_header_widget = None
         if not entries:
@@ -1359,6 +1498,8 @@ class Sidebar(QWidget):
             if self._hist_header_widget is None:
                 self._hist_header = g["label"]   # 存中文原文，语言无关
                 self._hist_header_widget = header
+            group_rows = []
+            self._hist_groups.append((header, group_rows))
             if key in collapsed:
                 continue
             for entry in g["entries"]:
@@ -1367,6 +1508,8 @@ class Sidebar(QWidget):
                 row.removeRequested.connect(self._remove_history)
                 self.history_lay.insertWidget(self.history_lay.count() - 1, row)
                 self._hist_rows.append(row)
+                group_rows.append(row)
+        self._apply_filter(self.search.text())
 
     def _restore_history(self, entry: Dict[str, Any]) -> None:
         req = dict(entry.get("request") or {})

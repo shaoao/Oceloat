@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QStackedWidget, QVBoxLayout,
 
 from . import i18n
 from .code_editor import CodeView
+from .kv_editor import KVEditor
 from .store import uid
 from .theme import theme
 from .widgets import Button, Divider, HBox, Label, SegmentedTabs, SmoothScrollArea, Switch
@@ -62,29 +63,24 @@ class SioComposer(QWidget):
         self._chips: List[MsgChip] = []
 
         t = theme()
-        # --- 「通讯」页：命名空间 + 事件载荷输入 / 发送 / 常用事件
-        # 命名空间单独一行、stretch 填满。
-        self.namespace = QLineEdit()
-        self.namespace.setObjectName("Field")
-        self.namespace.setFixedHeight(28)
-        i18n.placeholder(self.namespace, "/")
-        self.namespace.setToolTip(i18n.tr("默认命名空间填 /，自定义填 /admin"))
-        self.namespace.textChanged.connect(self._on_option)
-        ns_row = QHBoxLayout()
-        ns_row.setSpacing(10)
-        ns_row.addWidget(Label("命名空间", 11, t.text_faint))
-        ns_row.addWidget(self.namespace, 1)
+        # --- 「通讯」页：事件名称单独一行、stretch 填满；下面是载荷工具行。
+        # 命名空间是连接级参数，移到「认证」页，通讯页只留日常收发需要的字段，
+        # 这样每一行左边缘都落在同一条竖线上。
+        self.event_name = QLineEdit()
+        self.event_name.setObjectName("Field")
+        self.event_name.setFixedHeight(28)
+        i18n.placeholder(self.event_name, "事件名，例如 chat message")
+        self.event_name.setToolTip(i18n.tr("要发送的事件名称，例如 chat message"))
+        self.event_name.textChanged.connect(self._on_option)
+        ev_row = QHBoxLayout()
+        ev_row.setSpacing(10)
+        ev_row.addWidget(Label("事件名称", 11, t.text_faint))
+        ev_row.addWidget(self.event_name, 1)
 
         # 载荷模式：JSON / 文本切换，只影响高亮与格式化
         self.kind = SegmentedTabs(PAYLOAD_KINDS, style="pill", height=26,
                                   font_size=11.4, pad_h=11)
         self.kind.changed.connect(self._on_kind)
-
-        self.event_name = QLineEdit()
-        self.event_name.setObjectName("Field")
-        self.event_name.setFixedHeight(28)
-        i18n.placeholder(self.event_name, "事件名，例如 chat message")
-        self.event_name.textChanged.connect(self._on_option)
 
         self.fmt_btn = Button("格式化", "code", kind="ghost", height=24, padding=8,
                               font_size=11, icon_size=11)
@@ -97,8 +93,8 @@ class SioComposer(QWidget):
         self.send_btn = Button("发送事件", "send", kind="primary", height=26, padding=12,
                                font_size=11.6, icon_size=12)
         self.send_btn.clicked.connect(self._send)
-        tools = HBox(self.kind, self.event_name, 1, self.fmt_btn, self.save_btn,
-                     self.send_btn, spacing=8, margins=(0, 0, 0, 0))
+        tools = HBox(self.kind, 1, self.fmt_btn, self.save_btn, self.send_btn,
+                     spacing=8, margins=(0, 0, 0, 0))
 
         self.editor = CodeView(read_only=False, highlight=True, show_gutter=False)
         self.editor.setMinimumHeight(68)
@@ -122,11 +118,27 @@ class SioComposer(QWidget):
         cl = QVBoxLayout(chat_page)
         cl.setContentsMargins(14, 10, 14, 12)
         cl.setSpacing(8)
-        cl.addLayout(ns_row)
+        cl.addLayout(ev_row)
         cl.addWidget(tools)
         cl.addWidget(self.editor, 1)
         cl.addWidget(self.saved_note)
         cl.addWidget(self.saved_scroll)
+
+        # --- 「参数」页：查询参数表，连接时拼进地址栏 URL
+        self.params = KVEditor("参数名", "值", empty_hint="添加查询参数", with_types=True,
+                               file_tooltip="查询参数不支持文件上传")
+        self.params.changed.connect(self._on_option)
+        self.params_preview = Label("", 10.5, t.text_faint, mono_font=True)
+        self.params_preview.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.params_preview.setToolTip(i18n.tr("连接时使用的完整地址"))
+        params_page = QWidget()
+        pal = QVBoxLayout(params_page)
+        pal.setContentsMargins(14, 10, 14, 12)
+        pal.setSpacing(6)
+        pal.addWidget(Label(i18n.tr("查询参数会在连接时拼到地址后面"), 11, t.text_dim))
+        pal.addWidget(self.params, 1)
+        pal.addWidget(self.params_preview)
 
         # --- 「认证」页：握手期认证与连接行为，单独成页
         self.auth = QLineEdit()
@@ -146,10 +158,24 @@ class SioComposer(QWidget):
 
         # 认证页去掉整块灰色底：与协议页一样直接铺在页面底色上，
         # 分组标题 + 细分隔线足够分层，输入框左边缘与其他页保持同一条线。
+        self.namespace = QLineEdit()
+        self.namespace.setObjectName("Field")
+        self.namespace.setFixedHeight(28)
+        i18n.placeholder(self.namespace, "/")
+        self.namespace.setToolTip(i18n.tr("默认命名空间填 /，自定义填 /admin"))
+        self.namespace.textChanged.connect(self._on_option)
+
         auth_card = QWidget()
         av = QVBoxLayout(auth_card)
         av.setContentsMargins(10, 10, 14, 14)
         av.setSpacing(12)
+        av.addWidget(Label(i18n.tr("连接参数"), 11, t.text_dim))
+        a_ns = QHBoxLayout()
+        a_ns.setSpacing(10)
+        a_ns.addWidget(Label("命名空间", 11, t.text_faint))
+        a_ns.addWidget(self.namespace, 1)
+        av.addLayout(a_ns)
+        av.addWidget(Divider())
         av.addWidget(Label(i18n.tr("握手认证"), 11, t.text_dim))
         a1 = QHBoxLayout()
         a1.setSpacing(10)
@@ -187,9 +213,10 @@ class SioComposer(QWidget):
         al.setSpacing(0)
         al.addWidget(auth_card, 1)
 
-        # 与 HTTP 请求页同款 underline 页签：只有「通讯 / 认证」两页。
+        # 与 HTTP 请求页同款 underline 页签：通讯 / 参数 / 认证 三页。
         # 与 UrlBar / HTTP 页签栏同款 14px 缩进，文字落在顶部徽标那条竖线上。
-        self.tabs = SegmentedTabs([("chat", "通讯"), ("auth", "认证")],
+        self.tabs = SegmentedTabs([("chat", "通讯"), ("params", "参数"),
+                                   ("auth", "认证")],
                                   style="underline", height=32, pad_h=10, font_size=12.2)
         self.tabs.changed.connect(self._on_tab)
         tab_host = QWidget()
@@ -199,6 +226,7 @@ class SioComposer(QWidget):
         tab_l.addWidget(self.tabs, 0, Qt.AlignmentFlag.AlignLeft)
         self.stack = QStackedWidget()
         self.stack.addWidget(chat_page)
+        self.stack.addWidget(params_page)
         self.stack.addWidget(auth_page)
 
         lay = QVBoxLayout(self)
@@ -236,12 +264,16 @@ class SioComposer(QWidget):
             self.kind.set_current(kind, emit=False)
             self.kind.blockSignals(False)
             self._apply_kind(kind)
+            self.params.blockSignals(True)
+            self.params.set_rows(req.get("params") or [])
+            self.params.blockSignals(False)
             self._refresh_saved()
         finally:
             self._loading = False
 
     def dump(self, req: Dict[str, Any]) -> None:
         sio = ensure_sio(req)
+        req["params"] = self.params.rows()
         sio["namespace"] = (self.namespace.text().strip() or "/")
         sio["auth"] = self.auth.text().strip()
         sio["event"] = self.event_name.text().strip()
@@ -264,9 +296,15 @@ class SioComposer(QWidget):
         if not self._loading:
             self.changed.emit()
 
+    def set_params_preview(self, text: str) -> None:
+        """由 RequestEditor 用统一的 URL 拼接算法算好最终地址后传入。"""
+        if hasattr(self, "params_preview"):
+            self.params_preview.setText(text or "")
+
     def _on_tab(self, key: str) -> None:
-        """通讯 / 认证双页签：只有两页，直接按 key 切。"""
-        self.stack.setCurrentIndex(1 if key == "auth" else 0)
+        """通讯 / 参数 / 认证 三页签。"""
+        index = {"chat": 0, "params": 1, "auth": 2}.get(key, 0)
+        self.stack.setCurrentIndex(index)
 
     def _on_kind(self, key: str) -> None:
         """切换载荷高亮模式；不在草稿 textChanged 里 set_language，避免死循环。"""

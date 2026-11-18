@@ -1502,9 +1502,22 @@ class MainWindow(QWidget):
         return sess
 
     def _realtime_url(self) -> str:
-        """实时协议只取地址栏原文（解析环境变量），不掺 HTTP 的查询参数表。"""
-        raw = self.editor.urlbar.url_text()
-        return resolve_vars(raw, self.store.env_vars()).strip()
+        """实时协议地址：地址栏原文解析环境变量，再拼上「参数」页启用的查询参数。"""
+        from urllib.parse import urlencode
+
+        raw = resolve_vars(self.editor.urlbar.url_text(), self.store.env_vars()).strip()
+        if not raw:
+            return ""
+        composer = self.editor.sio if self.editor.is_sio() else self.editor.ws
+        env = self.store.env_vars()
+        pairs = [(resolve_vars(str(r["key"]), env),
+                  resolve_vars(str(r.get("value", "")), env))
+                 for r in composer.params.rows()
+                 if r.get("enabled", True) and r.get("key")]
+        if not pairs:
+            return raw
+        sep = "&" if "?" in raw else "?"
+        return raw + sep + urlencode(pairs)
 
     def _ws_headers(self, req: Dict[str, Any]) -> List[tuple]:
         """握手头：请求头 + Cookie + 认证，全部按当前环境变量解析。"""

@@ -1,5 +1,15 @@
 # What's Changed
 
+## v1.0.49 — 2026-11-19
+
+**Changed**
+- WebSocket and Socket.IO request pages now use three tabs: Chat / Params / Protocol (Auth). Added a real query-parameter table that is appended to the URL on connect, with bulk edit and a final-URL preview.
+- Socket.IO Chat page first row is now "Event name" with matching English text; namespace moved into the Auth page; all rows share one left alignment with no functionality lost.
+- Sidebar drops the duplicate "New Folder" button; the trash entry moves to the bottom action bar and the delete animation now flies to the new spot.
+- Creating a folder now jumps focus to it with a highlight pulse and opens inline rename with a default name: confirm to keep it, type to replace.
+- The search box now filters both Collections and History, keeps its text across tab switches, and hides empty history groups.
+- Fixed the trash detail popup misalignment in English (truncated labels / uneven value column) with a language-aware label width; also reduced redundant history row rebuilds.
+
 ## v1.0.48 — 2026-11-19
 
 **Changed**

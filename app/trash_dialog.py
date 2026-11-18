@@ -12,7 +12,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import QDate, QEasingCurve, QPoint, QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
 from PyQt6.QtWidgets import (
     QCalendarWidget,
     QDateEdit,
@@ -489,6 +489,18 @@ class TrashDetail(QWidget):
                 w.setParent(None)
                 w.deleteLater()
 
+    # 标签列统一宽度：英文下「删除时间 / Original location」比中文长，
+    # 固定 72px 会把字截掉（截图里「删除时…」），值列起点也跟着忽左忽右。
+    # 用当前语言下所有标签里最宽的一个作为统一宽度，既不截断又保证值列对齐。
+    LABEL_KEYS = ("URL", "参数", "请求头", "正文", "Cookie", "认证", "环境变量",
+                  "包含", "子请求", "删除时间", "原位置")
+
+    def _label_width(self) -> int:
+        fm = QFontMetricsF(font(10.5))
+        widest = max((fm.horizontalAdvance(i18n.tr(k)) for k in self.LABEL_KEYS),
+                     default=0.0)
+        return int(widest) + 6
+
     def _row(self, label: str, value: str, color: Optional[str] = None,
              mono_value: bool = False) -> None:
         t = theme()
@@ -497,7 +509,7 @@ class TrashDetail(QWidget):
         hl.setContentsMargins(0, 0, 0, 0)
         hl.setSpacing(10)
         lab = Label(label, 10.5, t.text_faint)
-        lab.setFixedWidth(72)
+        lab.setFixedWidth(self._label_width())
         val = Label(value, 11.2, color or t.text, mono_font=mono_value)
         val.setWordWrap(True)
         hl.addWidget(lab, 0, Qt.AlignmentFlag.AlignTop)
@@ -634,14 +646,14 @@ class DetailPopup(QWidget):
         root.setContentsMargins(6, 6, 6, 6)
         root.addWidget(self._card)
         self.MAX_H = 430
-        self.setFixedSize(500, 300)
+        self.setFixedSize(520, 300)
 
     def show_record(self, rec: Dict[str, Any], anchor: QPoint) -> None:
         self.detail.show_record(rec)
         # 按内容实际高度调整浮层：至少 220，最多 MAX_H，超出用滚动区
         hint = self.detail.sizeHint().height()
         h = max(220, min(self.MAX_H, hint + 20))
-        self.setFixedSize(500, h)
+        self.setFixedSize(520, h)
         # 贴在锚点下方，超出屏幕则翻到上方；水平居中于锚点
         pos = QPoint(anchor.x() - self.width() // 2, anchor.y() + 12)
         screen = self.screen()

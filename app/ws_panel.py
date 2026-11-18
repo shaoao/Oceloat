@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 
 from . import i18n, icons
 from .code_editor import CodeView, human_size
+from .kv_editor import KVEditor
 from .theme import C, font, mono, px, theme
 from .widgets import (
     Button,
@@ -198,6 +199,22 @@ class WsComposer(QWidget):
         cl.addWidget(self.saved_note)
         cl.addWidget(self.saved_scroll)
 
+        # --- 「参数」页：查询参数表，连接时拼进地址栏 URL
+        self.params = KVEditor("参数名", "值", empty_hint="添加查询参数", with_types=True,
+                               file_tooltip="查询参数不支持文件上传")
+        self.params.changed.connect(self._on_option)
+        self.params_preview = Label("", 10.5, t.text_faint, mono_font=True)
+        self.params_preview.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.params_preview.setToolTip(i18n.tr("连接时使用的完整地址"))
+        params_page = QWidget()
+        pal = QVBoxLayout(params_page)
+        pal.setContentsMargins(14, 10, 14, 12)
+        pal.setSpacing(6)
+        pal.addWidget(Label(i18n.tr("查询参数会在连接时拼到地址后面"), 11, t.text_dim))
+        pal.addWidget(self.params, 1)
+        pal.addWidget(self.params_preview)
+
         # --- 「协议」页：握手级配置，单独成页不干扰日常收发
         self.proto = QLineEdit()
         self.proto.setObjectName("Field")
@@ -260,10 +277,11 @@ class WsComposer(QWidget):
         pl.setSpacing(0)
         pl.addWidget(proto_card, 1)
 
-        # 与 HTTP 请求页同款 underline 页签：只有「通讯 / 协议」两页。
+        # 与 HTTP 请求页同款 underline 页签：通讯 / 参数 / 协议 三页。
         # 14px 与 UrlBar / HTTP 页签栏的左缩进一致，页签文字正好落在顶部
         # 方法徽标文字那条竖线上；内容区沿用 14 + 控件内边距 10 的基准。
-        self.tabs = SegmentedTabs([("chat", "通讯"), ("protocol", "协议")],
+        self.tabs = SegmentedTabs([("chat", "通讯"), ("params", "参数"),
+                                   ("protocol", "协议")],
                                   style="underline", height=32, pad_h=10, font_size=12.2)
         self.tabs.changed.connect(self._on_tab)
         tab_host = QWidget()
@@ -273,6 +291,7 @@ class WsComposer(QWidget):
         tab_l.addWidget(self.tabs, 0, Qt.AlignmentFlag.AlignLeft)
         self.stack = QStackedWidget()
         self.stack.addWidget(chat_page)
+        self.stack.addWidget(params_page)
         self.stack.addWidget(proto_page)
 
         lay = QVBoxLayout(self)
@@ -305,12 +324,16 @@ class WsComposer(QWidget):
             self.editor.blockSignals(True)
             self.editor.setPlainText(str(self._ws.get("draft") or ""))
             self.editor.blockSignals(False)
+            self.params.blockSignals(True)
+            self.params.set_rows(req.get("params") or [])
+            self.params.blockSignals(False)
             self._refresh_saved()
         finally:
             self._loading = False
 
     def dump(self, req: Dict[str, Any]) -> None:
         ws = ensure_ws(req)
+        req["params"] = self.params.rows()
         ws["subprotocol"] = self.proto.text().strip()
         try:
             ws["ping"] = max(0, int(self.ping.text().strip() or 0))
@@ -350,9 +373,15 @@ class WsComposer(QWidget):
     def _on_option(self) -> None:
         self.changed.emit()
 
+    def set_params_preview(self, text: str) -> None:
+        """由 RequestEditor 用统一的 URL 拼接算法算好最终地址后传入。"""
+        if hasattr(self, "params_preview"):
+            self.params_preview.setText(text or "")
+
     def _on_tab(self, key: str) -> None:
-        """通讯 / 协议双页签：只有两页，直接按 key 切。"""
-        self.stack.setCurrentIndex(1 if key == "protocol" else 0)
+        """通讯 / 参数 / 协议 三页签。"""
+        index = {"chat": 0, "params": 1, "protocol": 2}.get(key, 0)
+        self.stack.setCurrentIndex(index)
 
     def _on_kind(self, key: str) -> None:
         self.editor.set_language("json" if key == "json" else None)
