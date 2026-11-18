@@ -105,6 +105,165 @@ class JsonHighlighter(QSyntaxHighlighter):
                 self.setFormat(m.start(), m.end() - m.start(), fmt)
 
 
+class HtmlHighlighter(QSyntaxHighlighter):
+    """HTML / XML 高亮：标签名、属性名、属性值、尖括号、注释、DOCTYPE、实体，
+    以及内嵌 <script> / <style> 的二级着色。
+
+    颜色全部取自 tokens()，和 JSON / CodeHighlighter 共用同一套 One Dark 方案，
+    保证「统一的高亮」。用 QSyntaxHighlighter 的 block state 在块间传递当前状态
+    （文本 / 标签内 / 注释 / script / style），跨行的标签与多行注释、脚本都能
+    连续着色，不会因为逐块高亮而断色。
+    """
+
+    S_TEXT, S_TAG, S_COMMENT, S_SCRIPT, S_STYLE = 0, 1, 2, 3, 4
+
+    # 内嵌脚本 / 样式里的二级规则，按「低优先级 → 高优先级」排列：
+    # setFormat 后写覆盖先写，因此注释与字符串压在关键字、数字之上。
+    _JS_RULES = [
+        (r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", "number"),
+        (r"\b[A-Za-z_$][\w$]*(?=\s*\()", "func"),
+        (r"\b(?:const|let|var|function|return|if|else|for|while|new|class|this|"
+         r"null|undefined|true|false|await|async|import|export|from|of|in|"
+         r"typeof|throw|try|catch|switch|case|break|continue)\b", "key"),
+        (r"\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|`[^`]*`", "value"),
+        (r"/\*.*?\*/|//[^\n]*", "comment"),
+    ]
+    _CSS_RULES = [
+        (r"(?<![\w-])\d+(?:\.\d+)?(?:px|em|rem|%|vh|vw|s|ms|deg)?\b|"
+         r"#[0-9a-fA-F]{3,8}\b", "number"),
+        (r"[A-Za-z-]+(?=\s*:)", "attr"),
+        (r"\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'", "value"),
+        (r"/\*.*?\*/", "comment"),
+    ]
+
+    def __init__(self, doc):
+        super().__init__(doc)
+        self._js = [(re.compile(p), k) for p, k in self._JS_RULES]
+        self._css = [(re.compile(p), k) for p, k in self._CSS_RULES]
+        self._tag = re.compile(r"[A-Za-z][\w:.-]*")
+        self._attr = re.compile(r"[A-Za-z_:][\w:.-]*")
+        self._entity = re.compile(r"&[\w#]+;")
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        c = tokens()
+        # 语义 token → 统一配色 token 的映射
+        mapping = {
+            "tag": "func",        # 标签名 —— 蓝
+            "attr": "param",      # 属性名 —— 浅黄橙
+            "value": "string",    # 属性值 —— 黄绿
+            "punct": "punct",     # 尖括号 / 斜杠 / 等号 —— 灰
+            "comment": "comment", # 注释 —— 深灰
+            "decl": "keyword",    # DOCTYPE / 声明 —— 红
+            "entity": "builtin",  # &nbsp; 实体 —— 青
+            "key": "key",         # 脚本关键字 —— 粉紫
+            "number": "number",   # 数字 —— 橙
+            "func": "func",       # 脚本函数名 —— 蓝
+        }
+        self._fmts: Dict[str, QTextCharFormat] = {}
+        for semantic, color_key in mapping.items():
+            fmt = QTextCharFormat()
+            fmt.setForeground(C(c[color_key]))
+            fmt.setFontWeight(QFont.Weight.Normal)
+            self._fmts[semantic] = fmt
+
+    def _code_spans(self, seg: str, base: int, rules):
+        out = []
+        for pattern, key in rules:
+            for mo in pattern.finditer(seg):
+                out.append((base + mo.start(), mo.end() - mo.start(), key))
+        return out
+
+    def highlightBlock(self, text: str) -> None:  # noqa: N802
+        state = self.previousBlockState()
+        if state < 0:
+            state = self.S_TEXT
+        n = len(text)
+        i = 0
+        spans = []
+        pending_tag = ""
+        while i < n:
+            if state == self.S_TEXT:
+                if text.startswith("<!--", i):
+                    spans.append((i, 4, "comment")); i += 4; state = self.S_COMMENT; continue
+                if text.startswith("</", i):
+                    spans.append((i, 2, "punct")); i += 2
+                    mo = self._tag.match(text, i)
+                    if mo:
+                        spans.append((i, mo.end() - i, "tag")); i = mo.end()
+                    state = self.S_TAG; pending_tag = ""; continue
+                if text.startswith("<!", i) or text.startswith("<?", i):
+                    j = text.find(">", i)
+                    if j < 0:
+                        spans.append((i, n - i, "decl")); i = n
+                    else:
+                        spans.append((i, j + 1 - i, "decl")); i = j + 1
+                    continue
+                if text[i] == "<":
+                    spans.append((i, 1, "punct")); i += 1
+                    mo = self._tag.match(text, i)
+                    if mo:
+                        pending_tag = mo.group().lower()
+                        spans.append((i, mo.end() - i, "tag")); i = mo.end()
+                    else:
+                        pending_tag = ""
+                    state = self.S_TAG; continue
+                if text[i] == "&":
+                    mo = self._entity.match(text, i)
+                    if mo:
+                        spans.append((i, mo.end() - i, "entity")); i = mo.end(); continue
+                i += 1
+            elif state == self.S_TAG:
+                if text.startswith("/>", i):
+                    spans.append((i, 2, "punct")); i += 2; state = self.S_TEXT; continue
+                ch = text[i]
+                if ch == ">":
+                    spans.append((i, 1, "punct")); i += 1
+                    if pending_tag == "script":
+                        state = self.S_SCRIPT
+                    elif pending_tag == "style":
+                        state = self.S_STYLE
+                    else:
+                        state = self.S_TEXT
+                    pending_tag = ""; continue
+                if ch in "\"'":
+                    j = i + 1
+                    while j < n and text[j] != ch:
+                        j += 1
+                    if j < n:
+                        j += 1
+                    spans.append((i, j - i, "value")); i = j; continue
+                if ch == "=":
+                    spans.append((i, 1, "punct")); i += 1; continue
+                mo = self._attr.match(text, i)
+                if mo:
+                    spans.append((i, mo.end() - i, "attr")); i = mo.end(); continue
+                i += 1
+            elif state == self.S_COMMENT:
+                j = text.find("-->", i)
+                if j < 0:
+                    spans.append((i, n - i, "comment")); i = n
+                else:
+                    spans.append((i, j + 3 - i, "comment")); i = j + 3; state = self.S_TEXT
+                continue
+            else:  # S_SCRIPT / S_STYLE
+                close = "</script" if state == self.S_SCRIPT else "</style"
+                rules = self._js if state == self.S_SCRIPT else self._css
+                j = text.lower().find(close, i)
+                if j >= 0:
+                    if j > i:
+                        spans.extend(self._code_spans(text[i:j], i, rules))
+                    i = j; state = self.S_TEXT; continue
+                if i < n:
+                    spans.extend(self._code_spans(text[i:n], i, rules))
+                i = n
+        for start, length, key in spans:
+            if length > 0:
+                self.setFormat(start, length,
+                               self._fmts.get(key, self._fmts["punct"]))
+        self.setCurrentBlockState(state)
+
+
 class CodeHighlighter(QSyntaxHighlighter):
     """多语言通用语法高亮：关键字 / 字符串 / 数字 / 注释 / 参数 / 函数调用 / URL。
 
@@ -474,8 +633,20 @@ class CodeView(QPlainTextEdit):
 
     # -------------------------------------------------- 语法语言
     def set_language(self, language: Optional[str]) -> None:
-        """切换代码语言；None 恢复 JSON 高亮，其他语言用通用高亮器。"""
+        """切换代码语言。
+
+        None → JSON 高亮；xml / html → 专门的 HTML 高亮器；其他语言 → 通用高亮器。
+        之前 xml 会被 CodeHighlighter 静默降级成 python，HTML 因没有 Python
+        关键字而几乎不着色（用户截图里整页灰白），现在走专用规则。
+        """
         hl = getattr(self, "_hl", None)
+        key = (language or "").lower()
+        if key in ("xml", "html", "html5", "xhtml"):
+            if not isinstance(hl, HtmlHighlighter):
+                if hl is not None:
+                    hl.setDocument(None)      # type: ignore[arg-type]
+                self._hl = HtmlHighlighter(self.document())
+            return
         if language is None:
             if not isinstance(hl, JsonHighlighter):
                 if hl is not None:
@@ -494,7 +665,7 @@ class CodeView(QPlainTextEdit):
         """切换主题后重新着色：语法高亮的颜色是写入文本格式的，必须重新高亮。"""
         hl = getattr(self, "_hl", None)
         if hl is not None:
-            if isinstance(hl, CodeHighlighter):
+            if isinstance(hl, (CodeHighlighter, HtmlHighlighter)):
                 hl._rebuild()
             hl.rehighlight()
         self._apply_selections()

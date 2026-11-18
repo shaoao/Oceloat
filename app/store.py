@@ -19,9 +19,22 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.38"
+VERSION = "1.0.39"
 
 CHANGELOG = [
+    {
+        "version": "1.0.39",
+        "date": "2026-11-18",
+        "items": [
+            "HTML / XML 代码高亮改为统一的 One Dark 方案：标签蓝、属性橙、属性值绿、"
+            "注释灰，内嵌 script/style 也分色；此前 xml 被误降级成 Python 高亮，整页灰白",
+            "新增回收站：删除集合 / 文件夹 / 请求先移入回收站，可原样恢复（连子请求和原位置）",
+            "回收站窗口带背景模糊，左侧筛选 + 右侧列表 + 底部详情的差异化布局，纯黑简约",
+            "回收站支持：恢复 / 彻底删除 / 清空、详情、名称 URL 方法搜索、日期范围筛选、"
+            "刷新、多选批量、操作记录时间线与具体删除时间",
+            "侧栏删除改为「移入回收站」，误删不再无法撤销",
+        ],
+    },
     {
         "version": "1.0.38",
         "date": "2026-11-18",
@@ -872,6 +885,11 @@ def _sample_state() -> Dict[str, Any]:
              "children": [folder_demo, folder_demo2]},
         ],
         "history": [],
+        # 回收站：删除的集合 / 文件夹 / 请求先存在这里，可恢复、可彻底删除。
+        # 每条记录保存完整节点快照与原位置，恢复时放回原处。
+        "trash": [],
+        # 回收站操作记录（删除 / 恢复 / 彻底删除 / 清空 / 刷新），最新在前。
+        "trash_ops": [],
         "environments": [
             {"id": "env_local", "name": "Local", "vars": [
                 kv("base_url", "http://localhost:8000"),
@@ -1068,6 +1086,101 @@ class Store:
             if n.get("id") == node_id:
                 siblings.pop(i)
                 return
+
+    # ------------------------------------------------------------ 回收站
+    @property
+    def trash(self) -> List[Dict[str, Any]]:
+        return self.data.setdefault("trash", [])
+
+    @property
+    def trash_ops(self) -> List[Dict[str, Any]]:
+        return self.data.setdefault("trash_ops", [])
+
+    def _trash_log(self, op: str, name: str, detail: str = "") -> None:
+        """记一条回收站操作记录（最新在前，最多留 300 条）。"""
+        self.trash_ops.insert(0, {
+            "op": op,
+            "name": name,
+            "detail": detail,
+            "at": time.time(),
+        })
+        del self.trash_ops[300:]
+
+    def move_to_trash(self, node_id: str) -> bool:
+        """把节点移入回收站：保存完整快照 + 原父/原位置，供原样恢复。"""
+        node, siblings = self.find_with_parent(node_id)
+        if node is None or siblings is None:
+            return False
+        index = next((i for i, n in enumerate(siblings)
+                      if n.get("id") == node_id), -1)
+        parent_id = None
+        for parent, _sibs in self.walk():
+            if any(c.get("id") == node_id for c in (parent.get("children") or [])):
+                parent_id = parent.get("id")
+                break
+        snapshot = copy.deepcopy(node)
+        self.trash.insert(0, {
+            "id": uid(),
+            "node": snapshot,
+            "parent_id": parent_id,
+            "index": index,
+            "deleted_at": time.time(),
+        })
+        siblings.pop(index)
+        self._trash_log("delete", snapshot.get("name", ""),
+                        self._trash_detail(snapshot))
+        return True
+
+    @staticmethod
+    def _trash_detail(node: Dict[str, Any]) -> str:
+        """列表 / 记录里显示的一行摘要：方法 + URL，文件夹显示子项数。"""
+        if node.get("type") == "folder":
+            count = 0
+            stack = list(node.get("children") or [])
+            while stack:
+                cur = stack.pop()
+                if cur.get("type") == "request":
+                    count += 1
+                stack.extend(cur.get("children") or [])
+            return f"{count} 个请求"
+        method = str(node.get("method") or "GET")
+        url = str(node.get("url") or "")
+        return f"{method}  {url}".strip()
+
+    def restore_from_trash(self, trash_id: str) -> Optional[Dict[str, Any]]:
+        """从回收站恢复：放回原来的父节点与原索引；父已不在则退到顶层。"""
+        rec = next((r for r in self.trash if r.get("id") == trash_id), None)
+        if rec is None:
+            return None
+        node = copy.deepcopy(rec["node"])
+        parent_id = rec.get("parent_id")
+        index = int(rec.get("index", 0))
+        parent = self.find(parent_id) if parent_id else None
+        if parent is not None and parent.get("type") == "folder":
+            kids = parent.setdefault("children", [])
+            kids.insert(min(max(0, index), len(kids)), node)
+            parent["open"] = True
+        else:
+            self.collections.insert(min(max(0, index), len(self.collections)), node)
+        self.trash.remove(rec)
+        self._trash_log("restore", node.get("name", ""), self._trash_detail(node))
+        return node
+
+    def purge_from_trash(self, trash_id: str) -> bool:
+        rec = next((r for r in self.trash if r.get("id") == trash_id), None)
+        if rec is None:
+            return False
+        name = rec.get("node", {}).get("name", "")
+        self.trash.remove(rec)
+        self._trash_log("purge", name, "彻底删除，无法恢复")
+        return True
+
+    def clear_trash(self) -> int:
+        n = len(self.trash)
+        if n:
+            self.trash.clear()
+            self._trash_log("clear", "", f"清空回收站，{n} 项被彻底删除")
+        return n
 
     def move_node(self, node_id: str, parent_id: Optional[str], index: int) -> None:
         node, siblings = self.find_with_parent(node_id)

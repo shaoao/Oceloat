@@ -691,6 +691,7 @@ class MainWindow(QWidget):
         self.sidebar.changed.connect(self._on_store_changed)
         self.sidebar.runFolder.connect(self.run_collection)
         self.sidebar.transferRequested.connect(self.open_transfer)
+        self.sidebar.trashRequested.connect(self.open_trash)
         self.sidebar.notify.connect(lambda msg: self.toast.show_message(msg, "success"))
 
         content = ContentSurface()
@@ -2014,6 +2015,14 @@ class MainWindow(QWidget):
 
         dlg = TransferDialog(self.store, self)
         dlg.imported.connect(self._on_imported)
+        dlg.exec()
+
+    def open_trash(self) -> None:
+        """回收站：恢复误删的集合 / 请求，查看操作记录。"""
+        from .trash_dialog import TrashDialog
+
+        dlg = TrashDialog(self.store, self)
+        dlg.changed.connect(self._on_store_changed)
         dlg.exec()
 
     def _on_imported(self, count: int) -> None:

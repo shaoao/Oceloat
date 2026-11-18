@@ -1308,3 +1308,47 @@ _EN.update({
     "连接已关闭（{code}）{reason}": "Connection closed ({code}) {reason}",
     "连接往返延迟 {ms} ms": "Round-trip latency {ms} ms",
 })
+
+# ---------------------------------------------------------------- 回收站
+_EN.update({
+    "回收站": "Trash",
+    "回收站（空）": "Trash (empty)",
+    "移入回收站": "Move to Trash",
+    "恢复选中": "Restore selected",
+    "彻底删除": "Delete permanently",
+    "清空回收站": "Empty trash",
+    "清空": "Empty",
+    "操作记录": "Activity log",
+    "删除时间": "Deleted at",
+    "全部条目": "All items",
+    "最早删除": "Oldest deleted",
+    "包含": "Contains",
+    "原位置": "Original location",
+    "顶层": "Top level",
+    "选中一条，查看完整详情": "Select an item to see full details",
+    "暂无操作记录": "No activity yet",
+    "搜索名称 / URL / 方法": "Search name / URL / method",
+    "不限": "Any time",
+    "今天": "Today",
+    "7天": "7 days",
+    "30天": "30 days",
+    "自定义": "Custom",
+    "已恢复 {n} 项": "Restored {n} item(s)",
+    "已彻底删除 {n} 项": "Permanently deleted {n} item(s)",
+    "已清空回收站（{n} 项）": "Trash emptied ({n} item(s))",
+    "显示 {shown} / {total} 项": "Showing {shown} / {total}",
+    "已选中 {n} 项，可批量恢复或彻底删除":
+        "{n} selected — restore or delete in batch",
+    "彻底删除选中的 {n} 项？此操作无法恢复。":
+        "Permanently delete {n} selected item(s)? This cannot be undone.",
+    "清空回收站里的全部 {n} 项？此操作无法恢复。":
+        "Empty all {n} item(s) in trash? This cannot be undone.",
+    "把「{name}」移入回收站？可随时恢复。":
+        "Move \"{name}\" to trash? You can restore it anytime.",
+    "「{name}」里还有 {n} 个请求，会一起移入回收站，可随时恢复。":
+        "\"{name}\" still has {n} request(s); they will be moved to trash too and can be restored.",
+    "已把「{name}」移入回收站": "Moved \"{name}\" to trash",
+    "原文件夹 {id}": "Original folder {id}",
+    "今天 {t}": "Today {t}",
+    "昨天 {t}": "Yesterday {t}",
+})

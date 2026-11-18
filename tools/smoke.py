@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 
@@ -3155,6 +3156,74 @@ def main() -> int:
               w.response.pill._title() in ("未连接", "已断开"),
               w.response.pill._title())
         check("失败后同样不显示耗时 / 大小", not w.response.time_label.isVisible())
+
+        # ---- HTML 统一高亮（v1.0.39）：xml/html 不再被降级成 Python ----
+        from app.code_editor import HtmlHighlighter
+        from app.store import new_request as _nr, new_folder as _nf, Store as _Store
+        cv = CodeView(read_only=True, highlight=True)
+        cv.set_language("xml")
+        cv.setPlainText('<html lang="en">\n<link rel="preload" href="/a.woff2">\n')
+        cv.document().idealWidth()
+        check("HTML 走专用高亮器而非降级 Python", isinstance(cv._hl, HtmlHighlighter),
+              type(cv._hl).__name__)
+        blk = cv.document().findBlockByNumber(0)
+        colors = set()
+        for r in blk.layout().formats():
+            colors.add(QColor(r.format.foreground().color()).name())
+        check("HTML 行多种 token 分色（标签/属性/值/标点）", len(colors) >= 4,
+              str(sorted(colors)))
+        cv.set_language("xml")  # 重复设置不报错
+        check("重复切 HTML 语言稳定", isinstance(cv._hl, HtmlHighlighter))
+
+        # ---- 回收站（v1.0.39）----
+        tdir = Path(tempfile.mkdtemp(prefix="ocelot_trash_"))
+        st = _Store.load(tdir / "state.json")
+        base = len(st.collections)
+        folder = _nf("回收测试文件夹")
+        req = _nr("登录", "POST", "https://api.test/login")
+        folder["children"] = [req]
+        st.collections.append(folder)
+        check("回收站初始为空", len(st.trash) == 0)
+        check("删除=移入回收站", st.move_to_trash(folder["id"]))
+        check("移入后集合树少一项", len(st.collections) == base)
+        check("回收站收到一条", len(st.trash) == 1)
+        rec = st.trash[0]
+        check("快照含子请求", len(rec["node"].get("children") or []) == 1)
+        check("文件夹摘要显示子请求数", "1" in st._trash_detail(rec["node"]))
+        check("请求摘要带方法与 URL",
+              "POST" in st._trash_detail(req) and "api.test" in st._trash_detail(req))
+        check("删除留下操作记录", st.trash_ops and st.trash_ops[0]["op"] == "delete")
+        restored = st.restore_from_trash(rec["id"])
+        check("恢复后回到集合树", restored is not None and len(st.collections) == base + 1)
+        check("恢复回原位置", st.collections.index(restored) == base)
+        check("恢复后回收站清空", len(st.trash) == 0)
+        check("恢复也记操作记录", st.trash_ops[0]["op"] == "restore")
+        st.move_to_trash(folder["id"])
+        check("彻底删除成功", st.purge_from_trash(st.trash[0]["id"]))
+        check("彻底删除后为空", len(st.trash) == 0)
+        for k in range(3):
+            r = _nr(f"批量{k}")
+            st.collections.append(r)
+            st.move_to_trash(r["id"])
+        check("清空返回条数", st.clear_trash() == 3 and len(st.trash) == 0)
+        check("清空记操作记录", st.trash_ops[0]["op"] == "clear")
+
+        # 回收站窗口能实例化、模糊开启、条目与统计正确
+        from app.trash_dialog import TrashDialog
+        st.collections.append(_nr("窗口测试", "GET", "https://x.test"))
+        st.move_to_trash(st.collections[-1]["id"])
+        dlg = TrashDialog(st, w)
+        check("回收站窗口是模糊固定窗", dlg.BLUR_FIXED is True)
+        check("回收站窗口显示条目", len(dlg.list.items) == 1, str(len(dlg.list.items)))
+        check("回收站统计条有数", dlg.stat_total.text() == "1", dlg.stat_total.text())
+        dlg.list.selected = {dlg.list.items[0]["id"]}
+        dlg.list.picked.emit()
+        check("回收站详情可显示", dlg.detail._lay.count() > 0)
+        dlg._on_search("x.test")
+        check("回收站按 URL 搜索", len(dlg.list.items) == 1)
+        dlg._on_search("不存在的关键词")
+        check("回收站搜索无结果", len(dlg.list.items) == 0)
+        dlg.deleteLater()
         return 0
 
     def finish():

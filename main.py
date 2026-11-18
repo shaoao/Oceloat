@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 MIN_PY = (3, 10)
 
 
+
 def _fail(msg: str, code: int = 2) -> None:
     """在 IDE 的运行面板里给出可读的中文提示，而不是一大段 traceback。"""
     print(f"\n[Ocelot] {msg}\n", file=sys.stderr, flush=True)

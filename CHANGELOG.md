@@ -1,5 +1,30 @@
 # What's Changed
 
+## v1.0.39 — 2026-11-18
+
+**Added**
+- Trash for deleted collections / folders / requests. Deletes now move items to
+  the trash instead of erasing them, and restore puts the whole subtree back at
+  its original position.
+- A blurred, fixed Trash window with a distinctive three-part layout: filter
+  rail on the left, item list on the right, detail panel at the bottom. Pure
+  black minimal theme, no gradients or colored outlines.
+- Full trash toolkit: restore, delete permanently, empty, detail view, search
+  by name / URL / method, date-range filtering (today / 7d / 30d / custom),
+  refresh, multi-select batch actions, an activity timeline and exact delete
+  timestamps. Sidebar entry shows the item count.
+
+**Fixed / Changed**
+- HTML / XML code highlighting now uses the unified One Dark scheme (blue tags,
+  amber attributes, green values, gray punctuation, colored inline script /
+  style). `xml` was previously downgraded to the Python highlighter, leaving
+  markup almost entirely gray.
+- Sidebar delete is now "Move to Trash" with an accurate, reassuring prompt
+  instead of an irreversible-delete warning.
+
+**Verified**
+- Self-test suite: 579 checks, 0 failures.
+
 ## v1.0.38 — 2026-11-18
 
 **Fixed**

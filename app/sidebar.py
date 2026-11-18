@@ -570,6 +570,7 @@ class Sidebar(QWidget):
     requestDeleted = pyqtSignal(str)
     runFolder = pyqtSignal(str)             # 右键「运行集合」：folder node id
     transferRequested = pyqtSignal()        # 搜索框右侧的导入 / 导出按钮
+    trashRequested = pyqtSignal()           # 打开回收站
     changed = pyqtSignal()
     notify = pyqtSignal(str)
 
@@ -601,8 +602,11 @@ class Sidebar(QWidget):
         # 搜索框右侧：导入 / 导出（一个按钮，一个对话框，导入导出都在里面切换）
         self.transfer_btn = icon_button("transfer", "导入 / 导出集合", 28, 14)
         self.transfer_btn.clicked.connect(self.transferRequested.emit)
+        # 回收站入口：带一个角标显示条目数（0 时隐藏）
+        self.trash_btn = icon_button("trash", i18n.tr("回收站"), 28, 14)
+        self.trash_btn.clicked.connect(self.trashRequested.emit)
         # 搜索框吃掉全部剩余宽度，紧贴右侧按钮 —— 中间留一段空白既浪费又难看
-        root.addWidget(HBox((self.search, 1), self.transfer_btn, spacing=6))
+        root.addWidget(HBox((self.search, 1), self.transfer_btn, self.trash_btn, spacing=6))
 
         # 集合树
         self.tree = CollectionsTree()
@@ -657,8 +661,14 @@ class Sidebar(QWidget):
         else:
             self.refresh_history()
 
+    def _sync_trash_badge(self) -> None:
+        n = len(self.store.trash) if hasattr(self.store, "trash") else 0
+        self.trash_btn.setToolTip(i18n.trf("回收站 · {n} 项", n=n) if n
+                                  else i18n.tr("回收站（空）"))
+
     # -------------------------------------------------- 集合树
     def refresh(self) -> None:
+        self._sync_trash_badge()
         expanded = self._expanded_ids()
         self.tree.blockSignals(True)
         self.tree.clear()
@@ -904,30 +914,30 @@ class Sidebar(QWidget):
             return
         if confirm and not self._confirm_delete(node):
             return
-        self.store.remove_node(node_id)
+        name = node.get("name", "")
+        # 删除改为移入回收站：误删可在回收站原样恢复，无需再吓唬用户「无法撤销」。
+        self.store.move_to_trash(node_id)
         self.store.save()
         self.refresh()
-        if node:
-            self.requestDeleted.emit(node_id)
-        self.notify.emit(i18n.trf("已删除「{name}」", name=node.get("name", ""))
-                         if node else i18n.tr("已删除"))
+        self.requestDeleted.emit(node_id)
+        self.notify.emit(i18n.trf("已把「{name}」移入回收站", name=name))
         self.changed.emit()
 
     def _confirm_delete(self, node: Dict[str, Any]) -> bool:
-        """删除前二次确认 —— 集合树一删就没，误点一次代价太大。"""
+        """删除前确认 —— 现在只是移入回收站，仍可恢复，文案说清楚。"""
         from .dialogs import ConfirmDialog
 
         name = node.get("name") or i18n.tr("未命名")
         if node.get("type") == "folder":
             count = _count_requests(node)
-            title = i18n.tr("删除文件夹")
-            message = i18n.trf("「{name}」里还有 {n} 个请求，删除后一起消失，且无法撤销。",
+            title = i18n.tr("移入回收站")
+            message = i18n.trf("「{name}」里还有 {n} 个请求，会一起移入回收站，可随时恢复。",
                                name=name, n=count) if count else \
-                i18n.trf("删除文件夹「{name}」？此操作无法撤销。", name=name)
+                i18n.trf("把「{name}」移入回收站？可随时恢复。", name=name)
         else:
-            title = i18n.tr("删除请求")
-            message = i18n.trf("删除请求「{name}」？此操作无法撤销。", name=name)
-        return ConfirmDialog.ask(self.window(), title, message, i18n.tr("删除"))
+            title = i18n.tr("移入回收站")
+            message = i18n.trf("把「{name}」移入回收站？可随时恢复。", name=name)
+        return ConfirmDialog.ask(self.window(), title, message, i18n.tr("移入回收站"))
 
     def duplicate_node(self, node_id: str) -> None:
         self.store.duplicate_node(node_id)
