@@ -1478,3 +1478,83 @@ _EN.update({
     "导出事件日志…": "Export event log…",
     "清空事件日志": "Clear event log",
 })
+
+# AI（设置页 / 生成请求体 / 解释报错）与全局变量（v1.0.51）
+_EN.update({
+    "AI": "AI",
+    "配置一次，之后生成测试数据、解释报错都能直接用。":
+        "Configure once — then generate test data and explain errors right from the request.",
+    "还没填 API Key": "No API key yet",
+    "还没填 API Key，请到设置 → AI 里填一个":
+        "No API key yet — add one in Settings → AI",
+    "还没选模型": "No model selected",
+    "API Key 无效或没有权限，请到设置 → AI 里重新粘贴":
+        "API key is invalid or lacks permission — paste it again in Settings → AI",
+    "接口或模型不存在，检查模型 ID 与服务地址":
+        "Endpoint or model not found — check the model ID and base URL",
+    "请求太频繁或免费额度用完了，稍等一会儿再试":
+        "Too many requests or the free quota is used up — try again later",
+    "模型名不被接受，换一个模型试试": "Model name rejected — pick another model",
+    "服务端出错（HTTP {code}），通常是临时的，重试即可":
+        "Server error (HTTP {code}) — usually temporary, just retry",
+    "请求失败（HTTP {code}）{detail}": "Request failed (HTTP {code}){detail}",
+    "连不上模型服务：{err}": "Cannot reach the model service: {err}",
+    "连接超时，检查网络或代理": "Connection timed out — check your network or proxy",
+    "生成失败：{err}": "Generation failed: {err}",
+    "模型返回了空内容，换个说法再试": "The model returned nothing — try a different wording",
+    "粘贴 API Key": "Paste your API key",
+    "显示": "Show",
+    "隐藏": "Hide",
+    "保存并测试": "Save & test",
+    "{name} · {hint}": "{name} · {hint}",
+    "模型（全部免费额度内可用）": "Models (all usable on the free quota)",
+    "自定义模型": "Custom model",
+    "接入新模型：填上模型 ID 就能用，不用等更新。":
+        "Add a new model: just enter its ID — no update needed.",
+    "自定义模型 ID，例如 glm-4-flash": "Custom model ID, e.g. glm-4-flash",
+    "添加并使用": "Add & use",
+    "服务地址": "Base URL",
+    "仅在用中转或自建网关时填写。": "Only needed for proxies or self-hosted gateways.",
+    "留空用官方地址；中转/自建网关填这里":
+        "Leave empty for the official endpoint; fill in for proxies or gateways",
+    "· 请求体里点「AI 生成」：按字段名生成一份真实数据，边生成边写进编辑器":
+        "· In the request body, hit \"AI generate\": real data by field name, streamed into the editor",
+    "· 响应报错时点「AI 解释」：直接给原因和修法，不用自己猜":
+        "· On a failed response, hit \"Explain with AI\": get the cause and the fix",
+    "· Key 只存在本机 state.json，不会上传到任何地方":
+        "· The key is stored only in the local state.json — never uploaded",
+    "已保存，可以开始用了": "Saved — you're all set",
+    "正在测试…": "Testing…",
+    "已切换到 {model}": "Switched to {model}",
+    "连接正常，{model} 可用": "Connected — {model} is ready",
+    "AI 生成": "AI generate",
+    "按字段名生成一份真实数据，边生成边写进编辑器":
+        "Generate realistic data from the field names, streamed into the editor",
+    "生成中…": "Generating…",
+    "已生成请求体，可以再改": "Body generated — feel free to tweak it",
+    "生成内容为空，再试一次": "Nothing was generated — try again",
+    "用 AI 解释": "Explain with AI",
+    "用 AI 解释这个响应": "Explain this response with AI",
+    "分析中…": "Analyzing…",
+    "全局变量": "Global variables",
+    "跨环境复用的变量，比如公共域名、团队 Token、通用 ID。":
+        "Variables shared across environments: public host, team token, common IDs.",
+    "添加全局变量": "Add a global variable",
+    "在所有请求里用 {{名字}} 引用；环境变量里同名的会覆盖全局变量。":
+        "Reference them as {{name}} anywhere; a same-named environment variable wins.",
+    "关闭": "Close",
+})
+
+# AI 模型卡片与 Key 提示（v1.0.51）
+_EN.update({
+    "智谱 GLM": "Zhipu GLM",
+    "在智谱开放平台「API Keys」里创建，形如 xxxxxxxx.yyyyyyyy":
+        "Create one under API Keys on the Zhipu open platform; looks like xxxxxxxx.yyyyyyyy",
+    "默认 · 快照固定，最快最稳": "Default · pinned, fastest",
+    "跟随官方默认版，会随官方升级": "Official default, auto-upgraded",
+    "推理更强，思考过程更细": "Stronger reasoning, deeper thinking",
+    "最严谨，但慢，适合绕的问题": "Most rigorous, slow — tricky cases",
+    "会思考": "thinks",
+    "原生思考": "native thinking",
+    "自定义": "Custom",
+})

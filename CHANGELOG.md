@@ -1,5 +1,20 @@
 # What's Changed
 
+## v1.0.51 — 2026-11-19
+
+**Fixed**
+- Tab drag-and-drop is smooth again: reordering now reports once on mouse release instead of syncing `state.json` on every frame, tab widths/rects are cached, and the indicator snaps instead of restarting an animation mid-drag.
+
+**Added**
+- Global variables: available in every environment and request via `{{name}}`; a same-named environment variable overrides them. Manage them in Settings → Global variables.
+- AI settings page: paste a Zhipu GLM API key and go. Four preset model cards (GLM-4-Flash 250414/latest, GLM-4.5, GLM-4.1V), one-click connection test, plus custom model ID and base URL for proxies or self-hosted gateways.
+- AI body generation: in a JSON body, "AI generate" builds realistic data from the existing field names (or param keys), streams it into the editor and formats it when done.
+- AI error explanation: available on the failure page and in the response "more" menu — returns the cause plus concrete fixes.
+
+**Changed**
+- Sidebar methods longer than 4 characters are abbreviated to 3 letters (PATCH → PAT, DELETE → DEL, OPTIONS → OPT) so names get more room.
+- The Params tab of HTTP, WebSocket and Socket.IO no longer offers the File type (query params can't carry files); multipart form uploads keep it.
+
 ## v1.0.50 — 2026-11-19
 
 **Changed**

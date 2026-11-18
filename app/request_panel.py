@@ -550,6 +550,7 @@ class UrlBar(QWidget):
 
 class BodyPage(QWidget):
     changed = pyqtSignal()
+    aiRequested = pyqtSignal()      # 点「AI 生成」：由 RequestEditor 拼上下文并调模型
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -573,6 +574,10 @@ class BodyPage(QWidget):
         cf.addWidget(self.code, 1)
 
         self.json_status = Label("", 10.5, theme().text_faint, mono_font=True)
+        self.ai_btn = Button("AI 生成", "spark", kind="ghost", height=24, padding=8,
+                             font_size=11.5, icon_size=12,
+                             tooltip="按字段名生成一份真实数据，边生成边写进编辑器")
+        self.ai_btn.clicked.connect(self.aiRequested.emit)
         self.format_btn = Button("Format", None, kind="ghost", height=24, padding=8, font_size=11.5)
         self.format_btn.clicked.connect(self._format)
         self.minify_btn = Button("Minify", None, kind="ghost", height=24, padding=8, font_size=11.5)
@@ -583,7 +588,7 @@ class BodyPage(QWidget):
         self.raw_lang_tabs.changed.connect(self._on_raw_lang)
         self._raw_lang = "json"
         self.code_tools = HBox(self.raw_lang_tabs, 4, self.json_status, 1,
-                               self.format_btn, self.minify_btn, spacing=4)
+                               self.ai_btn, self.format_btn, self.minify_btn, spacing=4)
 
         # 表单（带类型列：File 类型直接选文件上传，走 multipart/form-data）
         self.form = KVEditor("字段", "值", empty_hint="添加表单字段",
@@ -693,6 +698,7 @@ class BodyPage(QWidget):
         self.code_tools.setVisible(mode in ("raw", "json", "xml", "text"))
         self.format_btn.setVisible(eff in ("json", "xml"))
         self.minify_btn.setVisible(eff == "json")
+        self.ai_btn.setVisible(eff == "json")
         self.json_status.setVisible(eff in ("json", "xml"))
         self.code.setVisible(mode != "none")
 
@@ -1314,6 +1320,8 @@ class RequestEditor(QWidget):
     deleteRequested = pyqtSignal()
     mockRequested = pyqtSignal()
     duplicateRequested = pyqtSignal()
+    notify = pyqtSignal(str)            # 底部浮动提示
+    aiSettingsRequested = pyqtSignal()  # 没配 Key：直接打开设置 → AI
 
     def __init__(self, store: Store, parent=None):
         super().__init__(parent)
@@ -1341,7 +1349,7 @@ class RequestEditor(QWidget):
         tools = HBox(self.tabs, 1, spacing=8)
 
         self.params = KVEditor("参数名", "值", empty_hint="添加查询参数", with_types=True,
-                               file_tooltip="URL 查询参数无法携带文件；文件上传请在「请求体 → Form 表单」里添加")
+                               allow_file=False)
         self.params.changed.connect(self._on_params)
         self.paste_btn = Button("粘贴", None, kind="ghost", height=24, padding=8, font_size=11.5,
                                 tooltip="从剪贴板批量导入：a=1&b=2 / 多行 key: value / JSON")
@@ -1364,6 +1372,7 @@ class RequestEditor(QWidget):
 
         self.body = BodyPage()
         self.body.changed.connect(self._on_body)
+        self.body.aiRequested.connect(self._ai_fill_body)
         self.auth = AuthPage(store=self.store)
         self.auth.changed.connect(self._on_auth)
         self.scripts_pre = ScriptPage(store=self.store, kind="pre")
@@ -1774,6 +1783,85 @@ class RequestEditor(QWidget):
         self._refresh_counts()
         if not self._loading:
             self._sync_request()
+
+    # -------------------------------------------------- AI 生成请求体
+    def _ai_fill_body(self) -> None:
+        """按字段名生成 JSON：有字段用字段，没字段就按接口用途自己设计。
+
+        边生成边写进编辑器（打字机效果），生成完自动格式化成缩进 JSON。
+        """
+        from . import ai as ai_mod
+
+        cfg = ai_mod.config(self.store)
+        ok, why = ai_mod.ready(cfg)
+        if not ok:
+            self.notify.emit(why)
+            self.aiSettingsRequested.emit()
+            return
+        text = self.body.code.toPlainText()
+        keys = ai_mod.json_keys(text)
+        if not keys:
+            keys = [str(r.get("key")) for r in self.params.rows() if r.get("key")]
+        msgs = ai_mod.messages_for_json(
+            keys, self._current_method(), self.urlbar.url_text(), existing=text)
+
+        self._ai_orig = text
+        self._ai_buf = ""
+        self._ai_last = 0.0
+        self.body.ai_btn.setEnabled(False)
+        self.body.ai_btn.setText("生成中…")
+        self.body.code.setPlainText("")
+        self._ai_chat = ai_mod.start(
+            msgs, cfg=cfg, max_tokens=900, temperature=0.5,
+            on_chunk=self._ai_on_chunk, on_done=self._ai_on_done,
+            on_error=self._ai_on_error,
+        )
+
+    def _current_method(self) -> str:
+        try:
+            return str(self.request.get("method") or "GET")
+        except Exception:  # noqa: BLE001
+            return "GET"
+
+    def _ai_on_chunk(self, piece: str) -> None:
+        self._ai_buf += piece
+        # 节流：每 60ms 才刷一次编辑器，避免逐字重排 + 重高亮把界面拖卡
+        import time as _time
+
+        now = _time.perf_counter()
+        if now - getattr(self, "_ai_last", 0.0) > 0.06:
+            self._ai_last = now
+            self.body.code.setPlainText(self._ai_buf)
+
+    def _ai_on_done(self, _full: str) -> None:
+        from . import ai as ai_mod
+
+        self.body.ai_btn.setEnabled(True)
+        self.body.ai_btn.setText("AI 生成")
+        raw = ai_mod.clean_json(getattr(self, "_ai_buf", ""))
+        pretty = raw
+        valid = False
+        try:
+            pretty = json.dumps(json.loads(raw), ensure_ascii=False, indent=2)
+            valid = True
+        except Exception:  # noqa: BLE001
+            pass
+        self.body.code.setPlainText(pretty)
+        self.body.changed.emit()
+        if not pretty.strip():
+            self.notify.emit("生成内容为空，再试一次")
+        elif not valid:
+            # 思考型模型偶尔被 max_tokens 截断：内容照留，但明确告诉用户
+            self.notify.emit("生成的 JSON 不完整，再点一次或加个字段描述")
+        else:
+            self.notify.emit("已生成请求体，可以再改")
+
+    def _ai_on_error(self, message: str) -> None:
+        self.body.ai_btn.setEnabled(True)
+        self.body.ai_btn.setText("AI 生成")
+        # 失败时把原来的内容还回去，别让用户白丢一段请求体
+        self.body.code.setPlainText(getattr(self, "_ai_orig", ""))
+        self.notify.emit(message)
 
     def _on_auth(self) -> None:
         self._refresh_counts()

@@ -741,6 +741,8 @@ class MainWindow(QWidget):
         self.editor.deleteRequested.connect(self._delete_current)
         self.editor.mockRequested.connect(self.open_mock)
         self.editor.duplicateRequested.connect(self._duplicate_request)
+        self.editor.notify.connect(lambda msg: self.toast.show_message(msg, "info"))
+        self.editor.aiSettingsRequested.connect(lambda: self.show_settings("ai"))
         self.response = ResponsePanel()
         self.response.ws_view.replay.connect(self._ws_replay)
         self.response.sio_view.eventReplay.connect(self._sio_replay)
@@ -752,6 +754,7 @@ class MainWindow(QWidget):
         self.response.saveVariable.connect(self._save_env_var)
         self.response.resendRequested.connect(self.send_current)
         self.response.docRequested.connect(self.open_doc)
+        self.response.aiExplainRequested.connect(self._ai_explain_response)
         self.splitter.addWidget(self.editor)
         self.splitter.addWidget(self.response)
         self.splitter.setSizes([380, 420])
@@ -1159,7 +1162,9 @@ class MainWindow(QWidget):
     def _on_tabs_reordered(self, ids: List[str]) -> None:
         order = {tid: i for i, tid in enumerate(ids)}
         self.tabs_data.sort(key=lambda t: order.get(t["id"], 99))
-        self._persist()
+        # 换序合并进 autosave（700ms 一次）：拖拽期间逐帧 _persist（同步写
+        # state.json + 同步所有标签）会把拖动拖成幻灯片。
+        self._autosave.start()
 
     def _tab_context_menu(self, tab_id: str, global_pos) -> None:
         """标签栏右键：关闭 / 关闭其他 / 关闭全部 / 复制标签 / 复制为 cURL。"""
@@ -2068,6 +2073,38 @@ class MainWindow(QWidget):
         # 让自绘部分（侧栏行高、标签条、状态胶囊）跟着新系数画。
         dlg.uiScaleChanged.connect(self._on_scale_applied)
         dlg.exec()
+
+    def _ai_explain_response(self) -> None:
+        """用 AI 解释失败/异常响应：给原因 + 修法，流式输出。"""
+        from . import ai as ai_mod
+
+        cfg = ai_mod.config(self.store)
+        ok, why = ai_mod.ready(cfg)
+        if not ok:
+            self.toast.show_message(why, "info")
+            self.show_settings("ai")
+            return
+        detail = self.response.ai_detail()
+        req = self.editor.request or {}
+        msgs = ai_mod.messages_for_error(
+            str(req.get("method") or "GET"), str(req.get("url") or ""),
+            int(detail.get("status") or 0), detail.get("detail") or "",
+            detail.get("body") or "")
+        self.response.set_ai_explaining(True)
+        self._ai_explain_buf = ""
+        self._ai_explain_chat = ai_mod.start(
+            msgs, cfg=cfg, max_tokens=420, temperature=0.3,
+            on_chunk=self._ai_explain_chunk,
+            on_done=lambda _t: self.response.set_ai_explaining(False),
+            on_error=self._ai_explain_failed)
+
+    def _ai_explain_chunk(self, piece: str) -> None:
+        self._ai_explain_buf = getattr(self, "_ai_explain_buf", "") + piece
+        self.response.show_ai_explanation(self._ai_explain_buf)
+
+    def _ai_explain_failed(self, message: str) -> None:
+        self.response.set_ai_explaining(False)
+        self.toast.show_message(message, "error")
 
     def _on_scale_applied(self, _scale: float) -> None:
         for widget in (self.sidebar, self.tabstrip, self.editor, self.response,

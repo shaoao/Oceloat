@@ -39,7 +39,7 @@ from . import i18n, icons
 from .code_editor import human_elapsed
 from .store import Store, new_folder, new_request
 from .anim import stop as _anim_stop
-from .theme import C, method_color, px, status_color, font, mono, theme
+from .theme import C, method_color, method_short, px, status_color, font, mono, theme
 from .widgets import Button, HBox, Label, Menu, animate, icon_button
 
 ROLE_ID = Qt.ItemDataRole.UserRole
@@ -427,7 +427,8 @@ class TreeDelegate(QStyledItemDelegate):
             # 方法列宽按字号一起放大，否则 150% 下 POST 会被裁成 POS
             mw = px(36)
             p.drawText(QRectF(x, rect.top(), mw, rect.height()),
-                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), method)
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                       method_short(method))
             x += mw + 2
             is_open = node.get("id") in self.tree.open_ids
             avail = rect.right() - x - (12 if is_open else 4)
@@ -630,7 +631,7 @@ class HistoryRow(QWidget):
         p.setPen(mcol)
         p.drawText(QRectF(r.left() + 8, r.top() + 5, 36, 14),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                   (e.get("method") or "GET").upper())
+                   method_short(e.get("method") or "GET"))
         # URL
         p.setFont(mono(11.2))
         p.setPen(C(t.text) if self._hover_v > 0.4 else C(t.text_dim))

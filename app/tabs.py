@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from . import icons
 from .anim import animations_on, running as _anim_running, stop as _anim_stop
-from .theme import C, font, method_color, mono, theme
+from .theme import C, font, method_color, method_short, mono, theme
 
 TAB_H = 27
 MARGIN_Y = 6
@@ -47,7 +47,16 @@ class TabStrip(QWidget):
         # 拖拽浮层：记录鼠标相对标签左边缘的抓取偏移，让浮起的标签跟手移动
         self._drag_pos: Optional[QPointF] = None
         self._drag_grab = QPointF()
+        # 拖拽期间只标记顺序脏，松手时才向外发一次（每帧发信号会触发主窗口写盘 → 卡顿）
+        self._order_dirty = False
         self._font = font(12.2, weight=QFont.Weight.Medium)
+        self._fm = QFontMetricsF(self._font)
+        self._badge_font = mono(8.2, QFont.Weight.Bold)
+        self._badge_fm = QFontMetricsF(self._badge_font)
+        # 几何缓存：标签宽度/矩形每帧都会被取好几次，算一遍存起来即可。
+        # 任何影响布局的变化（标签增删改、尺寸、滚动）都要 _invalidate_geometry()。
+        self._widths: Optional[List[float]] = None
+        self._rect_cache: Optional[List[QRectF]] = None
         self._indicator = QRectF()
         self._ind_from = QRectF()
         self._ind_to = QRectF()
@@ -75,8 +84,15 @@ class TabStrip(QWidget):
     RIGHT_PAD = 9.0
     CLOSE_W = 16.0
 
+    def _invalidate_geometry(self) -> None:
+        """标签内容 / 宽度 / 滚动变了才需要重算几何。"""
+        self._widths = None
+        self._rect_cache = None
+
     def _tab_widths(self) -> List[float]:
-        fm = QFontMetricsF(self._font)
+        if self._widths is not None and len(self._widths) == len(self.tabs):
+            return self._widths
+        fm = self._fm
         widths = []
         for tab in self.tabs:
             tw = fm.horizontalAdvance(tab.get("title") or "Untitled")
@@ -91,15 +107,19 @@ class TabStrip(QWidget):
             if shrinkable > 0:
                 factor = min(1.0, excess / shrinkable)
                 widths = [w - max(0.0, w - 100) * factor for w in widths]
+        self._widths = widths
         return widths
 
     def _rects(self) -> List[QRectF]:
+        if self._rect_cache is not None and len(self._rect_cache) == len(self.tabs):
+            return self._rect_cache
         widths = self._tab_widths()
         rects = []
         x = 8.0 - self._scroll
         for w in widths:
             rects.append(QRectF(x, MARGIN_Y, w, TAB_H))
             x += w + 4
+        self._rect_cache = rects
         return rects
 
     def _content_width(self) -> float:
@@ -111,11 +131,13 @@ class TabStrip(QWidget):
         self.tabs = [dict(t) for t in tabs]
         self._current = current or (self.tabs[0]["id"] if self.tabs else None)
         self._scroll = 0.0
+        self._invalidate_geometry()
         self._snap_indicator()
         self.update()
 
     def add_tab(self, tab: Dict, activate: bool = True, animate: bool = True) -> None:
         self.tabs.append(dict(tab))
+        self._invalidate_geometry()
         if activate or self._current is None:
             prev = self._current
             self._current = tab["id"]
@@ -128,6 +150,7 @@ class TabStrip(QWidget):
 
     def remove_tab(self, tab_id: str) -> None:
         self.tabs = [t for t in self.tabs if t["id"] != tab_id]
+        self._invalidate_geometry()
         if self._current == tab_id:
             self._current = self.tabs[-1]["id"] if self.tabs else None
             self._begin_switch(None)
@@ -148,6 +171,7 @@ class TabStrip(QWidget):
                     tab["dirty"] = dirty
                 if preview is not None:
                     tab["preview"] = preview
+                self._invalidate_geometry()
                 # 标题变了宽度也变，的胶囊不跟着更新就会把 + 包进去
                 if _anim_running(self._ind_anim):
                     self._animate_indicator()
@@ -273,12 +297,16 @@ class TabStrip(QWidget):
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
+        self._invalidate_geometry()
         if not _anim_running(self._ind_anim):
             self._snap_indicator()
 
     def _normalize_scroll(self) -> None:
         overflow = self._content_width() - self.width()
-        self._scroll = max(0.0, min(self._scroll, max(0.0, overflow)))
+        new = max(0.0, min(self._scroll, max(0.0, overflow)))
+        if abs(new - self._scroll) > 0.01:
+            self._scroll = new
+            self._invalidate_geometry()
 
     # -------------------------------------------------- 交互
     def _hit(self, pos) -> Optional[str]:
@@ -305,31 +333,43 @@ class TabStrip(QWidget):
 
     def mouseMoveEvent(self, e):  # noqa: N802
         pos = e.position().toPoint()
-        hover = self._hit(pos)
-        close = None
-        if hover:
-            for tab, rect in zip(self.tabs, self._rects()):
-                if tab["id"] == hover and self._close_rect(rect).contains(e.position()):
-                    close = hover
-        plus_hover = self._plus_rect().contains(e.position())
-        if plus_hover != getattr(self, "_hover_plus", False):
-            self._hover_plus = plus_hover
-            self.update()
-        if hover != self._hover or close != self._hover_close:
-            self._hover = hover
-            self._hover_close = close
-            self.setCursor(Qt.CursorShape.PointingHandCursor if (hover or close) else Qt.CursorShape.ArrowCursor)
-            self.update()
-        if self._press_id and not self._dragging:
-            if (pos - self._drag_start).manhattanLength() > 6:
+        if not self._dragging:
+            rects = self._rects()
+            hover = None
+            for tab, rect in zip(self.tabs, rects):
+                if rect.contains(e.position()):
+                    hover = tab["id"]
+                    break
+            close = None
+            if hover:
+                for tab, rect in zip(self.tabs, rects):
+                    if tab["id"] == hover and self._close_rect(rect).contains(e.position()):
+                        close = hover
+                        break
+            plus_hover = self._plus_rect().contains(e.position())
+            if plus_hover != getattr(self, "_hover_plus", False):
+                self._hover_plus = plus_hover
+                self.update()
+            if hover != self._hover or close != self._hover_close:
+                self._hover = hover
+                self._hover_close = close
+                self.setCursor(Qt.CursorShape.PointingHandCursor if (hover or close)
+                               else Qt.CursorShape.ArrowCursor)
+                self.update()
+            if self._press_id and (pos - self._drag_start).manhattanLength() > 6:
                 self._dragging = True
                 self._drag_id = self._press_id
+                self._drag_pos = QPointF(e.position())
+                # 拖起来之后不再走悬停高亮，视觉干扰少一半
+                self._hover = None
+                self._hover_close = None
         if self._dragging and self._drag_id:
             self._drag_pos = QPointF(e.position())   # 浮层实时跟随光标
+            rects = self._rects()
             cur = next((j for j, t in enumerate(self.tabs) if t["id"] == self._drag_id), None)
             if cur is not None:
                 target = len(self.tabs)
-                for j, rect in enumerate(self._rects()):
+                for j, rect in enumerate(rects):
                     if rect.center().x() > pos.x():
                         target = j
                         break
@@ -337,8 +377,14 @@ class TabStrip(QWidget):
                     target -= 1
                 if target != cur and 0 <= target < len(self.tabs):
                     self.tabs.insert(target, self.tabs.pop(cur))
-                    self.orderChanged.emit(self.ids())
-                    self._snap_indicator()
+                    self._order_dirty = True
+                    self._invalidate_geometry()
+                    # 拖拽期间指示器直接对齐：以前每次换序都重启一次动画，
+                    # 拖动中每帧都在停/起动画，这才是「拖起来发涩」的主因。
+                    if self._ind_anim is not None:
+                        _anim_stop(self._ind_anim)
+                        self._ind_anim = None
+                    self._indicator = self._active_rect()
             # 即使没有跨过别的标签，浮层也要跟着鼠标动
             self.update()
         super().mouseMoveEvent(e)
@@ -367,6 +413,7 @@ class TabStrip(QWidget):
         self._press_id = tab_id
         self._drag_start = pos
         self._dragging = False
+        self._order_dirty = False
         # 抓取偏移在按下瞬间记录：浮层从第一帧就跟着鼠标，而不是先钉在原位
         idx = next((j for j, t in enumerate(self.tabs) if t["id"] == tab_id), None)
         if idx is not None:
@@ -391,7 +438,12 @@ class TabStrip(QWidget):
             self._press_id = None
             self._drag_id = None
             self._drag_pos = None
+            # 顺序只在松手时上报一次：拖拽中每帧上报会让主窗口反复写盘，直接卡成幻灯片
+            if self._order_dirty:
+                self._order_dirty = False
+                self.orderChanged.emit(self.ids())
             self._animate_indicator()
+            self.update()
             return
         tab_id = self._hit(pos.toPoint())
         self._press_id = None
@@ -418,6 +470,7 @@ class TabStrip(QWidget):
             return
         delta = e.angleDelta().y()
         self._scroll = max(0.0, min(self._scroll - delta / 3, self._content_width() - self.width()))
+        self._invalidate_geometry()
         self._snap_indicator()
         self.update()
 
@@ -441,13 +494,12 @@ class TabStrip(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(fill)
         p.drawRoundedRect(br, 4.5, 4.5)
-        p.setFont(mono(8.2, QFont.Weight.Bold))
+        p.setFont(self._badge_font)
         if hot < 0.999 and (is_cur or tab["id"] == self._prev_id):
             mcol = QColor(mcol)
             mcol.setAlpha(int(150 + 105 * hot))
         p.setPen(mcol)
-        short = "DEL" if method == "DELETE" else ("OPT" if method == "OPTIONS" else method)
-        p.drawText(br, int(Qt.AlignmentFlag.AlignCenter), short)
+        p.drawText(br, int(Qt.AlignmentFlag.AlignCenter), method_short(method))
         # 标题（预览态用斜体，仿 VSCode：单击=临时查看，双击=固定）
         if tab.get("preview"):
             pf = QFont(self._font)
@@ -459,7 +511,7 @@ class TabStrip(QWidget):
         p.setPen(_mix(base, C(t.accent), hot) if hot > 0.001 else base)
         left = self._title_left(rect)
         avail = rect.right() - self.RIGHT_PAD - self.CLOSE_W - left - 4
-        title = QFontMetricsF(self._font).elidedText(
+        title = self._fm.elidedText(
             tab.get("title") or "Untitled", Qt.TextElideMode.ElideRight, max(avail, 24))
         p.drawText(QRectF(left, rect.top(), avail, rect.height()),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), title)

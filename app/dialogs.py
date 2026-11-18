@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QStyledItemDelegate,
     QDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -29,6 +30,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtWidgets import QFileDialog
 
 from . import backdrop, i18n, icons, shortcuts as sc
+from . import ai as ai_mod
 from .anim import stop as _anim_stop
 from .code_editor import CodeView
 from .codegen import LANGUAGES
@@ -696,6 +698,88 @@ class ShortcutRow(QWidget):
         self.clear_btn.setEnabled(bool(seq))
 
 
+class ModelCard(QWidget):
+    """AI 模型卡片：名字 + 小徽标 + 一句说明，点一下即选中。
+
+    自绘而不是一堆 Button，是为了选中态能同时体现「描边 + 淡底」，
+    并且在两列网格里高度稳定（不会因为文字长短抖动）。
+    """
+
+    picked = pyqtSignal(str)
+    HEIGHT = 62
+
+    def __init__(self, model: Dict[str, Any], selected: bool = False, parent=None):
+        super().__init__(parent)
+        self.model = dict(model)
+        self._selected = selected
+        self._hover = False
+        self.setFixedHeight(self.HEIGHT)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_selected(self, on: bool) -> None:
+        if on != self._selected:
+            self._selected = on
+            self.update()
+
+    def enterEvent(self, e):  # noqa: N802
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, e):  # noqa: N802
+        self._hover = False
+        self.update()
+
+    def mouseReleaseEvent(self, e):  # noqa: N802
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.picked.emit(self.model.get("id", ""))
+
+    def paintEvent(self, _e):  # noqa: N802
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if self._selected:
+            fill = QColor(C(t.accent))
+            fill.setAlpha(18)
+            p.setPen(QPen(C(t.accent), 1.2))
+            p.setBrush(fill)
+        else:
+            p.setPen(QPen(C(t.border), 1))
+            p.setBrush(C(t.hover if self._hover else t.panel_alt))
+        p.drawRoundedRect(r, 10, 10)
+
+        label = i18n.tr(self.model.get("label") or self.model.get("id") or "")
+        badge = i18n.tr(self.model.get("badge") or "")
+        p.setFont(font(12.8, QFont.Weight.DemiBold))
+        p.setPen(C(t.text))
+        fm = QFontMetricsF(p.font())
+        p.drawText(QRectF(13, 10, r.width() - 26, 18),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), label)
+        if badge:
+            bw = QFontMetricsF(mono(9.2, QFont.Weight.Bold)).horizontalAdvance(badge) + 12
+            bx = 13 + min(fm.horizontalAdvance(label), r.width() - 26) + 8
+            if bx + bw < r.right() - 8:
+                br = QRectF(bx, 12, bw, 15)
+                p.setFont(mono(9.2, QFont.Weight.Bold))
+                p.setPen(Qt.PenStyle.NoPen)
+                chip = QColor(C(t.text_faint))
+                chip.setAlpha(30)
+                p.setBrush(chip)
+                p.drawRoundedRect(br, 4.5, 4.5)
+                p.setPen(C(t.text_dim))
+                p.drawText(br, int(Qt.AlignmentFlag.AlignCenter), badge)
+        p.setFont(font(10.6))
+        p.setPen(C(t.text_faint))
+        desc = QFontMetricsF(p.font()).elidedText(
+            i18n.tr(self.model.get("desc") or ""), Qt.TextElideMode.ElideRight, r.width() - 26)
+        p.drawText(QRectF(13, 32, r.width() - 26, 16),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), desc)
+        p.end()
+
+
 class SettingsDialog(GlassDialog):
     """统一的设置面板：通用 / 外观 / 快捷键 / 网络 / 环境变量 / 数据 / 更新内容 都在这一页。"""
 
@@ -713,8 +797,10 @@ class SettingsDialog(GlassDialog):
         ("appearance", "外观", "moon"),
         ("shortcuts", "快捷键", "keyboard"),
         ("network", "网络", "globe"),
+        ("ai", "AI", "spark"),
         ("cloud", "云同步", "cloud"),
         ("env", "环境变量", "layers"),
+        ("globals", "全局变量", "layers"),
         ("data", "数据", "folder"),
         ("about_app", "关于 Ocelot", "book"),
     ]
@@ -740,8 +826,10 @@ class SettingsDialog(GlassDialog):
         self.stack.addWidget(self._page_appearance(s))
         self.stack.addWidget(self._page_shortcuts())
         self.stack.addWidget(self._page_network(s))
+        self.stack.addWidget(self._page_ai(s))
         self.stack.addWidget(self._page_cloud(s))
         self.stack.addWidget(self._page_env())
+        self.stack.addWidget(self._page_globals())
         self.stack.addWidget(self._page_data())
         self.stack.addWidget(self._page_about_app())
         right.addWidget(self.stack, 1)
@@ -1005,6 +1093,185 @@ class SettingsDialog(GlassDialog):
         )
         return self._page_shell("网络", "超时、跳转、证书与代理。", block)
 
+    # -------------------------------------------------- AI
+    def _page_ai(self, s: Dict[str, Any]) -> QWidget:
+        """AI 页：一个 Key、一组模型卡片、可选自定义模型 —— 填完就能用。"""
+        t = theme()
+        cfg = ai_mod.config(self.store)
+        preset = ai_mod.PROVIDERS.get(cfg["provider"]) or ai_mod.PROVIDERS["glm"]
+
+        self.ai_key = QLineEdit(cfg["api_key"])
+        self.ai_key.setObjectName("Field")
+        self.ai_key.setFixedHeight(30)
+        self.ai_key.setFont(mono(11.6))
+        self.ai_key.setEchoMode(QLineEdit.EchoMode.Password)
+        i18n.placeholder(self.ai_key, "粘贴 API Key")
+        self.ai_eye = Button("显示", None, kind="ghost", height=24, padding=8, font_size=11.4)
+        self.ai_eye.clicked.connect(self._toggle_ai_key)
+        self.ai_save = Button("保存并测试", "check", kind="primary", height=28, padding=14,
+                              font_size=12)
+        self.ai_save.clicked.connect(self._save_test_ai)
+        self.ai_status = Label("", 10.8, t.text_faint)
+        self.ai_status.setWordWrap(True)
+        self.ai_key.editingFinished.connect(lambda: self._save_ai(quiet=True))
+        key_card = Card(radius=10)
+        kl = QVBoxLayout(key_card)
+        kl.setContentsMargins(14, 12, 14, 12)
+        kl.setSpacing(8)
+        kl.addWidget(Label("API Key", 10, t.text_faint, weight=QFont.Weight.DemiBold,
+                           spacing=0.8))
+        kl.addWidget(HBox((self.ai_key, 1), self.ai_eye, self.ai_save, spacing=8))
+        hint = Label(i18n.trf("{name} · {hint}", name=i18n.tr(preset["name"]),
+                              hint=i18n.tr(preset.get("key_hint", ""))), 10.6, t.text_faint)
+        hint.setWordWrap(True)
+        kl.addWidget(hint)
+        kl.addWidget(self.ai_status)
+
+        self._ai_models = ai_mod.models_for(cfg)
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
+        self._model_cards: List[ModelCard] = []
+        for i, m in enumerate(self._ai_models):
+            card = ModelCard(m, selected=(m["id"] == cfg["model"]))
+            card.picked.connect(self._on_model_pick)
+            grid.addWidget(card, i // 2, i % 2)
+            self._model_cards.append(card)
+        model_host = QWidget()
+        model_host.setLayout(grid)
+        model_block = self._section("模型（全部免费额度内可用）", model_host)
+
+        self.ai_custom = QLineEdit()
+        self.ai_custom.setObjectName("Field")
+        self.ai_custom.setFixedHeight(28)
+        self.ai_custom.setFont(mono(11.5))
+        i18n.placeholder(self.ai_custom, "自定义模型 ID，例如 glm-4-flash")
+        self.ai_custom_add = Button("添加并使用", "plus", kind="subtle", height=28,
+                                    padding=12, font_size=11.6)
+        self.ai_custom_add.clicked.connect(self._add_custom_model)
+        self.ai_base = QLineEdit(cfg["base"] if cfg["base"] != preset["base"] else "")
+        self.ai_base.setObjectName("Field")
+        self.ai_base.setFixedHeight(28)
+        self.ai_base.setFont(mono(11.5))
+        i18n.placeholder(self.ai_base, "留空用官方地址；中转/自建网关填这里")
+        self.ai_base.editingFinished.connect(self._save_ai_base)
+        more = self._card(
+            self._row_stack("自定义模型", "接入新模型：填上模型 ID 就能用，不用等更新。",
+                            HBox((self.ai_custom, 1), self.ai_custom_add, spacing=8)),
+            self._row_stack("服务地址", "仅在用中转或自建网关时填写。", self.ai_base),
+        )
+        tips = Card(radius=10)
+        tl2 = QVBoxLayout(tips)
+        tl2.setContentsMargins(14, 12, 14, 12)
+        tl2.setSpacing(6)
+        for line in (
+            "· 请求体里点「AI 生成」：按字段名生成一份真实数据，边生成边写进编辑器",
+            "· 响应报错时点「AI 解释」：直接给原因和修法，不用自己猜",
+            "· Key 只存在本机 state.json，不会上传到任何地方",
+        ):
+            lab = Label(i18n.tr(line), 10.8, t.text_dim)
+            lab.setWordWrap(True)
+            tl2.addWidget(lab)
+        return self._page_shell("AI", "配置一次，之后生成测试数据、解释报错都能直接用。",
+                                key_card, model_block, more, tips)
+
+    def _toggle_ai_key(self) -> None:
+        showing = self.ai_key.echoMode() == QLineEdit.EchoMode.Normal
+        self.ai_key.setEchoMode(QLineEdit.EchoMode.Password if showing
+                                else QLineEdit.EchoMode.Normal)
+        self.ai_eye.setText(i18n.tr("显示") if showing else i18n.tr("隐藏"))
+
+    def _ai_cfg(self) -> Dict[str, Any]:
+        s = self.store.settings
+        ai_cfg = s.setdefault("ai", {})
+        ai_cfg["api_key"] = self.ai_key.text().strip()
+        return ai_mod.config(self.store)
+
+    def _save_ai(self, quiet: bool = False) -> None:
+        cfg = self._ai_cfg()
+        self.store.save()
+        if not quiet:
+            ok, why = ai_mod.ready(cfg)
+            self.ai_status.setText(i18n.tr("已保存，可以开始用了") if ok else why)
+            self.ai_status.setStyleSheet(
+                f"color: {theme().success if ok else theme().text_faint}; background: transparent;")
+
+    def _save_ai_base(self) -> None:
+        self.store.settings.setdefault("ai", {})["base_url"] = self.ai_base.text().strip()
+        self._save_ai(quiet=True)
+
+    def _on_model_pick(self, model_id: str) -> None:
+        if not model_id:
+            return
+        self.store.settings.setdefault("ai", {})["model"] = model_id
+        for card in self._model_cards:
+            card.set_selected(card.model.get("id") == model_id)
+        self._save_ai(quiet=True)
+        self.ai_status.setText(i18n.trf("已切换到 {model}", model=model_id))
+        self.ai_status.setStyleSheet(f"color: {theme().text_faint}; background: transparent;")
+
+    def _add_custom_model(self) -> None:
+        mid = self.ai_custom.text().strip()
+        if not mid:
+            return
+        ai_cfg = self.store.settings.setdefault("ai", {})
+        items = ai_cfg.setdefault("custom_models", [])
+        if not any((m or {}).get("id") == mid for m in items):
+            items.append({"id": mid, "label": mid})
+        ai_cfg["model"] = mid
+        self.store.save()
+        self.ai_custom.clear()
+        self._refresh_model_grid()
+
+    def _refresh_model_grid(self) -> None:
+        """重建模型卡片：加过自定义模型后立刻能点选。"""
+        cfg = ai_mod.config(self.store)
+        host = self._model_cards[0].parentWidget() if self._model_cards else None
+        if host is None:
+            return
+        grid = host.layout()
+        for card in self._model_cards:
+            grid.removeWidget(card)
+            card.deleteLater()
+        self._model_cards = []
+        self._ai_models = ai_mod.models_for(cfg)
+        for i, m in enumerate(self._ai_models):
+            card = ModelCard(m, selected=(m["id"] == cfg["model"]))
+            card.picked.connect(self._on_model_pick)
+            grid.addWidget(card, i // 2, i % 2)
+            self._model_cards.append(card)
+
+    def _save_test_ai(self) -> None:
+        cfg = self._ai_cfg()
+        self.store.save()
+        ok, why = ai_mod.ready(cfg)
+        if not ok:
+            self.ai_status.setText(why)
+            self.ai_status.setStyleSheet(f"color: {theme().danger}; background: transparent;")
+            return
+        self.ai_save.setEnabled(False)
+        self.ai_status.setText(i18n.tr("正在测试…"))
+        self.ai_status.setStyleSheet(f"color: {theme().text_faint}; background: transparent;")
+        msgs = [{"role": "system", "content": "只回复两个字：可用"},
+                {"role": "user", "content": "连通性测试"}]
+        # 200 而不是 16：GLM-4.5 这类会思考的模型先花 token 推理，给太少会「有回复但空内容」
+        self._ai_test = ai_mod.start(
+            msgs, cfg=cfg, max_tokens=200, temperature=0,
+            on_done=lambda text: self._on_ai_tested(True, text),
+            on_error=lambda err: self._on_ai_tested(False, err),
+        )
+
+    def _on_ai_tested(self, ok: bool, text: str) -> None:
+        self.ai_save.setEnabled(True)
+        if ok:
+            self.ai_status.setText(i18n.trf("连接正常，{model} 可用", model=self._ai_cfg()["model"]))
+            self.ai_status.setStyleSheet(
+                f"color: {theme().success}; background: transparent;")
+        else:
+            self.ai_status.setText(text)
+            self.ai_status.setStyleSheet(f"color: {theme().danger}; background: transparent;")
+
     # -------------------------------------------------- 云同步
     def _page_cloud(self, s: Dict[str, Any]) -> QWidget:
         self.cloud_enabled = Switch(bool(s.get("cloud_enabled", False)))
@@ -1178,6 +1445,25 @@ class SettingsDialog(GlassDialog):
     def _page_env(self) -> QWidget:
         self.env_editor = EnvEditor(self.store)
         return self._page_shell("环境变量", "{{变量}} 会按当前激活的环境替换。", self.env_editor)
+
+    def _page_globals(self) -> QWidget:
+        """全局变量：不跟环境走，任何环境、任何请求里都能引用。"""
+        t = theme()
+        self.globals_editor = KVEditor("变量名", "值", empty_hint="添加全局变量",
+                                       with_types=False)
+        self.globals_editor.setMinimumHeight(300)
+        self.globals_editor.set_rows(self.store.global_vars())
+        self.globals_editor.changed.connect(self._save_globals)
+        note = Label("在所有请求里用 {{名字}} 引用；环境变量里同名的会覆盖全局变量。", 11,
+                     t.text_faint)
+        note.setWordWrap(True)
+        return self._page_shell("全局变量", "跨环境复用的变量，比如公共域名、团队 Token、通用 ID。",
+                                note, self.globals_editor)
+
+    def _save_globals(self) -> None:
+        self.store.data["global_vars"] = self.globals_editor.rows()
+        self.store.save()
+        self.settingsChanged.emit()
 
     def _page_data(self) -> QWidget:
         path = str(STATE_FILE.parent).replace(str(os.path.expanduser("~")), "~")

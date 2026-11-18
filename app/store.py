@@ -19,9 +19,23 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.50"
+VERSION = "1.0.51"
 
 CHANGELOG = [
+    {
+        "version": "1.0.51",
+        "date": "2026-11-19",
+        "items": [
+            "顶部标签拖动不再卡顿：换序只在松手时上报一次（之前每帧同步写盘），标签宽度与位置改为缓存，拖动时指示器直接对齐不再反复重启动画",
+            "侧栏集合与历史里的请求方法超过 4 个字符统一缩写为 3 字母：PATCH → PAT、DELETE → DEL、OPTIONS → OPT，方法列更窄、请求名更完整",
+            "HTTP、WebSocket、Socket.IO 三个请求的「参数」页去掉 File 类型选项（查询参数本来就带不了文件），表单上传仍保留 File",
+            "新增「全局变量」：不跟环境走，任何请求里都能用 {{名字}} 引用；与环境变量同名时环境变量优先，设置页可增删改",
+            "设置新增「AI」页：填入智谱 GLM 的 API Key 即可用，预置 GLM-4-Flash(250414/latest)、GLM-4.5、GLM-4.1V 四张模型卡片，支持一键测试连通性",
+            "AI 生成请求体：JSON 请求体里点「AI 生成」，按现有字段名（或参数表键名）生成一份真实数据，边生成边写进编辑器，结束后自动格式化",
+            "AI 解释报错：请求失败页和响应更多菜单里都能「用 AI 解释」，直接给出失败原因和修复建议",
+            "AI 可扩展：支持自定义模型 ID 与中转/自建网关地址，新模型填上就能用，不必等版本更新",
+        ],
+    },
     {
         "version": "1.0.50",
         "date": "2026-11-19",
@@ -1019,6 +1033,9 @@ def _sample_state() -> Dict[str, Any]:
             ]},
         ],
         "active_env": "env_demo",
+        # 全局变量：不跟环境走，任何环境、任何请求里都能用 {{名字}} 引用。
+        # 优先级最低：环境变量里同名会覆盖它。
+        "global_vars": [],
         "settings": {
             "timeout": 30,
             "follow_redirects": True,
@@ -1044,6 +1061,14 @@ def _sample_state() -> Dict[str, Any]:
             "cloud_auto": False,
             "turso_url": "",
             "turso_token": "",
+            # AI：默认接智谱 GLM（有免费模型），换服务商/换模型都只改这里
+            "ai": {
+                "provider": "glm",
+                "api_key": "",
+                "model": "glm-4-flash-250414",
+                "base_url": "",
+                "custom_models": [],
+            },
         },
         "open_tabs": [],
         "last_request": None,
@@ -1081,6 +1106,15 @@ class Store:
             data.setdefault(k, v)
         for k, v in base["settings"].items():
             data["settings"].setdefault(k, v)
+        # 嵌套设置（如 ai）要做二级补全，否则老存档里缺的键读不到
+        for key, default in base["settings"].items():
+            if isinstance(default, dict):
+                cur = data["settings"].get(key)
+                if not isinstance(cur, dict):
+                    data["settings"][key] = dict(default)
+                else:
+                    for sk, sv in default.items():
+                        cur.setdefault(sk, sv)
         store = cls(data, path)
         # 启动时按设置清理过期回收站条目（默认开、保留 30 天）。有清理才落盘，
         # 免得每次启动都重写一次 state.json。
@@ -1447,13 +1481,23 @@ class Store:
         return None
 
     def env_vars(self) -> Dict[str, str]:
-        env = self.active_environment()
+        """全部可用变量：全局变量打底，当前环境同名覆盖。
+
+        所有请求、脚本、代码生成都从这里取，所以加全局变量只需要改这一处。
+        """
         out: Dict[str, str] = {}
+        for row in self.data.get("global_vars") or []:
+            if row.get("enabled", True) and row.get("key"):
+                out[str(row["key"])] = str(row.get("value", ""))
+        env = self.active_environment()
         if env:
             for row in env.get("vars", []):
                 if row.get("enabled", True) and row.get("key"):
                     out[row["key"]] = row.get("value", "")
         return out
+
+    def global_vars(self) -> List[Dict[str, Any]]:
+        return self.data.setdefault("global_vars", [])
 
     def set_active_env(self, env_id: Optional[str]) -> None:
         self.data["active_env"] = env_id

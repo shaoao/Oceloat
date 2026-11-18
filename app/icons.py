@@ -480,6 +480,17 @@ def _sync(p):
     _line(p, 8.4, 20.4, 7.0, 17.6, 10.0, 17.0)
 
 
+def _spark(p):
+    """四角星：读作「AI / 一键增强」。"""
+    path = QPainterPath()
+    path.moveTo(12, 3.2)
+    path.cubicTo(13.3, 8.4, 15.6, 10.7, 20.8, 12)
+    path.cubicTo(15.6, 13.3, 13.3, 15.6, 12, 20.8)
+    path.cubicTo(10.7, 15.6, 8.4, 13.3, 3.2, 12)
+    path.cubicTo(8.4, 10.7, 10.7, 8.4, 12, 3.2)
+    p.drawPath(path)
+
+
 ICONS: Dict[str, Callable[[QPainter], None]] = {
     "plus": _plus, "minus": _minus, "close": _close, "search": _search,
     "chevron_right": _chevron_right, "chevron_down": _chevron_down, "chevron_up": _chevron_up,
@@ -493,7 +504,7 @@ ICONS: Dict[str, Callable[[QPainter], None]] = {
     "alert": _alert, "transfer": _transfer, "link": _link,
     "undo": _undo, "redo": _redo, "cut": _cut, "paste": _paste,
     "panel_left": _panel_left, "image": _image, "audio": _audio, "node": _node,
-    "cloud": _cloud, "sync": _sync,
+    "cloud": _cloud, "sync": _sync, "spark": _spark,
 }
 
 _cache: Dict[tuple, QIcon] = {}

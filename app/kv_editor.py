@@ -59,6 +59,9 @@ VALUE_TYPES = [
     ("file", "File", "file"),
 ]
 _TYPE_LABEL = {k: l for k, l, _ in VALUE_TYPES}
+# 查询参数 / 请求头 / Cookie / 环境变量这些位置本来就传不了文件，
+# 类型菜单里给它们去掉 File，少一个选了就报错的坑。
+TYPES_NO_FILE = [t for t in VALUE_TYPES if t[0] != "file"]
 
 # 每种类型一个语义色：String 绿、Number 蓝、Boolean 紫、Null 灰、JSON 橙、File 青。
 _TYPE_COLORS_DARK = {
@@ -200,19 +203,26 @@ class TypeMenu(QWidget):
     PAD = 5
     picked = pyqtSignal(str)
 
-    def __init__(self, current: str, parent=None):
+    def __init__(self, current: str, options: Optional[Sequence[tuple]] = None,
+                 parent=None):
         super().__init__(parent)
+        # 兼容老调用 TypeMenu(current, parent)：第二个位置参数是 QWidget 时按 parent 处理
+        if isinstance(options, QWidget):
+            parent, options = options, None
+            self.setParent(parent)
         self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
                             | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self._current = current if current in _TYPE_LABEL else "auto"
+        self._options = list(options or VALUE_TYPES)
+        self._labels = {k for k, _l, _s in self._options}
+        self._current = current if current in self._labels else "auto"
         self._hover = -1
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.resize(150, self.PAD * 2 + len(VALUE_TYPES) * self.ROW_H + 4)
+        self.resize(150, self.PAD * 2 + len(self._options) * self.ROW_H + 4)
 
     def set_current(self, vtype: str) -> None:
-        self._current = vtype if vtype in _TYPE_LABEL else "auto"
+        self._current = vtype if vtype in self._labels else "auto"
         self._hover = -1
         self.update()
 
@@ -235,7 +245,7 @@ class TypeMenu(QWidget):
 
     def _row_at(self, y: float) -> int:
         i = int((y - self.PAD) // self.ROW_H)
-        return i if 0 <= i < len(VALUE_TYPES) else -1
+        return i if 0 <= i < len(self._options) else -1
 
     def mouseMoveEvent(self, e):
         # Popup 抓鼠标：菜单外的移动也会投递，先判断真实落点。
@@ -251,8 +261,8 @@ class TypeMenu(QWidget):
 
     def mouseReleaseEvent(self, e):
         idx = self._row_at(e.position().y())
-        if 0 <= idx < len(VALUE_TYPES):
-            self.picked.emit(VALUE_TYPES[idx][0])
+        if 0 <= idx < len(self._options):
+            self.picked.emit(self._options[idx][0])
             self.close()
 
     def keyPressEvent(self, e):
@@ -267,7 +277,7 @@ class TypeMenu(QWidget):
         p.setPen(QPen(C(t.border_strong), 1))
         p.setBrush(C(t.elevated))
         p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
-        for i, (key, label, _short) in enumerate(VALUE_TYPES):
+        for i, (key, label, _short) in enumerate(self._options):
             rr = self._row_rect(i)
             if i == self._hover:
                 p.setPen(Qt.PenStyle.NoPen)
@@ -289,8 +299,10 @@ class TypeMenu(QWidget):
 class TypeChip(QWidget):
     changed = pyqtSignal(str)
 
-    def __init__(self, vtype: str = "auto", parent=None):
+    def __init__(self, vtype: str = "auto", options: Optional[Sequence[tuple]] = None,
+                 parent=None):
         super().__init__(parent)
+        self._options = list(options or VALUE_TYPES)
         self._type = vtype if vtype in _TYPE_LABEL else "auto"
         self._hover = False
         self._inferred = "text"
@@ -325,7 +337,7 @@ class TypeChip(QWidget):
             return
         # 菜单常驻复用，避免 Popup 关闭后再 close() 触发 RuntimeError。
         if self._menu is None:
-            self._menu = TypeMenu(self._type, self)
+            self._menu = TypeMenu(self._type, self._options, self)
             self._menu.picked.connect(self._pick)
         self._menu.set_current(self._type)
         self._menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
@@ -450,8 +462,12 @@ class KVRow(QWidget):
                  suggestions: Optional[Sequence[str]] = None,
                  with_types: bool = False, vtype: str = "auto", parent=None,
                  with_desc: bool = False, desc: str = "",
+                 allow_file: bool = True,
                  file_tooltip: str = "点击选择要上传的文件"):
         super().__init__(parent)
+        if not allow_file and vtype == "file":
+            # 老数据里存过 File 的参数：这些位置本来就不支持文件，回落成自动推断
+            vtype = "auto"
         self.setFixedHeight(31)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -493,12 +509,13 @@ class KVRow(QWidget):
         self.type_chip: Optional[TypeChip] = None
         self.file_cell: Optional[FileCell] = None
         if with_types:
-            self.type_chip = TypeChip(vtype)
+            self.type_chip = TypeChip(vtype, TYPES_NO_FILE if not allow_file else None)
             self.type_chip.changed.connect(self._on_type)
             self.type_chip.set_inferred(infer_value_type(value))
-            self.file_cell = FileCell(value)
-            self.file_cell.setToolTip(file_tooltip)
-            self.file_cell.changed.connect(self.changed.emit)
+            if allow_file:
+                self.file_cell = FileCell(value)
+                self.file_cell.setToolTip(file_tooltip)
+                self.file_cell.changed.connect(self.changed.emit)
 
         self.del_btn = QWidget()
         self.del_btn.setFixedSize(20, 20)
@@ -666,13 +683,14 @@ class KVEditor(QWidget):
     def __init__(self, key_ph: str = "Key", value_ph: str = "Value",
                  suggestions: Optional[Sequence[str]] = None,
                  empty_hint: str = "", with_types: bool = False,
-                 with_desc: Optional[bool] = None,
+                 with_desc: Optional[bool] = None, allow_file: bool = True,
                  file_tooltip: str = "点击选择要上传的文件", parent=None):
         super().__init__(parent)
         self._key_ph = key_ph
         self._value_ph = value_ph
         self._suggestions = suggestions
         self._with_types = with_types
+        self._allow_file = allow_file
         self._file_tooltip = file_tooltip
         # 类型列默认带描述列；表单场景可以只要类型列（File 上传不需要描述）
         self._with_desc = with_types if with_desc is None else with_desc
@@ -873,6 +891,7 @@ class KVEditor(QWidget):
         row = KVRow(key, value, enabled, self._key_ph, self._value_ph, self._suggestions,
                     with_types=self._with_types, vtype=vtype,
                     with_desc=self._with_desc, desc=desc,
+                    allow_file=self._allow_file,
                     file_tooltip=self._file_tooltip)
         row.changed.connect(self._on_row_changed)
         row.removed.connect(self._remove_row)

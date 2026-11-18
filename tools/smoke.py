@@ -743,7 +743,8 @@ def main() -> int:
 
         dlg = SettingsDialog(store, w, page="about_app")
         keys = [k for k, _l, _i in dlg.NAV]
-        check("设置新增关于页", "about_app" in keys and len(keys) == 8, str(keys))
+        # 数量只保证「至少」这几页：后续还会加（AI / 全局变量），不该因为加页而红
+        check("设置新增关于页", "about_app" in keys and len(keys) >= 8, str(keys))
         check("快捷键独立成一页", "shortcuts" in keys, str(keys))
         check("更新内容不再单独占导航", "about" not in keys, str(keys))
         dlg.nav.set_key("about_app")

@@ -126,7 +126,7 @@ class SioComposer(QWidget):
 
         # --- 「参数」页：查询参数表，连接时拼进地址栏 URL
         self.params = KVEditor("参数名", "值", empty_hint="添加查询参数", with_types=True,
-                               file_tooltip="查询参数不支持文件上传")
+                               allow_file=False)
         self.params.changed.connect(self._on_option)
         # 与 HTTP 参数页一致：粘贴导入 + 批量编辑
         self.paste_btn = Button(i18n.tr("粘贴"), None, kind="ghost", height=24, padding=8,

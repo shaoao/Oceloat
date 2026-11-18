@@ -375,6 +375,23 @@ def method_color(method: str, t: Theme | None = None) -> str:
     return table.get((method or "GET").upper(), t.text_dim)
 
 
+# 侧栏 / 标签徽标里的方法缩写：超过 4 个字符的方法一律压成 3 字母，
+# 免得 DELETE / OPTIONS 把方法列撑歪、把请求名挤到看不见。
+METHOD_SHORT = {
+    "DELETE": "DEL",
+    "OPTIONS": "OPT",
+    "PATCH": "PAT",
+    "CONNECT": "CON",
+    "TRACE": "TRC",
+}
+
+
+def method_short(method: str) -> str:
+    """方法名缩写：GET/POST/PUT 原样，其余长方法压到 3 字母。"""
+    m = (method or "GET").upper()
+    return METHOD_SHORT.get(m, m)
+
+
 def status_color(code: int, t: Theme | None = None) -> str:
     t = t or theme()
     if code == 0:

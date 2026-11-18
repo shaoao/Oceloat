@@ -15,7 +15,8 @@ Ocelot 是一个为 macOS 写的 API 调试工具，Python + PyQt6 实现，窗�
 - 看响应：美化、树形、原始、响应头、Cookies、图片和音视频预览、跟上一次响应对比、按路径提取字段
 - 本地 Mock：在自己电脑上起一个 HTTP 服务，路由、状态码、延迟、返回内容都由你定，断网也能调
 - 出文档：把一次请求连同响应生成一份 Markdown，带代码示例，可以直接发给别人
-- 存起来复用：集合、多环境变量、历史记录、十种语言的代码生成、导入 cURL 和 Postman
+- 存起来复用：集合、多环境变量、全局变量（不跟环境走，任何请求都能 `{{名字}}` 引用）、历史记录、十种语言的代码生成、导入 cURL 和 Postman
+- 接 AI（可选）：设置里填一个智谱 GLM 的 API Key，就能在 JSON 请求体里按字段名一键生成真实数据、在请求失败时让 AI 解释原因和修法；模型可换、也能填中转地址
 - 命令面板（⌘K）：常用五条按使用频率置顶，下面是全部命令、环境切换和请求跳转
 - 跑脚本：前置 / 后置 JavaScript，能改请求、读响应、写环境变量、写断言，输出都进响应面板的「控制台」
 - 互通：一键在 Ocelot JSON / Postman / Apifox / Hoppscotch / Insomnia / OpenAPI（JSON、YAML）/ HAR 之间导入导出，
@@ -113,6 +114,7 @@ app/theme.py          颜色、字体、全局样式
 app/widgets.py        自己画的控件（按钮、分段标签、开关、滚动区…）
 app/icons.py          所有图标，用 QPainter 描边画的
 app/store.py          数据和设置，存在一个 JSON 里
+app/ai.py             AI 客户端（GLM 等），流式输出 + 提示词，只依赖标准库
 ```
 
 写的时候尽量守几条：
@@ -124,7 +126,7 @@ app/store.py          数据和设置，存在一个 JSON 里
 跑测试和截图：
 
 ```bash
-python3 tools/smoke.py         # 544 项检查，会真的起本地 HTTP 与 WebSocket 服务
+python3 tools/smoke.py         # 654 项检查，会真的起本地 HTTP 与 WebSocket 服务
 python3 tools/readme_shots.py  # 重新生成 README 里的截图，输出到 docs/
 ```
 

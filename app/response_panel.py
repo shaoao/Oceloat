@@ -25,6 +25,7 @@ from .http_client import Response
 from .theme import C, font, mono, status_color, theme
 from .widgets import (
     Button,
+    Card,
     Divider,
     EmptyState,
     FadeStack,
@@ -335,6 +336,7 @@ class ResponsePanel(QWidget):
     saveVariable = pyqtSignal(str, str)      # 名字, 值：把提取结果存进环境变量
     docRequested = pyqtSignal()              # 打开接口文档窗口
     wsActionRequested = pyqtSignal(str)      # WS 更多菜单：connect / disconnect
+    aiExplainRequested = pyqtSignal()        # 用 AI 解释当前失败/异常响应
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -542,6 +544,16 @@ class ResponsePanel(QWidget):
         self.error_msg.setWordWrap(True)
         el.addWidget(self.error_title)
         el.addWidget(self.error_msg)
+        # AI 解释：把「请求失败」从一句报错变成原因 + 修法
+        self.ai_explain_btn = Button("用 AI 解释", "spark", kind="subtle", height=26,
+                                     padding=11, font_size=11.5, icon_size=12)
+        self.ai_explain_btn.clicked.connect(self.aiExplainRequested.emit)
+        self.ai_note = Label("", 11, theme().text_dim)
+        self.ai_note.setWordWrap(True)
+        self.ai_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.ai_note.hide()
+        el.addWidget(HBox(self.ai_explain_btn, 1, spacing=8))
+        el.addWidget(self.ai_note)
         # 请求失败时前置脚本的日志同样要看得到（不然报错只能靠猜）
         self.error_console = ConsoleLog(compact=True)
         self.error_console.hide()
@@ -579,7 +591,24 @@ class ResponsePanel(QWidget):
         lay.addWidget(self.head_divider)
         self.stale_bar = StaleBar()
         self.stale_bar.resend.connect(self.resendRequested.emit)
+        # AI 解释条：正常响应页里就地展示结论，可关闭，不打断查看
+        self.ai_bar = Card(radius=9)
+        ab = QHBoxLayout(self.ai_bar)
+        ab.setContentsMargins(12, 8, 8, 8)
+        ab.setSpacing(10)
+        ai_icon = QLabel()
+        ai_icon.setPixmap(icons.pixmap("spark", theme().text_dim, 14, 1.6))
+        self.ai_bar_text = Label("", 11, theme().text_dim)
+        self.ai_bar_text.setWordWrap(True)
+        self.ai_bar_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        ai_close = icon_button("close", i18n.tr("关闭"), 22, 11)
+        ai_close.clicked.connect(self.ai_bar.hide)
+        ab.addWidget(ai_icon, 0, Qt.AlignmentFlag.AlignTop)
+        ab.addWidget(self.ai_bar_text, 1)
+        ab.addWidget(ai_close, 0, Qt.AlignmentFlag.AlignTop)
+        self.ai_bar.hide()
         lay.addWidget(self.stale_bar)
+        lay.addWidget(self.ai_bar)
         lay.addWidget(self.center, 1)
         lay.addWidget(self.find_bar)
 
@@ -1090,6 +1119,8 @@ class ResponsePanel(QWidget):
 
     def show_error(self, message: str) -> None:
         self.stale_bar.hide()
+        self.ai_bar.hide()
+        self.ai_note.hide()
         self.shimmer.stop()
         if getattr(self, 'spinner', None) is not None:
             self.spinner.stop()
@@ -1111,8 +1142,43 @@ class ResponsePanel(QWidget):
         if detail is not None:
             detail.hide()
 
+    # -------------------------------------------------- AI 解释
+    def ai_detail(self) -> Dict[str, Any]:
+        """给 AI 的错误上下文：状态码 + 报错文字 + 响应体片段。"""
+        resp = self.response
+        if resp is None or resp.error:
+            return {"status": 0, "detail": self.error_msg.text(),
+                    "body": getattr(resp, "error", "") if resp else ""}
+        body = self._body_text or ""
+        return {"status": int(resp.status or 0),
+                "detail": resp.reason or "",
+                "body": body[:3000]}
+
+    def set_ai_explaining(self, busy: bool) -> None:
+        self.ai_explain_btn.setEnabled(not busy)
+        self.ai_explain_btn.setText("分析中…" if busy else i18n.tr("用 AI 解释"))
+        if busy:
+            self.ai_note.setText("")
+            self.ai_note.hide()
+
+    def show_ai_explanation(self, text: str) -> None:
+        """解释结果就地显示：失败页有固定位置，正常响应页用底部提示条。"""
+        self.set_ai_explaining(False)
+        text = (text or "").strip()
+        if not text:
+            return
+        if self.center.currentWidget() is self.error:
+            self.ai_note.setText(text)
+            self.ai_note.show()
+            return
+        # 4xx/5xx 的正常响应页：塞进头部下方的提示条，不打断查看
+        self.ai_bar_text.setText(text)
+        self.ai_bar.show()
+
     def set_response(self, resp: Response) -> None:
         self.stale_bar.hide()
+        self.ai_bar.hide()
+        self.ai_note.hide()
         self.shimmer.stop()
         if getattr(self, 'spinner', None) is not None:
             self.spinner.stop()
@@ -1611,6 +1677,7 @@ class ResponsePanel(QWidget):
         menu = Menu(self)
         a_doc = menu.addAction(icons.icon("file", t.text, 13), "查看接口文档…")
         menu.addSeparator()
+        a_ai = menu.addAction(icons.icon("spark", t.text, 13), "用 AI 解释这个响应")
         a_body_safe = menu.addAction(icons.icon("lock", t.text, 13), "脱敏复制响应体")
         a_headers = menu.addAction("复制响应头")
         a_status = menu.addAction("复制状态行")
@@ -1620,6 +1687,8 @@ class ResponsePanel(QWidget):
             return
         if chosen is a_doc:
             self.docRequested.emit()
+        elif chosen is a_ai:
+            self.aiExplainRequested.emit()
         elif chosen is a_body_safe:
             self._copy_redacted_body()
         elif chosen is a_headers:
