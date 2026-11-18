@@ -11,7 +11,7 @@ import datetime as _dt
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QDate, QPoint, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QDate, QEasingCurve, QPoint, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
     QCalendarWidget,
@@ -24,10 +24,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import i18n
+from . import i18n, icons
 from .store import Store
 from .theme import C, S, font, mono, theme
-from .widgets import Button, Divider, HBox, Label, SegmentedTabs, VBox, icon_button
+from .widgets import (Button, Card, Divider, HBox, Label, SegmentedTabs, VBox,
+                      animate, icon_button)
 
 from .dialogs import GlassDialog
 
@@ -100,7 +101,20 @@ def _style_date_edit(w: QDateEdit) -> None:
         QAbstractItemView {{ color: {t.text}; selection-color: {t.text};
             selection-background-color: {S(t.selected)}; }}
         QAbstractItemView::item:hover {{ background: {S(t.hover)}; }}
+        QHeaderView::section {{ background: {t.panel_alt}; color: {t.text_dim};
+            border: none; border-bottom: 1px solid {S(t.border)}; padding: 4px 0px; }}
     """)
+    # 星期表头（周日~周六）那一行：QSS 的 palette 未必盖得住各平台的原生底，
+    # 直接对水平表头逐段上色，彻底压成暗色。
+    try:
+        header = cal.horizontalHeader() if hasattr(cal, "horizontalHeader") else None
+        if header is not None:
+            header.setStyleSheet(
+                f"QHeaderView::section {{ background: {t.panel_alt}; "
+                f"color: {t.text_dim}; border: none; "
+                f"border-bottom: 1px solid {S(t.border)}; padding: 4px 0px; }}")
+    except Exception:
+        pass
     # 周末 / 表头文字：默认红字，显式改成主题前景
     fmt = QColor(t.text)
     from PyQt6.QtGui import QTextCharFormat
@@ -118,9 +132,12 @@ def _style_date_edit(w: QDateEdit) -> None:
 class TrashList(QWidget):
     """自绘条目列表：卡片式行、支持 Ctrl / Shift 多选与 hover。"""
 
-    picked = pyqtSignal()                 # 选中变化（详情 / 按钮态刷新）
+    picked = pyqtSignal()                 # 选中变化（按钮态刷新）
     activated = pyqtSignal(str)           # 双击：查看该条详情
+    detailRequested = pyqtSignal(str)     # hover 的「详情」小按钮：弹出详情浮层
     ROW_H = 62
+    DETAIL_W = 46                         # 详情小按钮宽度
+    DETAIL_H = 20
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -167,6 +184,12 @@ class TrashList(QWidget):
             if r.get("node", {}).get("id") in child_ids:
                 selected.add(r.get("id"))
 
+    def _detail_rect(self, i: int) -> QRectF:
+        """第 i 行「详情」小按钮的命中区域（贴在行右侧、删除时间左边）。"""
+        r = QRectF(3, i * self.ROW_H + 3, self.width() - 6, self.ROW_H - 6)
+        return QRectF(r.right() - 96 - self.DETAIL_W, r.center().y() - self.DETAIL_H / 2,
+                      self.DETAIL_W, self.DETAIL_H)
+
     def mouseMoveEvent(self, e):  # noqa: N802
         i = self._row_at(e.position().y())
         if i != self._hover:
@@ -180,6 +203,10 @@ class TrashList(QWidget):
     def mouseReleaseEvent(self, e):  # noqa: N802
         i = self._row_at(e.position().y())
         if i < 0:
+            return
+        # hover 时右侧「详情」小按钮：只弹详情，不改变选中
+        if i == self._hover and self._detail_rect(i).contains(e.position()):
+            self.detailRequested.emit(self.items[i].get("id"))
             return
         tid = self.items[i].get("id")
         mods = e.modifiers()
@@ -264,6 +291,15 @@ class TrashList(QWidget):
             p.drawText(QRectF(r.right() - 88, r.top() + 12, 80, 18),
                        int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
                        _fmt_deleted(rec.get("deleted_at", 0)))
+            # hover 行：删除时间左侧浮出一个极轻的「详情」小按钮
+            if i == self._hover:
+                dr = self._detail_rect(i)
+                p.setPen(QPen(C(t.border_strong), 1))
+                p.setBrush(C(t.card))
+                p.drawRoundedRect(dr, dr.height() / 2, dr.height() / 2)
+                p.setPen(C(t.text_dim))
+                p.setFont(font(9.5))
+                p.drawText(dr, int(Qt.AlignmentFlag.AlignCenter), i18n.tr("详情"))
         p.end()
 
 
@@ -382,6 +418,125 @@ class TrashDetail(QWidget):
         return out
 
 
+# ---------------------------------------------------------------- 详情浮层
+class DetailPopup(QWidget):
+    """点「详情」小按钮弹出的轻量浮层：无模糊、点外部即关，不占常驻空间。"""
+
+    def __init__(self, store: Store, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._card = Card(radius=11, parent=self)
+        lay = QVBoxLayout(self._card)
+        lay.setContentsMargins(2, 2, 2, 2)
+        self.detail = TrashDetail(store, self._card)
+        lay.addWidget(self.detail)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(6, 6, 6, 6)
+        root.addWidget(self._card)
+        self.setFixedSize(460, 208)
+
+    def show_record(self, rec: Dict[str, Any], anchor: QPoint) -> None:
+        self.detail.show_record(rec)
+        # 贴在锚点下方，超出屏幕则翻到上方；水平居中于锚点
+        pos = QPoint(anchor.x() - self.width() // 2, anchor.y() + 12)
+        screen = self.screen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            if pos.x() < geo.left() + 8:
+                pos.setX(geo.left() + 8)
+            if pos.x() + self.width() > geo.right() - 8:
+                pos.setX(geo.right() - self.width() - 8)
+            if pos.y() + self.height() > geo.bottom() - 8:
+                pos.setY(max(geo.top() + 8, anchor.y() - self.height() - 12))
+        self.move(pos)
+        self.show()
+        self.raise_()
+
+
+# ---------------------------------------------------------------- 操作动画
+class ActionFlash(QWidget):
+    """清空 / 恢复 / 彻底删除后的 lightweight 艺术反馈。
+
+    单个透明覆盖层：一圈扩散的细环 + 中心图标淡入上浮 + 一行文案。
+    全程一个 QVariantAnimation 驱动 paintEvent，不建额外窗口、不起线程，
+    动画结束自动隐藏，资源占用极低；关动效时会由调用方直接跳过。
+    """
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self._p = 0.0
+        self._icon = "trash"
+        self._text = ""
+        self._color = None
+        self._anim = None
+        self.hide()
+
+    def play(self, icon: str, text: str, color: str) -> None:
+        """在父控件中央播放一次动画。"""
+        host = self.parentWidget()
+        if host is None:
+            return
+        self._icon, self._text, self._color = icon, text, color
+        self.setGeometry(host.rect())
+        self.raise_()
+        self.show()
+
+        def _set(v):
+            self._p = float(v)
+            self.update()
+
+        def _done():
+            self.hide()
+
+        from .anim import stop as _stop
+        _stop(self._anim)
+        self._anim = animate(self, 0.0, 1.0, 720, _set,
+                             QEasingCurve.Type.OutCubic, on_done=_done)
+
+    def paintEvent(self, _e):  # noqa: N802
+        if not (0.0 < self._p < 1.0) or not self._text:
+            return
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        c = QColor(self._color or t.accent)
+        cx, cy = self.width() / 2, self.height() / 2
+
+        # 半透明底：淡入再淡出，避免闪一下硬块
+        env = min(1.0, self._p * 6, (1.0 - self._p) * 6)
+        veil = QColor(t.window)
+        veil.setAlpha(int(150 * env))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(veil)
+        p.drawRect(self.rect())
+
+        # 扩散细环：半径随进度增大、透明度递减
+        ring = c
+        ring.setAlpha(int(150 * (1.0 - self._p)))
+        pen = QPen(ring, 1.6)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        radius = 26 + 74 * self._p
+        p.drawEllipse(QRectF(cx - radius, cy - radius - 16, radius * 2, radius * 2))
+
+        # 中心图标：淡入 + 轻微上浮
+        alpha = env
+        pm = icons.pixmap(self._icon, c.name(QColor.NameFormat.HexArgb), 30, 1.7)
+        p.setOpacity(alpha)
+        p.drawPixmap(QPointF(cx - 15, cy - 15 - 16 - 5 * (1.0 - self._p)), pm)
+        # 文案
+        p.setPen(QColor(c.red(), c.green(), c.blue(), int(235 * alpha)))
+        p.setFont(font(12.5, weight=QFont.Weight.DemiBold))
+        p.drawText(QRectF(cx - 160, cy + 4, 320, 22),
+                   int(Qt.AlignmentFlag.AlignCenter), self._text)
+        p.setOpacity(1.0)
+        p.end()
+
+
 # ---------------------------------------------------------------- 主窗口
 class TrashDialog(GlassDialog):
     """回收站窗口：恢复 / 彻底删除 / 详情 / 搜索 / 日期范围 / 自动清理。"""
@@ -396,6 +551,10 @@ class TrashDialog(GlassDialog):
         self._type = "all"
         self._range = "all"
         self._query = ""
+        t0 = theme()
+        # 提前建好，_right_panel 和 reload 都要用（与 _stat_bar 构建顺序解耦）
+        self.stat_oldest = Label("-", 12, t0.text_dim, mono_font=True)
+        self._flash = ActionFlash(self.body)
         self._build()
 
     # -------------------------------------------------- 构建
@@ -408,12 +567,18 @@ class TrashDialog(GlassDialog):
         # 顶部统计条：左侧数字 + 右侧搜索框（搜索内嵌在这里，不占左栏位置）
         body.addWidget(self._stat_bar())
 
-        # 主体：左筛选 / 右列表+详情
+        # 主体：左筛选 / 极细分隔线 / 右删除记录
         main = QWidget()
         ml = QHBoxLayout(main)
         ml.setContentsMargins(0, 0, 0, 0)
-        ml.setSpacing(12)
+        ml.setSpacing(11)
         ml.addWidget(self._left_panel(), 0)
+        # 1px 分隔线：只在视觉上分栏，不用重色块
+        sep = QWidget()
+        sep.setFixedWidth(1)
+        sep.setObjectName("TrashSep")
+        sep.setStyleSheet(f"QWidget#TrashSep {{ background: {S(t.border)}; }}")
+        ml.addWidget(sep, 0)
         ml.addWidget(self._right_panel(), 1)
         body.addWidget(main, 1)
 
@@ -446,21 +611,14 @@ class TrashDialog(GlassDialog):
                               weight=QFont.Weight.DemiBold)
         self.stat_folder = Label("0", 19, t.warning, mono_font=True,
                                  weight=QFont.Weight.DemiBold)
-        self.stat_oldest = Label("-", 12, t.text_dim, mono_font=True)
-        # 四项统计全部紧凑靠左（和 v1.0.39 一样），不再把「最早删除」甩到最右
+        # 三项统计紧凑靠左；「最早删除」移到右侧列表上方，和卡片图标对齐
+        # （stat_oldest 在 __init__ 里已建好）
         for w, cap, col in (
             (self.stat_total, i18n.tr("全部条目"), None),
             (self.stat_req, i18n.tr("请求"), t.info),
             (self.stat_folder, i18n.tr("文件夹"), t.warning),
         ):
             hl.addWidget(cell(w, cap, col))
-        oldest = QWidget()
-        ol = QVBoxLayout(oldest)
-        ol.setContentsMargins(14, 8, 14, 8)
-        ol.setSpacing(2)
-        ol.addWidget(self.stat_oldest)
-        ol.addWidget(Label(i18n.tr("最早删除"), 10, t.text_faint))
-        hl.addWidget(oldest)
         hl.addStretch(1)
 
         # 搜索框放右上，和统计条同一行；显式描边，避免和深色背景糊在一起
@@ -537,10 +695,27 @@ class TrashDialog(GlassDialog):
         return panel
 
     def _right_panel(self) -> QWidget:
+        """右侧整块给删除记录：顶部一条「最早删除」，其余全是列表。
+
+        详情不再常驻占地方，改成 hover 行内的小按钮弹出浮层。
+        """
+        t = theme()
         wrap = QWidget()
         vl = QVBoxLayout(wrap)
         vl.setContentsMargins(0, 0, 0, 0)
-        vl.setSpacing(8)
+        vl.setSpacing(2)
+
+        # 「最早删除」移到列表上方，左边缘和列表卡片里的图标对齐：
+        # 卡片图标 x = list 内边距 3 + bx 9 = 12，这里统一用 12。
+        oldest_row = QWidget()
+        ol = QHBoxLayout(oldest_row)
+        ol.setContentsMargins(12, 2, 0, 2)
+        ol.setSpacing(6)
+        ol.addWidget(self.stat_oldest, 0, Qt.AlignmentFlag.AlignVCenter)
+        ol.addWidget(Label(i18n.tr("最早删除"), 10, t.text_faint),
+                     0, Qt.AlignmentFlag.AlignVCenter)
+        ol.addStretch(1)
+        vl.addWidget(oldest_row, 0)
 
         self.list_scroll = QScrollArea()
         self.list_scroll.setWidgetResizable(True)
@@ -552,28 +727,11 @@ class TrashDialog(GlassDialog):
             f"QWidget {{ background: {theme().panel}; }}")
         self.list.picked.connect(self._on_picked)
         self.list.activated.connect(self._on_activate)
+        self.list.detailRequested.connect(self._show_detail)
         vl.addWidget(self.list_scroll, 1)
 
-        # 详情区更丰富：加高并可滚动，长 URL / 多行参数不会被裁掉
-        t = theme()
-        detail_box = QWidget()
-        db = QVBoxLayout(detail_box)
-        db.setContentsMargins(0, 0, 0, 0)
-        db.setSpacing(4)
-        db.addWidget(Label(i18n.tr("详情"), 10, t.text_faint))
-        self.detail_scroll = QScrollArea()
-        self.detail_scroll.setWidgetResizable(True)
-        self.detail_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        self.detail_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.detail = TrashDetail(self.store)
-        self.detail.setMinimumHeight(132)
-        self.detail_scroll.setWidget(self.detail)
-        self.detail_scroll.viewport().setStyleSheet(
-            f"QWidget {{ background: {t.panel}; }}")
-        self.detail_scroll.setFixedHeight(158)
-        db.addWidget(self.detail_scroll)
-        vl.addWidget(detail_box, 0)
+        # 详情浮层：点行内「详情」小按钮时弹出，用完即走
+        self._detail_popup = DetailPopup(self.store, self)
         return wrap
 
     def _footer(self) -> QWidget:
@@ -677,30 +835,31 @@ class TrashDialog(GlassDialog):
             self.reload()
 
     def _on_picked(self) -> None:
-        ids = set(self.list.selected)
-        recs = [r for r in self.list.items if r.get("id") in ids]
-        if len(recs) == 1:
-            self.detail.show_record(recs[0])
-        elif len(recs) > 1:
-            t = theme()
-            self.detail._clear()
-            self.detail._lay.addStretch(1)
-            lab = Label(i18n.trf("已选中 {n} 项，可批量恢复或彻底删除", n=len(recs)),
-                        11.5, t.info)
-            lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.detail._lay.addWidget(lab)
-            self.detail._lay.addStretch(1)
-        else:
-            self.detail.show_empty()
-        has = bool(recs)
+        """详情不再常驻，这里只维护底部按钮状态。"""
+        has = bool(self.list.selected)
         self.restore_btn.setEnabled(has)
         self.purge_btn.setEnabled(has)
         self.clear_btn.setEnabled(bool(self.store.trash))
 
     def _on_activate(self, tid: str) -> None:
+        # 双击等价于点详情
+        self._show_detail(tid)
+
+    def _show_detail(self, tid: str) -> None:
+        """行内「详情」按钮 / 双击：在鼠标附近弹出轻量详情浮层。"""
         rec = next((r for r in self.list.items if r.get("id") == tid), None)
-        if rec is not None:
-            self.detail.show_record(rec)
+        if rec is None:
+            return
+        popup = self._detail_popup
+        # 锚点：该行右侧按钮的屏幕坐标；拿不到就用鼠标当前位置
+        row = next((i for i, r in enumerate(self.list.items) if r.get("id") == tid), -1)
+        if row >= 0:
+            anchor = self.list.mapToGlobal(
+                self.list._detail_rect(row).center().toPoint())
+        else:
+            from PyQt6.QtGui import QCursor
+            anchor = QCursor.pos()
+        popup.show_record(rec, anchor)
 
     def _selected_ids(self) -> List[str]:
         return list(self.list.selected)
@@ -709,6 +868,13 @@ class TrashDialog(GlassDialog):
         self.store.save()
         self.changed.emit()
         self.reload()
+
+    def _flash_action(self, icon: str, text: str, key: str) -> None:
+        """操作完成后的轻量艺术动画；关动效时 animate 会直接跳到终态。"""
+        try:
+            self._flash.play(icon, text, getattr(theme(), key, theme().accent))
+        except Exception:
+            pass  # 动画是锦上添花，绝不因为反馈影响真正的删除/恢复
 
     def _refresh(self) -> None:
         """刷新按钮：重新读盘，让其它窗口 / 外部改动的删除能立即反映出来。"""
@@ -769,6 +935,7 @@ class TrashDialog(GlassDialog):
                 done_ids.append(node["id"])
         self._persist()
         self.restored.emit(done_ids)
+        self._flash_action("undo", i18n.trf("已恢复 {n} 项", n=len(done_ids)), "success")
         self.notify(i18n.trf("已恢复 {n} 项", n=len(done_ids)))
 
     def _purge(self) -> None:
@@ -782,6 +949,7 @@ class TrashDialog(GlassDialog):
             return
         done = sum(1 for tid in ids if self.store.purge_from_trash(tid))
         self._persist()
+        self._flash_action("close", i18n.trf("已彻底删除 {n} 项", n=done), "danger")
         self.notify(i18n.trf("已彻底删除 {n} 项", n=done))
 
     def _clear_all(self) -> None:
@@ -795,6 +963,7 @@ class TrashDialog(GlassDialog):
             return
         self.store.clear_trash()
         self._persist()
+        self._flash_action("trash", i18n.trf("已清空回收站（{n} 项）", n=n), "danger")
         self.notify(i18n.trf("已清空回收站（{n} 项）", n=n))
 
     def notify(self, text: str) -> None:

@@ -19,9 +19,20 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.41"
+VERSION = "1.0.42"
 
 CHANGELOG = [
+    {
+        "version": "1.0.42",
+        "date": "2026-11-18",
+        "items": [
+            "日历表头（周几那一行）改为主题暗色，不再用系统默认的浅灰底",
+            "回收站去掉常驻详情面板，整块空间留给删除记录；「最早删除」移到列表上方并与卡片图标对齐",
+            "删除记录 hover 时右侧浮出「详情」小按钮，点击弹出轻量详情小框，不占地方",
+            "侧栏和列表之间加一条 1px 极细分隔线，分栏更清爽",
+            "清空回收站 / 恢复 / 彻底删除确认后播放轻量艺术动画（扩散细环 + 图标淡入），占用资源极少",
+        ],
+    },
     {
         "version": "1.0.41",
         "date": "2026-11-18",

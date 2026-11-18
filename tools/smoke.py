@@ -3218,9 +3218,6 @@ def main() -> int:
         check("回收站窗口是模糊固定窗", dlg.BLUR_FIXED is True)
         check("回收站窗口显示条目", len(dlg.list.items) == 1, str(len(dlg.list.items)))
         check("回收站统计条有数", dlg.stat_total.text() == "1", dlg.stat_total.text())
-        dlg.list.selected = {dlg.list.items[0]["id"]}
-        dlg.list.picked.emit()
-        check("回收站详情可显示", dlg.detail._lay.count() > 0)
         dlg._on_search("x.test")
         check("回收站按 URL 搜索", len(dlg.list.items) == 1)
         dlg._on_search("不存在的关键词")
@@ -3228,8 +3225,7 @@ def main() -> int:
         # v1.0.40：搜索内嵌顶部统计条、去掉操作记录
         check("搜索框内嵌统计条", dlg.search.parent() is not None)
         check("不再有操作记录面板", not hasattr(dlg, "ops"))
-        check("详情带滚动区", dlg.detail_scroll.widget() is dlg.detail)
-        # v1.0.41：统计靠左、搜索描边、侧栏加宽、刷新转圈、详情精简
+        # v1.0.41：搜索描边、侧栏加宽、刷新转圈
         check("刷新按钮可转一圈", callable(getattr(dlg.refresh_btn, "spin_once", None)))
         dlg.refresh_btn.spin_once()
         check("刷新转圈角度已设置或动画已跑",
@@ -3237,21 +3233,44 @@ def main() -> int:
         check("搜索框有描边", "border" in dlg.search.styleSheet())
         check("侧栏加宽避免日期被遮", dlg.date_row.parent().width() >= 250,
               str(dlg.date_row.parent().width()))
-        check("最早删除统计靠左（无 stretch）",
-              dlg.stat_oldest.parent().parent().layout().count() >= 4)
         dlg._on_search("")
         check("自定义日期控件已主题化",
               "QCalendarWidget" in dlg.date_from.calendarWidget().styleSheet())
-        # 详情精简：方法与胶囊同行，正文不再列「参数 / 请求头 / 正文」重复项
-        dlg.list.selected = {dlg.list.items[0]["id"]}
-        dlg.list.picked.emit()
-        detail_texts = [lb.text() for lb in dlg.detail.findChildren(QLabel)]
-        check("详情不再重复列参数请求头正文",
+        # v1.0.42：常驻详情去掉、最早删除移到列表上方、详情浮层 + hover 按钮 + 动画
+        check("常驻详情面板已移除", not hasattr(dlg, "detail_scroll"))
+        check("最早删除移到列表上方",
+              dlg.stat_oldest.parent() is not None and
+              dlg.stat_oldest.parent() is not dlg.search.parent())
+        check("有详情浮层", hasattr(dlg, "_detail_popup") and
+              hasattr(dlg._detail_popup, "detail"))
+        check("hover 详情按钮有命中区", callable(dlg.list._detail_rect))
+        # hover 详情按钮 → 浮层显示该条详情，且不改变选中
+        from PyQt6.QtGui import QMouseEvent as _QME
+        from PyQt6.QtCore import QPointF as _QPF, Qt as _Qt
+        dlg._on_search("")
+        dlg.list._hover = 0
+        dr = dlg.list._detail_rect(0)
+        ev = _QME(_QME.Type.MouseButtonRelease, dr.center(),
+                  _Qt.MouseButton.LeftButton, _Qt.MouseButton.LeftButton,
+                  _Qt.KeyboardModifier.NoModifier)
+        dlg.list.mouseReleaseEvent(ev)
+        check("hover 详情按钮弹出浮层", dlg._detail_popup.isVisible())
+        detail_texts = [lb.text() for lb in dlg._detail_popup.detail.findChildren(QLabel)]
+        check("浮层详情精简且不重复参数请求头正文",
               not any(x in detail_texts for x in ("参数", "请求头", "正文", "类型")),
               str(detail_texts))
-        check("详情保留 URL 与原位置",
+        check("浮层详情保留 URL 与原位置",
               any(x == "URL" for x in detail_texts) and
               any(x == "原位置" for x in detail_texts), str(detail_texts))
+        dlg._detail_popup.hide()
+        check("有操作动画覆盖层", hasattr(dlg, "_flash"))
+        dlg._flash_action("trash", "已清空", "danger")
+        # 关动效时 animate 直接跳终态、on_done 隐藏，属预期；只验证动画已配置
+        check("动画已配置图标与文案", dlg._flash._icon == "trash" and
+              dlg._flash._text == "已清空" and isinstance(dlg._flash._p, float),
+              f"{dlg._flash._icon}/{dlg._flash._text}/{dlg._flash._p}")
+        check("动画有 paintEvent 绘制",
+              callable(getattr(dlg._flash, "paintEvent", None)))
         # 自动清理：设置开关 + 保留天数，保存后立即清过期
         check("自动清理默认开启", st.settings.get("trash_enabled") is True)
         check("保留天数默认 30", st.trash_keep_days() == 30)

@@ -1,5 +1,18 @@
 # What's Changed
 
+## v1.0.42 — 2026-11-18
+
+**Changed**
+- Calendar weekday header switched to the theme's dark palette instead of the
+  system light-grey strip.
+- Removed the always-on trash detail panel so deleted records use the whole
+  area; "Oldest deleted" moved above the list and aligned with the row icon.
+- A small "Details" pill appears on row hover and opens a lightweight detail
+  popup, keeping the layout clean.
+- Added a 1px hairline separator between the filter sidebar and the list.
+- Empty / restore / permanent-delete now play a light artistic animation
+  (expanding ring + icon fade-in) with minimal resource use.
+
 ## v1.0.41 — 2026-11-18
 
 **Changed**
