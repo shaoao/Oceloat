@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -81,6 +82,24 @@ class WsFrame:
         if self.kind == "binary":
             return f"<{self.size} bytes> " + self.data[:48].hex(" ")
         text = self.text()
+        return text if len(text) <= limit else text[:limit] + "…"
+
+    def inline_preview(self, limit: int = 400) -> str:
+        """日志列表里的单行预览：JSON 压成紧凑一行，绝不换行、绝不撑行高。
+
+        多行 JSON 直接拿原文画会把后面几行盖住（用户截图里就是一层叠一层的
+        乱码）；这里先解析再无空格序列化，解析不了就把空白折成空格。
+        """
+        if self.kind == "binary":
+            return f"<{self.size} bytes> " + self.data[:48].hex(" ")
+        text = self.text().strip()
+        if text[:1] in ("{", "["):
+            try:
+                text = json.dumps(json.loads(text), ensure_ascii=False,
+                                  separators=(",", ":"))
+            except Exception:  # noqa: BLE001
+                pass
+        text = re.sub(r"\s+", " ", text).strip()
         return text if len(text) <= limit else text[:limit] + "…"
 
 

@@ -7,14 +7,16 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 from typing import Any, Dict, List
 
 from bisect import bisect_left, bisect_right
 
-from PyQt6.QtCore import QPoint, QRect, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QFontMetricsF, QPainter, QPen
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
 from PyQt6.QtWidgets import (
     QFileDialog,
+    QPlainTextEdit,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -24,7 +26,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import i18n
+from . import i18n, icons
 from .code_editor import CodeView, human_size
 from .theme import C, font, mono, px, theme
 from .widgets import (
@@ -459,81 +461,170 @@ KIND_LABEL = {"text": "TEXT", "json": "JSON", "binary": "BIN",
               "close": "CLOSE", "error": "ERR"}
 
 
-class FrameCard(QWidget):
-    """一条消息展开后的详情卡：表头 + Raw / JSON 页签 + 内容。
+class ChevronToggle(QWidget):
+    """与集合树完全同款的箭头按钮：收起朝右、展开朝下。"""
 
-    只给展开的那几条建控件，没展开的消息仍然只是画一行字，所以几百条日志
-    也不会多出几百个 QTextDocument。
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, expanded: bool = True, parent=None):
+        super().__init__(parent)
+        self.expanded = bool(expanded)
+        self._hover = False
+        self.setFixedSize(20, 20)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
+        self.setToolTip(i18n.tr("折叠内容") if self.expanded else i18n.tr("展开内容"))
+
+    def mouseReleaseEvent(self, e):  # noqa: N802
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        self.expanded = not self.expanded
+        self.setToolTip(i18n.tr("折叠内容") if self.expanded else i18n.tr("展开内容"))
+        self.update()
+        self.toggled.emit(self.expanded)
+
+    def enterEvent(self, e):  # noqa: N802
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, e):  # noqa: N802
+        self._hover = False
+        self.update()
+
+    def paintEvent(self, _e):  # noqa: N802
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if self._hover:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(C(t.hover))
+            p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 5, 5)
+        col = C(t.text if self._hover else t.text_dim).name(QColor.NameFormat.HexArgb)
+        pm = icons.pixmap("chevron_right", col, 11, 2.0)
+        p.save()
+        p.translate(self.width() / 2, self.height() / 2)
+        if self.expanded:
+            p.rotate(90)
+        p.drawPixmap(QPointF(-5.5, -5.5), pm)
+        p.restore()
+        p.end()
+
+
+class FrameCard(QWidget):
+    """一条消息展开后的详情卡。
+
+    列表那一行已经写了时间、方向、类型和预览，卡片里不再重复一遍；
+    这里只做「内容」：页签 + 复制 + 一个带边框、可折叠、无滚动条的代码框。
     """
 
-    H = 156
+    H = 80
+    heightChanged = pyqtSignal()
 
     def __init__(self, frame, parent=None):
         super().__init__(parent)
         self.frame = frame
         self.setObjectName("FrameCard")
         self._raw = frame.preview(20000)
-        preview = self._raw.splitlines()[0] if self._raw else ""
-        arrow = {"in": "↓", "out": "↑"}.get(frame.dir, "·")
-        arrow_l = Label(arrow, 12, theme().success if frame.dir == "in" else theme().info,
-                        QFont.Weight.DemiBold)
-        arrow_l.setFixedWidth(16)
-        stamp = Label(datetime.datetime.fromtimestamp(frame.at).strftime("%H:%M:%S"),
-                      10, theme().text_faint, mono_font=True)
-        stamp.setFixedWidth(58)
-        self.preview = Label("", 10.6, theme().text_dim, mono_font=True)
-        self.preview.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                   QSizePolicy.Policy.Fixed)
-        copy = icon_button("copy", "复制这条消息", 20, 11)
-        copy.clicked.connect(self._copy)
-
-        head = QWidget()
-        hl = QHBoxLayout(head)
-        hl.setContentsMargins(8, 2, 6, 2)
-        hl.setSpacing(6)
-        hl.addWidget(arrow_l, 0)
-        hl.addWidget(stamp, 0)
-        hl.addWidget(self.preview, 1)
-        hl.addWidget(copy, 0)
+        self.collapsed = False
+        self._syncing = False
 
         if frame.kind == "json":
-            tabs_items = [("pretty", "JSON"), ("raw", "Raw")]
+            items = [("pretty", "JSON"), ("raw", "Raw")]
         elif frame.kind == "binary":
-            tabs_items = [("hex", "Hex"), ("raw", "Raw")]
+            items = [("hex", "Hex"), ("raw", "Raw")]
         else:
-            tabs_items = [("raw", "Raw")]
-        self.tabs = SegmentedTabs(tabs_items, style="underline", height=22,
-                                  font_size=10.5, pad_h=8, show_badges=False)
+            items = [("raw", "Raw")]
+        self.tabs = SegmentedTabs(items, style="underline", height=24,
+                                  font_size=10.8, pad_h=9, show_badges=False)
+        self.tabs.changed.connect(self._render)
+        self.chevron = ChevronToggle(True)
+        self.chevron.toggled.connect(self._set_collapsed)
+        copy = icon_button("copy", "复制这条消息", 22, 12)
+        copy.clicked.connect(self._copy)
+
+        bar = QWidget()
+        bl = QHBoxLayout(bar)
+        bl.setContentsMargins(4, 0, 4, 0)
+        bl.setSpacing(4)
+        bl.addWidget(self.chevron, 0)
+        bl.addWidget(self.tabs, 0)
+        bl.addStretch(1)
+        bl.addWidget(copy, 0)
+
+        self.body_label = Label("响应体", 10, theme().text_faint)
+        self.code_card = Card(radius=8, fill="elevated")
+        cl = QVBoxLayout(self.code_card)
+        cl.setContentsMargins(8, 5, 8, 5)
+        cl.setSpacing(0)
         self.body = CodeView(read_only=True, highlight=(frame.kind == "json"),
                              show_gutter=True)
-        self.body.setFixedHeight(84)
-        self.tabs.changed.connect(self._render)
+        # 内容再长也不出滚动条：折行 + 卡片跟着内容长高，滚动交给外层日志区
+        self.body.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.body.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.body.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        cl.addWidget(self.body, 1)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 2, 8, 6)
-        lay.setSpacing(2)
-        lay.addWidget(head, 0)
-        lay.addWidget(self.tabs, 0)
-        lay.addWidget(self.body, 1)
+        lay.setContentsMargins(8, 4, 8, 7)
+        lay.setSpacing(3)
+        lay.addWidget(bar, 0)
+        lay.addWidget(self.body_label, 0)
+        lay.addWidget(self.code_card, 1)
         self._render(self.tabs.current())
 
-    def paintEvent(self, e):  # noqa: N802
+    def paintEvent(self, _e):  # noqa: N802
         t = theme()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        p.setPen(QPen(C(t.border), 1))
+        p.setPen(QPen(C(t.border_strong), 1))
         p.setBrush(C(t.panel_alt))
-        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 7, 7)
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 9, 9)
         p.end()
+
+    # -------------------------------------------------- 高度
+    def sync_height(self) -> bool:
+        if self._syncing:
+            return False
+        self._syncing = True
+        try:
+            if self.collapsed:
+                want = 36
+            else:
+                # QPlainTextEdit 的 document().size() 不是像素高度（它报的是块数），
+                # 自己按字体行距 × 可视行数算，长 JSON 也能整段铺开而不出滚动条。
+                doc = self.body.document()
+                fm = QFontMetricsF(self.body.font())
+                avail = max(40.0, float(self.body.viewport().width()) - 46)
+                lines = 0
+                block = doc.begin()
+                while block.isValid():
+                    text = block.text()
+                    lines += max(1, math.ceil(fm.horizontalAdvance(text) / avail))
+                    block = block.next()
+                h = int(lines * fm.lineSpacing() + doc.documentMargin() * 2 + 6)
+                self.body.setFixedHeight(max(26, h))
+                self.code_card.setFixedHeight(self.body.height() + 12)
+                want = 4 + 24 + 3 + 16 + 3 + self.code_card.height() + 7
+            if abs(self.height() - want) <= 1:
+                return False
+            self.setFixedHeight(want)
+            return True
+        finally:
+            self._syncing = False
+
+    def _set_collapsed(self, expanded: bool) -> None:
+        self.collapsed = not expanded
+        self.body_label.setVisible(expanded)
+        self.code_card.setVisible(expanded)
+        if self.sync_height():
+            self.heightChanged.emit()
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
-        # 表头单行省略，绝不换行把卡片撑高（撑高会打乱懒绘制的行偏移）
-        available = max(40, self.width() - 110)
-        fm = QFontMetricsF(self.preview.font())
-        QLabel.setText(self.preview, fm.elidedText(self._raw.splitlines()[0] if self._raw else "",
-                                                   Qt.TextElideMode.ElideRight, int(available)))
+        if self.sync_height():
+            self.heightChanged.emit()
 
+    # -------------------------------------------------- 内容
     def _render(self, key: str) -> None:
         text = self._raw
         if key == "pretty":
@@ -544,6 +635,8 @@ class FrameCard(QWidget):
         elif key == "hex":
             text = " ".join(f"{b:02X}" for b in self.frame.data[:2048])
         self.body.setPlainText(text)
+        if self.sync_height():
+            self.heightChanged.emit()
 
     def _copy(self) -> None:
         from PyQt6.QtWidgets import QApplication
@@ -570,24 +663,39 @@ class FrameList(QWidget):
         # 避免用户一路点下去把几千条消息都变成 QTextDocument。
         self._expanded: Dict[int, None] = {}
         self._cards: Dict[int, FrameCard] = {}
+        self._relayouting = False
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     # -------------------------------------------------- 布局
     def _relayout(self) -> None:
-        top = 4.0
-        self._tops = []
-        for frame in self.frames:
-            self._tops.append(top)
-            top += self.ROW_H + (self.CARD_H if id(frame) in self._expanded else 0)
-        self.setFixedHeight(max(1, int(top + 4)))
-        self._sync_cards()
-
-    def _sync_cards(self) -> None:
-        if not self._expanded and not self._cards:
+        if self._relayouting:
             return
+        self._relayouting = True
+        try:
+            for _ in range(3):
+                top = 4.0
+                self._tops = []
+                for frame in self.frames:
+                    self._tops.append(top)
+                    card = self._cards.get(id(frame))
+                    h = card.height() if card is not None else self.CARD_H
+                    top += self.ROW_H + (h if id(frame) in self._expanded else 0)
+                self.setFixedHeight(max(1, int(top + 4)))
+                if not self._sync_cards():
+                    break
+        finally:
+            self._relayouting = False
+
+    def _on_card_height(self) -> None:
+        self._relayout()
+
+    def _sync_cards(self) -> bool:
+        if not self._expanded and not self._cards:
+            return False
         live = set()
+        changed = False
         for i, frame in enumerate(self.frames):
             key = id(frame)
             if key not in self._expanded:
@@ -596,15 +704,20 @@ class FrameList(QWidget):
             card = self._cards.get(key)
             if card is None:
                 card = FrameCard(frame, self)
+                card.heightChanged.connect(self._on_card_height)
                 self._cards[key] = card
+                changed = True
             card.setGeometry(QRect(4, int(self._tops[i] + self.ROW_H),
-                                   max(80, self.width() - 8), self.CARD_H))
+                                   max(80, self.width() - 8), card.height()))
+            if card.sync_height():
+                changed = True
             card.show()
         for key, card in list(self._cards.items()):
             if key not in live:
                 card.hide()
                 card.deleteLater()
                 self._cards.pop(key, None)
+        return changed
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
@@ -749,11 +862,16 @@ class FrameList(QWidget):
             p.drawText(QRectF(left, r.top(), avail, r.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                        QFontMetricsF(p.font()).elidedText(
-                           frame.preview(), Qt.TextElideMode.ElideRight, int(avail)))
-            p.setFont(font(10))
-            p.setPen(C(t.text_faint))
-            p.drawText(QRectF(r.right() - 20, r.top(), 16, r.height()),
-                       int(Qt.AlignmentFlag.AlignCenter), "⌄" if opened else "›")
+                           frame.inline_preview(), Qt.TextElideMode.ElideRight,
+                           int(avail)))
+            col = C(t.text_faint).name(QColor.NameFormat.HexArgb)
+            pm = icons.pixmap("chevron_right", col, 11, 2.0)
+            p.save()
+            p.translate(r.right() - 12, r.center().y())
+            if opened:
+                p.rotate(90)
+            p.drawPixmap(QPointF(-5.5, -5.5), pm)
+            p.restore()
         p.end()
 
 

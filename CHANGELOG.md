@@ -1,5 +1,25 @@
 # What's Changed
 
+## v1.0.35 — 2026-11-18
+
+**Changed**
+- WebSocket detail cards were rebuilt around content only: no repeated timestamp / preview
+  from the row above. Tabs, copy button and a clean bordered code frame make the hierarchy
+  clearer.
+- Every expand arrow now uses the same chevron as the collection tree (right when collapsed,
+  down when expanded) — both in log rows and in detail cards.
+- The code frame can be collapsed. JSON keys and values no longer render in bold.
+- The code frame has no scrollbars: it grows to fit all content and the outer log area
+  handles scrolling.
+
+**Fixed**
+- Multi-line JSON in a log row used to overlap the rows below. Previews are now compacted
+  to one horizontal line regardless of how the original was formatted.
+
+**Verified**
+- Self-test suite extended to 544 checks; startup-to-show ~547ms; clean exit with an open
+  WebSocket connection.
+
 ## v1.0.34 — 2026-11-18
 
 **Fixed**

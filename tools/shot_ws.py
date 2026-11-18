@@ -73,7 +73,13 @@ def main() -> int:
             app.processEvents()
             view.list.toggle(0)
             view.list.toggle(1)
-            QTimer.singleShot(420, lambda: (grab(w, "shot_ws_cards"), run(i + 1)))
+            def grab_cards():
+                grab(w, "shot_ws_cards")
+                view.scroll.verticalScrollBar().setValue(int(view.list._tops[1]))
+                QTimer.singleShot(300, lambda: (
+                    grab(w, "shot_ws_cards_json"), run(i + 1)))
+
+            QTimer.singleShot(420, grab_cards)
             return
         if st == "method_menu":
             w.new_request()

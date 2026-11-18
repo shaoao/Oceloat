@@ -19,9 +19,24 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.34"
+VERSION = "1.0.35"
 
 CHANGELOG = [
+    {
+        "version": "1.0.35",
+        "date": "2026-11-18",
+        "items": [
+            "WebSocket 日志详情卡重做：去掉和列表行重复的时间 / 预览，只留页签、复制与代码内容；"
+            "卡片外框、分隔和代码区背景分层更清楚",
+            "详情卡左上角换成与集合树完全同款的折叠箭头（收起朝右、展开朝下），"
+            "列表行右侧也统一换成同款箭头",
+            "代码框可折叠；JSON / Raw / Hex 内容不再加粗，键名和值用同一字重",
+            "代码框内部不再出现横向或纵向滚动条，内容有多长卡片就长多高，滚动交给外层日志区",
+            "修复：日志行里的多行 JSON 会把预览挤成重叠的乱码。现在统一压成单行紧凑 JSON，"
+            "无论原文怎么换行都只占一行",
+            "自测扩到 544 项，新增单行预览、代码框无滚动条、可折叠与 JSON 不加粗用例",
+        ],
+    },
     {
         "version": "1.0.34",
         "date": "2026-11-18",

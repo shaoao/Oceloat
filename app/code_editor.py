@@ -93,9 +93,9 @@ class JsonHighlighter(QSyntaxHighlighter):
             (re.compile(r'"(?:[^"\\]|\\.)*"'), c["string"], QFont.Weight.Normal),
             (re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.])"),
              c["number"], QFont.Weight.Normal),
-            (re.compile(r"\b(?:true|false|null)\b"), c["keyword"], QFont.Weight.DemiBold),
+            (re.compile(r"\b(?:true|false|null)\b"), c["keyword"], QFont.Weight.Normal),
             (re.compile(r"[{}\[\],:]"), c["punct"], QFont.Weight.Normal),
-            (re.compile(r'"(?:[^"\\]|\\.)*"(?=\s*:)'), c["property"], QFont.Weight.DemiBold),
+            (re.compile(r'"(?:[^"\\]|\\.)*"(?=\s*:)'), c["property"], QFont.Weight.Normal),
         ]
         for pattern, color, weight in rules:
             for m in pattern.finditer(text):

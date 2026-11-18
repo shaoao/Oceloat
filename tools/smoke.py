@@ -2984,7 +2984,41 @@ def main() -> int:
             if card.tabs.has("json"):
                 card.tabs.set_current("json", emit=True)
                 check("JSON 页签显示分行排版", "\n" in card.body.toPlainText())
+            check("代码框没有滚动条",
+                  card.body.verticalScrollBarPolicy()
+                  == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+                  and card.body.horizontalScrollBarPolicy()
+                  == Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            h_open = card.height()
+            card.chevron.expanded = False
+            card.chevron.toggled.emit(False)
+            app.processEvents()
+            check("代码框能折叠", not card.code_card.isVisible()
+                  and card.height() < h_open,
+                  f"{h_open} → {card.height()}")
+            card.chevron.expanded = True
+            card.chevron.toggled.emit(True)
+            app.processEvents()
+            check("代码框能展开回来", card.code_card.isVisible()
+                  and card.height() >= h_open)
             check("统计数字带补间动画", view.stats._num_anim is not None)
+
+        from app.ws_client import WsFrame as _WsFrame
+
+        multi = _WsFrame("in", "json", b'{\n "a": 1,\n "b": 2\n}', 0, 12)
+        check("日志行内 JSON 压成单行", "\n" not in multi.inline_preview()
+              and multi.inline_preview().startswith("{"), multi.inline_preview())
+        from PyQt6.QtGui import QFont as _QFont, QTextCursor as _QTextCursor, QTextDocument as _QTextDocument
+        from app.code_editor import JsonHighlighter as _JsonHighlighter
+
+        doc = _QTextDocument('{"a":1}')
+        _JsonHighlighter(doc)
+        cur = _QTextCursor(doc)
+        cur.setPosition(1)
+        cur.setPosition(2, _QTextCursor.MoveMode.KeepAnchor)
+        check("JSON 键名不再加粗",
+              cur.charFormat().fontWeight() == _QFont.Weight.Normal,
+              str(cur.charFormat().fontWeight()))
 
         # 输入法组词时不能把占位提示透出来
         from PyQt6.QtGui import QInputMethodEvent
