@@ -1,5 +1,27 @@
 # What's Changed
 
+## v1.0.38 — 2026-11-18
+
+**Fixed**
+- Two expanded message cards could overlap. The list laid out rows using an
+  80px estimate for a not-yet-created card, so once the real card turned out to
+  be several hundred pixels tall the following rows were drawn right on top of
+  it. Layout now creates and measures every expanded card first, then positions
+  rows, and checks convergence against the row offsets themselves (not against
+  whether card properties changed, which broke out of the loop too early).
+- Scrolling to the bottom still hid the last message: the list height omitted
+  the expanded card on the final row. Total height now includes that card in
+  full, so the bottom edge is reachable.
+- Resizing the window narrower reflows long text and changes card height; the
+  whole list is now re-laid out on resize instead of only repositioning cards.
+
+**Changed**
+- Detail cards no longer show the "响应体" label; the Raw tab and the code box
+  are aligned to the same left edge.
+
+**Verified**
+- Self-test suite: 554 checks, 0 failures.
+
 ## v1.0.37 — 2026-11-18
 
 **Fixed**

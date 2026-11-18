@@ -3028,6 +3028,42 @@ def main() -> int:
             view.list._relayout()
             app.processEvents()
 
+            # v1.0.38 回归：去掉「响应体」、Raw 与代码框视觉对齐
+            check("详情卡不再显示响应体三个字", not hasattr(card, "body_label"))
+            # tabs 在 bar 内 pad_h=0、bar 左边距 0；code_card 与 bar 同属卡片
+            # 内容区，两者相对卡片的 x 应一致（视觉左对齐）。
+            bar = card.tabs.parentWidget()
+            raw_x = bar.x() + card.tabs.x() + card.tabs._pad_h
+            check("Raw 标签与代码框左边对齐", abs(raw_x - card.code_card.x()) <= 1,
+                  f"raw x={raw_x}, code x={card.code_card.x()}")
+
+            # 两张卡片同时展开不能压在一起，列表总高要含最后一张的全文
+            from app.ws_panel import WsLogView as _WsLogView
+            view2 = _WsLogView()
+            for _p in (b"hello", b'{"a":1,"b":[1,2,3]}', b"l3", b"l4"):
+                view2.add_frame(_F("in", "text", _p))
+            app.processEvents()
+            view2.list.toggle(0); app.processEvents()
+            view2.list.toggle(1); app.processEvents()
+            cards2 = list(view2.list._cards.values())
+            if len(cards2) >= 2:
+                c0 = cards2[0]
+                row1_top = view2.list._tops[1]
+                check("两张展开卡片不重叠",
+                      c0.geometry().y() + c0.geometry().height() <= row1_top + 2,
+                      f"card0 bottom={c0.geometry().y()+c0.geometry().height()}, row1 top={row1_top}")
+            # 展开最后一条后，列表总高必须完整包住卡片底部——这是「滚到底
+            # 能看到全文」的充要条件（滚动区范围由 list 高度决定）。之前
+            # setFixedHeight 漏算最后一行展开卡的高度，底部就被裁掉。
+            view2.list.toggle(3); app.processEvents()
+            last = view2.list._cards.get(id(view2.list.frames[3]))
+            if last is not None:
+                card_bottom = last.geometry().y() + last.geometry().height()
+                check("列表高度完整包住末张卡片（滚到底可见）",
+                      view2.list.height() >= card_bottom + 2,
+                      f"bottom={card_bottom}, list.h={view2.list.height()}")
+            view2.deleteLater()
+
         # WS 视图下「…」按钮要给出一套专属功能，不能再点了没反应
         check("WS 更多菜单有专属回调", w.response.is_ws_view()
               and callable(getattr(w.response, "_show_ws_menu", None)))

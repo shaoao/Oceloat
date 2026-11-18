@@ -576,8 +576,10 @@ class FrameCard(QWidget):
             items = [("pretty", "JSON"), ("raw", "Raw")]
         else:
             items = [("raw", "Raw")]
+        # pad_h 与 bar 左边距配合，让 Raw 文字/下划线左边缘与下方代码框左边缘
+        # 严格对齐（视觉对齐）。见下方 lay / code_card 的边距设定。
         self.tabs = SegmentedTabs(items, style="underline", height=24,
-                                  font_size=10.8, pad_h=9, show_badges=False)
+                                  font_size=10.8, pad_h=0, show_badges=False)
         self.tabs.changed.connect(self._render)
         # 用户要求去掉左上角那个折叠箭头：详情卡固定展开，入口不再显示。
         copy = icon_button("copy", "复制这条消息", 22, 12)
@@ -585,17 +587,19 @@ class FrameCard(QWidget):
 
         bar = QWidget()
         bl = QHBoxLayout(bar)
-        bl.setContentsMargins(4, 0, 4, 0)
+        # 左边距 0 + tabs 的 pad_h=0：Raw 文字/下划线从卡片内容左边缘起，
+        # 正好与下方代码框左边缘同一条竖线（视觉对齐）。
+        bl.setContentsMargins(0, 0, 12, 0)
         bl.setSpacing(4)
         bl.addWidget(self.tabs, 0)
         bl.addStretch(1)
         bl.addWidget(copy, 0)
 
-        self.body_label = Label("响应体", 10, theme().text_faint)
         # 代码卡与底色同族：参考图的响应体区只比窗口底色深一点点，
         # 不再用偏亮的 elevated，避免黑框里套一块灰板的割裂感。
         self.code_card = Card(radius=8, fill=theme().code_bg)
         cl = QVBoxLayout(self.code_card)
+        # 卡片左内边距 8 与 bar 的 8 对齐；代码内容（含行号槽）从同一竖线起。
         cl.setContentsMargins(8, 5, 8, 5)
         cl.setSpacing(0)
         # 内容是 JSON 就开高亮：日志行上的类型来自发送时选的模式，纯文本模式
@@ -623,9 +627,8 @@ class FrameCard(QWidget):
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 4, 8, 7)
-        lay.setSpacing(3)
+        lay.setSpacing(4)
         lay.addWidget(bar, 0)
-        lay.addWidget(self.body_label, 0)
         lay.addWidget(self.code_card, 1)
         self._render(self.tabs.current())
 
@@ -676,7 +679,8 @@ class FrameCard(QWidget):
                 h = int(lines * fm.lineSpacing() + doc.documentMargin() * 2 + 6)
                 self.body.setFixedHeight(max(26, h))
                 self.code_card.setFixedHeight(self.body.height() + 12)
-                want = 4 + 24 + 3 + 16 + 3 + self.code_card.height() + 7
+                # 4(top) + 24(tabs) + 4(spacing) + code_card + 7(bottom)
+                want = 4 + 24 + 4 + self.code_card.height() + 7
             if abs(self.height() - want) <= 1:
                 return False
             self.setFixedHeight(want)
@@ -686,7 +690,6 @@ class FrameCard(QWidget):
 
     def _set_collapsed(self, expanded: bool) -> None:
         self.collapsed = not expanded
-        self.body_label.setVisible(expanded)
         self.code_card.setVisible(expanded)
         if self.sync_height():
             self.heightChanged.emit()
@@ -741,22 +744,42 @@ class FrameList(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     # -------------------------------------------------- 布局
+    def _layout_tops(self) -> Tuple[List[float], float]:
+        """按每张卡片的「当前真实高度」算出所有行的 top 与内容总高。纯计算。"""
+        tops: List[float] = []
+        top = 4.0
+        for frame in self.frames:
+            tops.append(top)
+            h = (self._card_height(frame) if id(frame) in self._expanded else 0)
+            top += self.ROW_H + h
+        return tops, top
+
     def _relayout(self) -> None:
         if self._relayouting:
             return
         self._relayouting = True
         try:
-            for _ in range(3):
-                top = 4.0
-                self._tops = []
-                for frame in self.frames:
-                    self._tops.append(top)
-                    h = (self._card_height(frame) if id(frame) in self._expanded
-                         else 0)
-                    top += self.ROW_H + h
-                self.setFixedHeight(max(1, int(top + 4)))
-                if not self._sync_cards():
+            # 关键：先把所有展开卡片创建出来、并把高度算准，再排布 tops。
+            # 之前只在循环里算 tops、拿 _sync_cards() 的返回值当收敛判据——
+            # 新展开的卡片在第一轮还不存在（按 CARD_H=80 预估），卡片创建后
+            # tops 本该重算，却因返回值误判提前 break，导致长卡片被后续行覆盖、
+            # 列表总高算小。这就是「两卡片压一块」「滚到底看不到内容」的根因。
+            # 先创建所有展开卡片、拿到真实高度，再进入收敛循环。
+            cards_changed = self._sync_cards()
+            for _ in range(6):
+                new_tops, total = self._layout_tops()
+                # total 已经含最后一行展开卡片的完整高度，直接作为内容底边。
+                self.setFixedHeight(max(8, int(total + 4)))
+                # 用 tops 自身是否变化判断收敛，而不是卡片属性变化：
+                # 卡片可能早已 setGeometry 过，但 tops 仍是旧的预估偏移。
+                stable = (len(new_tops) == len(self._tops)
+                          and all(abs(a - b) <= 0.5
+                                  for a, b in zip(new_tops, self._tops)))
+                self._tops = new_tops
+                cards_changed = self._sync_cards() or cards_changed
+                if stable and not cards_changed:
                     break
+                cards_changed = False
         finally:
             self._relayouting = False
 
@@ -779,10 +802,15 @@ class FrameList(QWidget):
                 card.heightChanged.connect(self._on_card_height)
                 self._cards[key] = card
                 changed = True
+            # 先按当前列宽把卡片放到位（高度用旧的即可），拿到真实 viewport
+            # 宽度后再 sync_height 算准行数，最后用准确高度重设 geometry。
+            # 顺序反过来会拿 80px 的占位高度摆卡片，长内容就被压住。
             card.setGeometry(QRect(4, int(self._tops[i] + self.ROW_H),
                                    max(80, self.width() - 8), card.height()))
             if card.sync_height():
                 changed = True
+            card.setGeometry(QRect(4, int(self._tops[i] + self.ROW_H),
+                                   max(80, self.width() - 8), card.height()))
             card.show()
         for key, card in list(self._cards.items()):
             if key not in live:
@@ -794,7 +822,9 @@ class FrameList(QWidget):
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
         if self._cards:
-            self._sync_cards()
+            # 列宽变化会让长文本重新折行、卡片变高/变矮，必须整表重排 tops，
+            # 否则只摆卡片不更新偏移，同样会出现重叠和底部裁切。
+            self._relayout()
 
     # -------------------------------------------------- 数据
     def set_frames(self, frames: List[Any]) -> None:

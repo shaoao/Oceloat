@@ -19,9 +19,21 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.37"
+VERSION = "1.0.38"
 
 CHANGELOG = [
+    {
+        "version": "1.0.38",
+        "date": "2026-11-18",
+        "items": [
+            "修复：同时展开两张消息卡片会压在一起——列表偏移原先按 80px 预估新卡片高度，" 
+            "卡片实际有几百像素时后续行直接盖上来；现在先建卡量高再排布，按 tops 自身收敛",
+            "修复：滚动条到底了仍看不到最后一条内容——列表总高漏算了末行展开卡片的高度，" 
+            "现在总高包含末张卡片全文，滚到底能看到底边",
+            "修复：窗口变窄使长消息重新折行时卡片高度过时、再次重叠——缩放时整表重排",
+            "详情卡去掉「响应体」三个字，Raw 标签与代码框左边缘严格视觉对齐",
+        ],
+    },
     {
         "version": "1.0.37",
         "date": "2026-11-18",
