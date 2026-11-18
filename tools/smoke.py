@@ -1616,6 +1616,8 @@ def main() -> int:
 
         acts = [a[0] for a in CommandPalette.ACTIONS]
         check("命令面板能打开接口文档", "doc" in acts, str(acts[-2:]))
+        check("命令面板新增回收站入口", "trash" in acts and "trash_settings" in acts,
+              str(acts))
 
         # 真发一次，验证整条链路：请求 → 响应 → 复制文档
         w._open_request_obj(req, node_id=None)
@@ -3223,13 +3225,33 @@ def main() -> int:
         check("回收站按 URL 搜索", len(dlg.list.items) == 1)
         dlg._on_search("不存在的关键词")
         check("回收站搜索无结果", len(dlg.list.items) == 0)
-        # v1.0.40：搜索内嵌顶部统计条、去掉操作记录、详情更丰富
+        # v1.0.40：搜索内嵌顶部统计条、去掉操作记录
         check("搜索框内嵌统计条", dlg.search.parent() is not None)
         check("不再有操作记录面板", not hasattr(dlg, "ops"))
         check("详情带滚动区", dlg.detail_scroll.widget() is dlg.detail)
+        # v1.0.41：统计靠左、搜索描边、侧栏加宽、刷新转圈、详情精简
+        check("刷新按钮可转一圈", callable(getattr(dlg.refresh_btn, "spin_once", None)))
+        dlg.refresh_btn.spin_once()
+        check("刷新转圈角度已设置或动画已跑",
+              isinstance(dlg.refresh_btn._icon_rotation, float))
+        check("搜索框有描边", "border" in dlg.search.styleSheet())
+        check("侧栏加宽避免日期被遮", dlg.date_row.parent().width() >= 250,
+              str(dlg.date_row.parent().width()))
+        check("最早删除统计靠左（无 stretch）",
+              dlg.stat_oldest.parent().parent().layout().count() >= 4)
         dlg._on_search("")
         check("自定义日期控件已主题化",
               "QCalendarWidget" in dlg.date_from.calendarWidget().styleSheet())
+        # 详情精简：方法与胶囊同行，正文不再列「参数 / 请求头 / 正文」重复项
+        dlg.list.selected = {dlg.list.items[0]["id"]}
+        dlg.list.picked.emit()
+        detail_texts = [lb.text() for lb in dlg.detail.findChildren(QLabel)]
+        check("详情不再重复列参数请求头正文",
+              not any(x in detail_texts for x in ("参数", "请求头", "正文", "类型")),
+              str(detail_texts))
+        check("详情保留 URL 与原位置",
+              any(x == "URL" for x in detail_texts) and
+              any(x == "原位置" for x in detail_texts), str(detail_texts))
         # 自动清理：设置开关 + 保留天数，保存后立即清过期
         check("自动清理默认开启", st.settings.get("trash_enabled") is True)
         check("保留天数默认 30", st.trash_keep_days() == 30)

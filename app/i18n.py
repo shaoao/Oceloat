@@ -1386,4 +1386,6 @@ _EN.update({
     "7 天": "7 days",
     "30 天": "30 days",
     "90 天": "90 days",
+    "打开回收站": "Open Trash",
+    "回收站自动清理设置…": "Trash auto-clean settings…",
 })

@@ -318,6 +318,14 @@ class TrashDetail(QWidget):
         row.layout().setContentsMargins(0, 1, 0, 1)
         self._lay.addWidget(row)
 
+    def _title_row(self, title: str, pills: List) -> None:
+        """标题和胶囊同一行：一眼看到名称 + 类型/方法，不再占两行。"""
+        lab = Label(title, 13, theme().text, weight=QFont.Weight.DemiBold)
+        lab.setWordWrap(True)
+        row = HBox(lab, *pills, 1, spacing=8)
+        row.layout().setContentsMargins(0, 0, 0, 2)
+        self._lay.addWidget(row)
+
     def _parent_name(self, rec: Dict[str, Any]) -> str:
         pid = rec.get("parent_id")
         if not pid:
@@ -341,56 +349,28 @@ class TrashDetail(QWidget):
         is_folder = node.get("type") == "folder"
         method = str(node.get("method") or "GET")
 
-        # 标题 + 类型 / 方法胶囊
-        title = Label(node.get("name") or i18n.tr("未命名"), 13, t.text,
-                      weight=QFont.Weight.DemiBold)
-        title.setWordWrap(True)
-        self._lay.addWidget(title)
+        # 标题 + 类型/方法胶囊同一行；详情回到「简单列出」：不重复类型/方法，
+        # 只保留 URL、包含、删除时间、原位置几项，干净利落。
         from .widgets import Pill
-        self._pill_row([
-            Pill(i18n.tr("文件夹") if is_folder else i18n.tr("请求"),
-                 t.warning if is_folder else t.info, font_size=9.6, height=18),
-        ] if is_folder else [
-            Pill(method, _method_color(method), font_size=9.6, height=18),
-            Pill(i18n.tr("请求"), t.text_dim, font_size=9.6, height=18),
-        ])
+        if is_folder:
+            pills = [Pill(i18n.tr("文件夹"), t.warning, font_size=9.6, height=18)]
+        else:
+            pills = [Pill(method, _method_color(method), font_size=9.6, height=18),
+                     Pill(i18n.tr("请求"), t.text_dim, font_size=9.6, height=18)]
+        self._title_row(node.get("name") or i18n.tr("未命名"), pills)
         self._lay.addWidget(Divider())
 
-        self._row(i18n.tr("类型"), i18n.tr("文件夹") if is_folder else i18n.tr("请求"))
         if not is_folder:
-            self._row(i18n.tr("方法"), method, _method_color(method), mono_value=True)
-            url = str(node.get("url") or "-")
-            self._row("URL", url, t.info, mono_value=True)
-            # 请求配置：参数 / 请求头 / 正文
-            n_params = len(node.get("params") or [])
-            n_headers = len(node.get("headers") or [])
-            body = node.get("body") or {}
-            mode = str(body.get("mode") or "-") if isinstance(body, dict) else "-"
-            self._row(i18n.tr("参数"), i18n.trf("{n} 项", n=n_params), t.text_dim)
-            self._row(i18n.tr("请求头"), i18n.trf("{n} 项", n=n_headers), t.text_dim)
-            self._row(i18n.tr("正文"), mode, t.text_dim)
-            # 环境变量：列出引用到的变量名，缺失的用警告色
-            if self.store is not None:
-                refs = self.store.env_refs(node)
-                if refs:
-                    missing = set(self.store.missing_env_refs(node))
-                    txt = ", ".join("{{" + r + "}}" + (i18n.tr("（未定义）") if r in missing else "")
-                                    for r in refs)
-                    self._row(i18n.tr("环境变量"), txt,
-                              t.warning if missing else t.text_dim, mono_value=True)
+            self._row("URL", str(node.get("url") or "-"), t.info, mono_value=True)
         else:
             kids = self._collect_requests(node.get("children") or [])
             self._row(i18n.tr("包含"), i18n.trf("{n} 个请求", n=len(kids)))
-            if kids:
-                names = "、".join(str(k.get("name") or "?") for k in kids[:5])
-                if len(kids) > 5:
-                    names += i18n.trf(" 等 {n} 项", n=len(kids))
-                self._row(i18n.tr("子请求"), names, t.text_dim)
         self._row(i18n.tr("删除时间"), _fmt_full(rec.get("deleted_at", 0)),
                   t.text_dim, mono_value=True)
         where = self._parent_name(rec)
         self._row(i18n.tr("原位置"), f"{where} · #{int(rec.get('index', 0)) + 1}",
                   t.text_dim)
+        self._lay.addStretch(1)
 
     @staticmethod
     def _collect_requests(children: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -467,24 +447,42 @@ class TrashDialog(GlassDialog):
         self.stat_folder = Label("0", 19, t.warning, mono_font=True,
                                  weight=QFont.Weight.DemiBold)
         self.stat_oldest = Label("-", 12, t.text_dim, mono_font=True)
-        hl.addWidget(cell(self.stat_total, i18n.tr("全部条目")))
-        hl.addWidget(cell(self.stat_req, i18n.tr("请求")))
-        hl.addWidget(cell(self.stat_folder, i18n.tr("文件夹")))
-        hl.addWidget(cell(self.stat_oldest, i18n.tr("最早删除")))
+        # 四项统计全部紧凑靠左（和 v1.0.39 一样），不再把「最早删除」甩到最右
+        for w, cap, col in (
+            (self.stat_total, i18n.tr("全部条目"), None),
+            (self.stat_req, i18n.tr("请求"), t.info),
+            (self.stat_folder, i18n.tr("文件夹"), t.warning),
+        ):
+            hl.addWidget(cell(w, cap, col))
+        oldest = QWidget()
+        ol = QVBoxLayout(oldest)
+        ol.setContentsMargins(14, 8, 14, 8)
+        ol.setSpacing(2)
+        ol.addWidget(self.stat_oldest)
+        ol.addWidget(Label(i18n.tr("最早删除"), 10, t.text_faint))
+        hl.addWidget(oldest)
+        hl.addStretch(1)
 
-        # 搜索框移到右上角，和统计条同一行
+        # 搜索框放右上，和统计条同一行；显式描边，避免和深色背景糊在一起
         self.search = QLineEdit()
         self.search.setPlaceholderText(i18n.tr("搜索名称 / URL / 方法"))
         self.search.setFixedSize(228, 30)
+        self.search.setStyleSheet(f"""
+            QLineEdit {{ background: {t.card}; color: {t.text};
+                border: 1px solid {S(t.border_strong)}; border-radius: 6px;
+                padding: 0 10px; }}
+            QLineEdit:focus {{ border: 1px solid {S(t.accent)}; }}
+        """)
         self.search.textChanged.connect(self._on_search)
-        hl.addWidget(self.search, 0, Qt.AlignmentFlag.AlignRight |
-                     Qt.AlignmentFlag.AlignVCenter)
+        hl.addWidget(self.search, 0, Qt.AlignmentFlag.AlignVCenter)
         return bar
 
     def _left_panel(self) -> QWidget:
         t = theme()
         panel = QWidget()
-        panel.setFixedWidth(210)
+        # 加宽侧栏：自定义日期范围两个日期框 + 箭头需要足够横向空间，
+        # 210 会把第二个日期框截掉，这里给到 258。
+        panel.setFixedWidth(258)
         vl = QVBoxLayout(panel)
         vl.setContentsMargins(0, 0, 0, 0)
         vl.setSpacing(9)
@@ -573,7 +571,7 @@ class TrashDialog(GlassDialog):
         self.detail_scroll.setWidget(self.detail)
         self.detail_scroll.viewport().setStyleSheet(
             f"QWidget {{ background: {t.panel}; }}")
-        self.detail_scroll.setFixedHeight(196)
+        self.detail_scroll.setFixedHeight(158)
         db.addWidget(self.detail_scroll)
         vl.addWidget(detail_box, 0)
         return wrap
@@ -598,6 +596,8 @@ class TrashDialog(GlassDialog):
         self.clear_btn.clicked.connect(self._clear_all)
         self.refresh_btn = icon_button("refresh", i18n.tr("刷新"), 30, 15)
         self.refresh_btn.clicked.connect(self._refresh)
+        # 点击先转一圈，再读盘，交互有明确反馈
+        self.refresh_btn.clicked.connect(self.refresh_btn.spin_once)
         for w in (self.refresh_btn, self.clear_btn, self.purge_btn, self.restore_btn):
             hl.addWidget(w, 0)
         return bar

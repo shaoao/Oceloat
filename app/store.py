@@ -19,9 +19,20 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.40"
+VERSION = "1.0.41"
 
 CHANGELOG = [
+    {
+        "version": "1.0.41",
+        "date": "2026-11-18",
+        "items": [
+            "回收站统计条改为和之前一样全部靠左；搜索框加描边，深色背景下清晰可见",
+            "刷新按钮点击后图标转一圈，反馈更明确",
+            "侧边筛选栏加宽，自定义日期范围的两个日期框不再被截断",
+            "命令面板新增「打开回收站」与「回收站自动清理设置」，新功能可直接搜索执行",
+            "详情精简回简单列表（URL / 包含 / 删除时间 / 原位置），类型与方法胶囊与标题同行",
+        ],
+    },
     {
         "version": "1.0.40",
         "date": "2026-11-18",

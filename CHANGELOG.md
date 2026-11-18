@@ -1,5 +1,17 @@
 # What's Changed
 
+## v1.0.41 — 2026-11-18
+
+**Changed**
+- Trash stats bar items all aligned left again as before; search box now has a
+  visible border so it reads clearly against the dark background.
+- Refresh button icon spins one full turn on click for clear feedback.
+- Widened the trash filter sidebar so the custom date range inputs are no
+  longer clipped.
+- Command palette gained "Open Trash" and "Trash auto-clean settings" actions.
+- Trash detail simplified back to a short list (URL / contains / deleted at /
+  original location) with type and method pills on the title row.
+
 ## v1.0.40 — 2026-11-18
 
 **Changed**

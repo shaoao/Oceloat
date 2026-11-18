@@ -454,6 +454,8 @@ class Button(QWidget):
         self._pressed = False
         self._busy = False
         self._angle = 0.0
+        self._icon_rotation = 0.0
+        self._spin_anim: Optional[QVariantAnimation] = None
         self._enabled = True
         self._checked = False
         self._tip = tooltip or ""
@@ -500,6 +502,26 @@ class Button(QWidget):
     def set_checked(self, checked: bool) -> None:
         self._checked = checked
         self.update()
+
+    def spin_once(self, duration: int = 560) -> None:
+        """图标原地转一圈：刷新按钮点击后给一次明确的「我干活了」反馈。
+
+        和 _busy 的连续转圈不同，这里只转 360° 后归零；图标旋转靠
+        paintEvent 里的 translate/rotate，不另起定时器，复用统一动画。
+        """
+        if self._icon_name is None:
+            return
+        _anim_stop(self._spin_anim)
+        self._icon_rotation = 0.0
+
+        def _done():
+            self._icon_rotation = 0.0
+            self.update()
+
+        self._spin_anim = animate(
+            self, 0.0, 360.0, duration,
+            lambda v: (setattr(self, "_icon_rotation", float(v)), self.update()),
+            QEasingCurve.Type.InOutCubic, on_done=_done)
 
     def setEnabled(self, enabled: bool) -> None:  # noqa: N802
         self._enabled = enabled
@@ -622,7 +644,15 @@ class Button(QWidget):
         elif self._icon_name:
             pm = icons.pixmap(self._icon_name, fg.name(QColor.NameFormat.HexArgb),
                               self._icon_size, 1.55)
-            p.drawPixmap(QPointF(x, cy - self._icon_size / 2), pm)
+            rot = getattr(self, "_icon_rotation", 0.0)
+            if rot:
+                p.save()
+                p.translate(x + self._icon_size / 2, cy)
+                p.rotate(rot)
+                p.drawPixmap(QPointF(-self._icon_size / 2, -self._icon_size / 2), pm)
+                p.restore()
+            else:
+                p.drawPixmap(QPointF(x, cy - self._icon_size / 2), pm)
             x += self._icon_size + (self._gap if self._text else 0)
         if self._text:
             p.setFont(self._font)

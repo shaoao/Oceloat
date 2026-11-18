@@ -2178,6 +2178,10 @@ class MainWindow(QWidget):
             self.save_current()
         elif key == "env":
             self.show_envs()
+        elif key == "trash":
+            self.open_trash()
+        elif key == "trash_settings":
+            self.show_settings(page="data")
         elif key == "settings":
             self.show_settings()
         elif key == "appearance":
