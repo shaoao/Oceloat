@@ -143,10 +143,14 @@ check("生成后提示可试运行", "试运行" in sp._status_text, sp._status_
 
 sp2 = ScriptPage(store=store, kind="pre")
 sp2.code.setPlainText("console.log(1);")
-sp2._on_ai_script("// 这超出了当前脚本的范围")
-check("拒答不写进编辑器", sp2.code.toPlainText() == "console.log(1);",
+sp2._on_ai_script("抱歉，这个问题我没法处理。")
+check("纯说明文字不写进编辑器", sp2.code.toPlainText() == "console.log(1);",
       sp2.code.toPlainText())
-check("拒答给出提示", "范围" in sp2._status_text, sp2._status_text)
+# 放宽之后：单行注释也照收，不再当成「拒答」
+sp3 = ScriptPage(store=store, kind="pre")
+sp3.code.setPlainText("")
+sp3._on_ai_script("// 先把 token 写进请求头\nreq.setHeader('X-Token', pw.env.get('token'));")
+check("注释开头的脚本照收", "setHeader" in sp3.code.toPlainText(), sp3.code.toPlainText())
 
 check("清理代码会去掉开场白",
       ai_mod.clean_code("以下是脚本：\nreq.setHeader('A','B');") == "req.setHeader('A','B');",
@@ -164,28 +168,28 @@ check("文档追加 AI 段落", "接口说明" in doc._markdown
       and len(doc._markdown) > len(base_md), doc._markdown[-120:])
 check("AI 段落接在原文档之后，不改原文", doc._markdown.startswith(base_md.rstrip()))
 
-# ---------------------------------------------------------------- 一句话生成请求
+# AI 内容开关：关掉退回纯文档，打开又回来
+doc.ai_switch.setChecked(False, emit=True)
+check("AI 开关关掉后不展示 AI 段落", "接口说明" not in doc._markdown, doc._markdown[-80:])
+check("关掉后正文回到自动生成内容", doc._markdown.startswith(base_md.rstrip()))
+doc.ai_switch.setChecked(True, emit=True)
+check("AI 开关打开后恢复", "接口说明" in doc._markdown)
+check("有 AI 内容时开关可见", doc.ai_switch_box.isVisible() or not doc.isVisible())
+
+# 代码示例折叠：箭头与面板高度一起变
+expanded_h = doc._code_panel.height() if doc.isVisible() else doc._code_panel.maximumHeight()
+doc._toggle_code()
+check("折叠后代码区隐藏", doc._code_host.isHidden() and doc.lang_tabs.isHidden())
+check("折叠后高度变小", doc._code_panel.maximumHeight() < expanded_h,
+      f"{doc._code_panel.maximumHeight()} vs {expanded_h}")
+check("箭头状态跟着变", doc.code_chevron.is_expanded() is False)
+doc._toggle_code()
+check("再点展开", doc.code_chevron.is_expanded() is True
+      and doc._code_panel.maximumHeight() == expanded_h)
+
 import app.main_window as mw  # noqa: E402
 
-spec = {"name": "查用户", "method": "post", "url": "https://api.example.com/users",
-        "headers": [{"key": "X-Test", "value": "1"}], "params": [{"key": "page", "value": "2"}],
-        "body": "{\"name\": \"Tom\"}"}
 win = mw.MainWindow(store)
-opened = []
-win._open_request_obj = lambda r, node_id, preview=False, activate=True: opened.append(r)
-win._on_ai_request(json.dumps(spec))
-check("一句话生成请求打开了标签", len(opened) == 1, str(len(opened)))
-if opened:
-    r = opened[0]
-    check("方法大写", r["method"] == "POST", r["method"])
-    check("请求头写入", any(h["key"] == "X-Test" for h in r["headers"]), str(r["headers"]))
-    check("参数写入", any(p["key"] == "page" for p in r["params"]), str(r["params"]))
-    check("JSON 体自动加 Content-Type",
-          any(h["key"].lower() == "content-type" for h in r["headers"]), str(r["headers"]))
-    check("请求体模式为 json", r["body"]["mode"] == "json", r["body"]["mode"])
-
-win._on_ai_request("这不是 JSON")
-check("坏 JSON 不会打开标签", len(opened) == 1, str(len(opened)))
 
 # 自动起名：默认名可被替换，自定义名不动
 tab = {"id": "t1", "request": {"name": "users", "url": "https://a.com/api/users",
@@ -221,3 +225,26 @@ print(f"{TOTAL[0] - len(FAIL)}/{TOTAL[0]} 通过")
 if FAIL:
     print("失败项：" + ", ".join(FAIL))
     sys.exit(1)
+
+# ---------------------------------------------------------------- 提示词与输入框
+msgs = ai_mod.messages_for_script("把 token 存进变量", "post")
+sys_text = msgs[0]["content"]
+check("脚本提示词不再写死拒答", "只输出一行注释" not in sys_text, sys_text[:80])
+check("脚本提示词要求默认写代码", "JavaScript" in sys_text and "代码" in sys_text)
+check("脚本提示词仍给出可用 API", "pw.env.set" in sys_text)
+check("AI 新建请求功能已移除", not hasattr(ai_mod, "messages_for_request"))
+
+from app.dialogs import AiPromptDialog  # noqa: E402
+
+pd = AiPromptDialog("AI 写脚本", "说明想做的前置脚本逻辑，AI 会直接写成可运行的 JavaScript。" * 2,
+                    "例如：把 token 存进环境变量")
+pd.edit.setPlainText("第一行\n第二行\n第三行")
+pd.resize(540, 236)
+pd.show()
+QApplication.processEvents()
+edit_geo = pd.edit.geometry()
+body_geo = pd.body.geometry()
+check("输入框没被按钮压住", pd.edit.height() >= 84, str(edit_geo))
+check("输入框底边在对话框内", edit_geo.bottom() <= body_geo.bottom(), 
+      f"{edit_geo.bottom()} / {body_geo.bottom()}")
+pd.close()

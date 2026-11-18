@@ -15,7 +15,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QFontMetricsF, QGuiApplication, QPainter
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QGuiApplication, QPainter
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import i18n
+from . import i18n, icons
 from .codegen import LANGUAGES
 from .dialogs import GlassDialog
 from .markdown_view import CodeBlock, MarkdownView
@@ -34,6 +34,54 @@ from .theme import C, font, method_color, theme
 from .widgets import Button, Divider, ElideLabel, HBox, Label, Pill, SegmentedTabs, Switch
 
 _STATUS_TOKEN = {2: "success", 3: "info", 4: "warning", 5: "danger"}
+
+
+class ChevronToggle(QWidget):
+    """折叠箭头：和侧栏集合树同一个 chevron_right，展开时旋转 90° 朝下。"""
+
+    clicked = pyqtSignal()
+
+    def __init__(self, expanded: bool = True, size: int = 18, parent=None):
+        super().__init__(parent)
+        self._expanded = expanded
+        self._hover = False
+        self.setFixedSize(size, size)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+
+    def is_expanded(self) -> bool:
+        return self._expanded
+
+    def set_expanded(self, on: bool) -> None:
+        if on != self._expanded:
+            self._expanded = on
+            self.update()
+
+    def enterEvent(self, e):
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, e):
+        self._hover = False
+        self.update()
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(
+                e.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(e)
+
+    def paintEvent(self, _e):
+        t = theme()
+        col = C(t.text_dim if self._hover else t.text_faint)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        pm = icons.pixmap("chevron_right", col.name(QColor.NameFormat.HexArgb), 11, 2.0)
+        p.translate(self.width() / 2, self.height() / 2)
+        if self._expanded:
+            p.rotate(90)
+        p.drawPixmap(QPointF(-5.5, -5.5), pm)
+        p.end()
 
 
 class OutlineItem(QWidget):
@@ -178,6 +226,16 @@ class DocDialog(GlassDialog):
         lay.addWidget(HBox(Label("打码", 11.2, t.text_dim), self.redact_switch, spacing=7),
                       0, Qt.AlignmentFlag.AlignVCenter)
 
+        # 「AI 内容」开关：只在有过 AI 补全之后出现，关掉就退回纯自动生成的文档，
+        # 不想让 AI 那几段露出来时不用重新生成。
+        self._show_ai = True
+        self.ai_switch = Switch(True)
+        self.ai_switch.toggled.connect(self._on_show_ai)
+        self.ai_switch_box = HBox(Label("AI 内容", 11.2, t.text_dim),
+                                  self.ai_switch, spacing=7)
+        self.ai_switch_box.setVisible(False)
+        lay.addWidget(self.ai_switch_box, 0, Qt.AlignmentFlag.AlignVCenter)
+
         self.copy_btn = Button("复制", "copy", kind="subtle", height=30, padding=10,
                                font_size=12, icon_size=13)
         self.copy_btn.clicked.connect(self._copy)
@@ -304,13 +362,11 @@ class DocDialog(GlassDialog):
     # -------------------------------------------------- 代码示例
     def _build_code_panel(self) -> QWidget:
         t = theme()
-        host = QWidget()
-        # 高度固定：代码块视口对所有语言一样高，外层面板也跟着固定，
-        # 切换语言时整块区域不会忽高忽低。
-        host.setMinimumHeight(self.CODE_VIEW_H + 101)
-        host.setMaximumHeight(self.CODE_VIEW_H + 101)
-        host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        lay = QVBoxLayout(host)
+        self._code_panel = QWidget()
+        self._code_open = True
+        self._code_panel.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                       QSizePolicy.Policy.Fixed)
+        lay = QVBoxLayout(self._code_panel)
         lay.setContentsMargins(22, 10, 22, 12)
         lay.setSpacing(9)
 
@@ -318,16 +374,33 @@ class DocDialog(GlassDialog):
         self.lang_tabs = SegmentedTabs(items, style="underline", current=self._lang,
                                        height=26, pad_h=6, font_size=11.0)
         self.lang_tabs.changed.connect(self._on_lang)
-        lay.addWidget(HBox(Label("代码示例", 11.4, t.text_dim,
+        # 折叠箭头放在「代码示例」左边，和集合树同一个图标、同一个手感
+        self.code_chevron = ChevronToggle(True)
+        self.code_chevron.clicked.connect(self._toggle_code)
+        lay.addWidget(HBox(self.code_chevron,
+                           Label("代码示例", 11.4, t.text_dim,
                                  weight=QFont.Weight.DemiBold),
-                           1, self.lang_tabs, spacing=8))
+                           1, self.lang_tabs, spacing=6))
 
         self._code_host = QWidget()
         self._code_lay = QVBoxLayout(self._code_host)
         self._code_lay.setContentsMargins(0, 0, 0, 0)
         self._code_lay.setSpacing(0)
         lay.addWidget(self._code_host, 1)
-        return host
+        self._apply_code_height()
+        return self._code_panel
+
+    def _apply_code_height(self) -> None:
+        """展开时给足统一高度；收起后只剩标题行，窗口把空间让给正文。"""
+        h = self.CODE_VIEW_H + 101 if self._code_open else 48
+        self._code_panel.setFixedHeight(h)
+
+    def _toggle_code(self) -> None:
+        self._code_open = not self._code_open
+        self.code_chevron.set_expanded(self._code_open)
+        self._code_host.setVisible(self._code_open)
+        self.lang_tabs.setVisible(self._code_open)
+        self._apply_code_height()
 
     def _code_for(self, entry) -> str:
         """生成代码并按语言 + 打码状态缓存：来回切语言不再重复拼字符串。
@@ -371,7 +444,7 @@ class DocDialog(GlassDialog):
         md = to_markdown(self.request, self.response, env, redact=self._redact)
         # AI 补写的那几段接在正文末尾：正文本身仍是确定性生成的，
         # AI 只是「补充说明」，出问题也不影响参数表与示例。
-        if self._ai_extra:
+        if self._ai_extra and self._show_ai:
             md = md.rstrip() + "\n\n" + self._ai_extra.strip() + "\n"
         self._markdown = md
         # 窗口顶部已经有「方法 + 名称 + 地址」名片，正文里再排一遍就是重复。
@@ -428,8 +501,20 @@ class DocDialog(GlassDialog):
             self._flash("AI 没有返回内容")
             return
         self._ai_extra = extra
+        self._show_ai = True
+        self.ai_switch.blockSignals(True)
+        self.ai_switch.setChecked(True)
+        self.ai_switch.blockSignals(False)
+        self.ai_switch_box.setVisible(True)
         self._render()
         self._flash("已补全，可复制或保存")
+
+    def _on_show_ai(self, on: bool) -> None:
+        if on == self._show_ai:
+            return
+        self._show_ai = on
+        self._render()
+        self._flash("已显示 AI 内容" if on else "已隐藏 AI 内容")
 
     def _ai_failed(self, message: str) -> None:
         self.ai_btn.setEnabled(True)

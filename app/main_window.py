@@ -505,7 +505,6 @@ class ActionRow(QWidget):
 
 class WelcomeView(QWidget):
     newRequest = pyqtSignal()
-    aiRequest = pyqtSignal()
     palette = pyqtSignal()
     envDialog = pyqtSignal()
     samples = pyqtSignal()
@@ -532,14 +531,12 @@ class WelcomeView(QWidget):
 
         rows = VBox(spacing=8)
         r1 = ActionRow("plus", "新建请求", "从空白标签页开始", "⌘N")
-        r4 = ActionRow("spark", "用一句话生成请求", "描述接口，自动填好方法、地址与请求体", "")
         r2 = ActionRow("keyboard", "打开命令面板", "搜索请求或快速执行命令", "⌘K")
         r3 = ActionRow("globe", "配置变量", "用 {{变量}} 在环境间切换", "⌘E")
         r1.clicked.connect(self.newRequest.emit)
-        r4.clicked.connect(self.aiRequest.emit)
         r2.clicked.connect(self.palette.emit)
         r3.clicked.connect(self.envDialog.emit)
-        for r in (r1, r4, r2, r3):
+        for r in (r1, r2, r3):
             r.setFixedWidth(420)
             rows.layout().addWidget(r, 0, Qt.AlignmentFlag.AlignHCenter)
         col.addWidget(rows)
@@ -766,7 +763,6 @@ class MainWindow(QWidget):
 
         self.welcome = WelcomeView()
         self.welcome.newRequest.connect(self.new_request)
-        self.welcome.aiRequest.connect(self.ai_new_request)
         self.welcome.palette.connect(self.show_palette)
         self.welcome.envDialog.connect(self.show_envs)
 
@@ -1078,72 +1074,7 @@ class MainWindow(QWidget):
         self._open_request_obj(req, node_id=None)
         self.editor.focus_url()
 
-    # -------------------------------------------------- AI 新建 / 自动起名
-    def ai_new_request(self) -> None:
-        """一句话描述 → 一个能直接发送的请求（方法 / 地址 / 头 / 参数 / 请求体）。"""
-        from . import ai as ai_mod
-        from .dialogs import AiPromptDialog
-
-        cfg = ai_mod.config(self.store)
-        ok, why = ai_mod.ready(cfg)
-        if not ok:
-            self.toast.show_message(why, "info")
-            self.show_settings("ai")
-            return
-        dlg = AiPromptDialog(
-            "AI 新建请求",
-            "描述你要调的接口，AI 会生成方法、地址、请求头与请求体。",
-            "例如：查用户 42 的资料，用 {{token}} 做 Bearer 认证", parent=self)
-        if not dlg.exec():
-            return
-        ask = dlg.value()
-        if not ask:
-            return
-        env = self.store.env_vars()
-        self.toast.show_message("AI 正在构造请求…", "info")
-        self._ai_req_chat = ai_mod.start(
-            ai_mod.messages_for_request(ask, env.get("base_url") or ""),
-            cfg=cfg, max_tokens=500, temperature=0.2,
-            on_done=self._on_ai_request, on_error=self._on_ai_request_failed)
-
-    def _on_ai_request(self, text: str) -> None:
-        from . import ai as ai_mod
-
-        try:
-            spec = json.loads(ai_mod.clean_json(text))
-            if not isinstance(spec, dict) or not str(spec.get("url") or "").strip():
-                raise ValueError("缺少 url")
-        except Exception as exc:  # noqa: BLE001
-            self.toast.show_message(i18n.trf("AI 返回的请求不完整：{err}", err=exc), "error")
-            return
-        method = str(spec.get("method") or "GET").upper()
-        if method not in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"):
-            method = "GET"
-        req = new_request(str(spec.get("name") or "AI 请求")[:40], method,
-                          str(spec.get("url") or "").strip())
-        req["headers"] = [kv(str(h.get("key")), str(h.get("value", "")))
-                          for h in (spec.get("headers") or [])
-                          if isinstance(h, dict) and h.get("key")]
-        req["params"] = [kv(str(p.get("key")), str(p.get("value", "")))
-                         for p in (spec.get("params") or [])
-                         if isinstance(p, dict) and p.get("key")]
-        body = spec.get("body")
-        if isinstance(body, (dict, list)):
-            body = json.dumps(body, ensure_ascii=False, indent=2)
-        body = str(body or "").strip()
-        if body:
-            is_json = body[:1] in ("{", "[")
-            req["body"] = {"mode": "json" if is_json else "raw", "raw": body, "form": [],
-                           "file": ""}
-            if is_json and not any(h.get("key", "").lower() == "content-type"
-                                   for h in req["headers"]):
-                req["headers"].append(kv("Content-Type", "application/json"))
-        self._open_request_obj(req, node_id=None)
-        self.toast.show_message("已生成请求，按 ⌘↵ 发送", "success")
-
-    def _on_ai_request_failed(self, message: str) -> None:
-        self.toast.show_message(message, "error")
-
+    # -------------------------------------------------- AI 自动起名
     @staticmethod
     def _url_default_name(url: str) -> str:
         path = (url or "").split("?")[0].split("://")[-1]
@@ -2462,8 +2393,6 @@ class MainWindow(QWidget):
         key = payload
         if key == "new_request":
             self.new_request()
-        elif key == "ai_request":
-            self.ai_new_request()
         elif key == "new_ws":
             self.new_websocket()
         elif key == "new_sio":

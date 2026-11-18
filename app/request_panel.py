@@ -1179,7 +1179,7 @@ class ScriptPage(QWidget):
         # AI 写脚本放在按钮组第一位：脚本页最容易卡住的就是「不知道该写什么」
         self.ai_btn = Button(
             "AI 写脚本", "spark", kind="subtle", height=26, padding=11, font_size=11.5,
-            tooltip="一句话描述要做什么，只生成这个脚本页能跑的 JavaScript")
+            tooltip="说一句想做什么，直接生成这个脚本页能跑的 JavaScript")
         self.ai_btn.clicked.connect(self._ai_script)
         tools = HBox(self.status_row, 1, self.ai_btn, self.run_btn, spacing=8,
                      margins=(14, 0, 0, 0))
@@ -1248,7 +1248,7 @@ class ScriptPage(QWidget):
 
     # -------------------------------------------------- AI 写脚本
     def _ai_script(self) -> None:
-        """一句话 → 脚本。只接受这一页能跑的 JavaScript，其他内容直接拒绝。"""
+        """一句话 → 脚本：默认就当代码需求，直接写这一页能跑的 JavaScript。"""
         from . import ai as ai_mod
         from .dialogs import AiPromptDialog
 
@@ -1259,8 +1259,8 @@ class ScriptPage(QWidget):
         where = "前置脚本" if self._kind == "pre" else "后置脚本"
         dlg = AiPromptDialog(
             "AI 写脚本",
-            i18n.trf("说明想在{where}里做什么 —— AI 只会写这一页能跑的 JavaScript，"
-                     "不会回答其他问题。", where=where),
+            i18n.trf("说明想在{where}里做什么，AI 会直接写成可运行的 JavaScript。",
+                     where=where),
             "例如：把响应里的 token 存进环境变量，再断言状态码是 200", parent=self)
         if not dlg.exec():
             return
@@ -1283,8 +1283,8 @@ class ScriptPage(QWidget):
 
         self.ai_btn.setEnabled(True)
         code = ai_mod.clean_code(text)
-        # 模型「拒答」时只会留一行注释：照实显示，不要把它写进编辑器
-        if not code or (code.startswith("//") and "\n" not in code):
+        # 只有「一句中文说明、压根没写代码」才拦下；其余一律当脚本收下
+        if not code or not any(ch in code for ch in "=();{}[]\"'`/."):
             self._set_status(code or i18n.tr("AI 没有返回脚本，换个说法再试"), "error")
             return
         cur = self.code.textCursor()

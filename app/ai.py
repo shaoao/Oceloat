@@ -322,14 +322,14 @@ def messages_for_error(method: str, url: str, status: int = 0, detail: str = "",
 # 脚本生成：把可用 API 写死在提示词里，模型没有空间「自由发挥」，
 # 也只能产出这个沙箱里真正能跑的东西（没有 require / fetch / import）。
 _SYS_SCRIPT = (
-    "你是 API 调试工具里的 JavaScript 脚本生成器，只负责写「{where}」。"
-    "硬性规则：\n"
-    "1. 只输出可直接运行的 JavaScript 代码，不要 Markdown 代码块、不要注释说明、不要任何解释文字；\n"
-    "2. 只能用下面列出的 API，禁止使用 require / import / fetch / XMLHttpRequest / setTimeout / DOM；\n"
-    "3. 不要编造不存在的接口；请求里没有的信息不要猜；\n"
-    "4. 代码控制在 20 行以内，能不用变量就不用变量；\n"
-    "5. 如果用户的要求和这个脚本无关（比如问别的、聊天、要改请求本身），"
-    "只输出一行注释：// {refuse}\n"
+    "你是 API 调试工具里的 JavaScript 脚本助手，负责写「{where}」里的代码。"
+    "默认把用户的话当成代码需求：直接写一段能跑的 JavaScript 去完成它。\n"
+    "输出规则：\n"
+    "1. 只输出 JavaScript 代码本身 —— 不要 Markdown 代码块标记、不要解释段落；\n"
+    "2. 优先用下面列出的运行时 API；沙箱里没有 require / import / fetch / DOM / setTimeout，"
+    "遇到这类思路就用等价写法绕过去，而不是拒绝写；\n"
+    "3. 需求说得不完整就按最合理的理解补全，不要反问、不要说「做不到」；\n"
+    "4. 需要输出信息就用 console.log，代码保持简短可读。\n"
     "可用 API：\n{api}"
 )
 
@@ -359,34 +359,13 @@ def messages_for_script(ask: str, kind: str = "pre", method: str = "GET", url: s
     """把一句需求变成脚本。kind=pre 只能碰 req / pw，post 还能读 res。"""
     where = "前置脚本（请求发送前执行）" if kind == "pre" else "后置脚本（收到响应后执行）"
     api = _API_PRE if kind == "pre" else _API_POST
-    system = _SYS_SCRIPT.format(where=where, api=api,
-                                refuse=i18n.tr("这超出了当前脚本的范围"))
+    system = _SYS_SCRIPT.format(where=where, api=api)
     ctx = [f"请求：{method.upper()} {url or '(未填写地址)'}"]
     if body.strip():
         ctx.append("请求体（截断）：\n" + body.strip()[:800])
     ctx.append("需求：" + (ask or "").strip()[:600])
     return [{"role": "system", "content": system},
             {"role": "user", "content": "\n".join(ctx)}]
-
-
-_SYS_REQUEST = (
-    "你是 API 调试工具的请求构造器。根据用户的一句描述，生成一个可发送的 HTTP 请求。"
-    "只输出一个 JSON 对象，不要解释、不要 Markdown 代码块：\n"
-    '{"name": "简短中文名", "method": "GET|POST|PUT|PATCH|DELETE", '
-    '"url": "完整地址（可以用 {{base_url}} 占位）", '
-    '"headers": [{"key": "Content-Type", "value": "application/json"}], '
-    '"params": [{"key": "", "value": ""}], "body": "请求体字符串"}。\n'
-    "规则：url 必须完整可请求；不确定的字段留空数组；body 只在需要时给，"
-    "JSON 请求体要合法；name 不超过 14 个字。"
-)
-
-
-def messages_for_request(ask: str, base_url: str = "") -> List[Dict[str, str]]:
-    parts = ["描述：" + (ask or "").strip()[:800]]
-    if base_url.strip():
-        parts.append("可用的基础地址：" + base_url.strip())
-    return [{"role": "system", "content": _SYS_REQUEST},
-            {"role": "user", "content": "\n".join(parts)}]
 
 
 _SYS_DOC = (

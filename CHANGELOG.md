@@ -1,5 +1,21 @@
 # What's Changed
 
+## v1.0.53 — 2026-11-19
+
+**Added**
+- The code sample section in the API docs window now has a collapse arrow (the same chevron used in the collection tree): collapse it and the document takes the whole height.
+- "AI content" switch in the docs window: hide or show the AI-written sections at any time; while off, copy and "Save .md" produce the purely generated document.
+
+**Changed**
+- Script AI is far less strict: it treats every request as a coding task and writes runnable JavaScript instead of refusing when the description is vague or off-topic. Only a plain prose answer (no code at all) is reported back.
+- AI prompt dialog now sizes itself from its content, so the text box no longer runs under the buttons when the hint wraps or the font is larger.
+
+**Removed**
+- "New request from a sentence" is gone from the welcome screen, the command palette and the code behind it.
+
+**Verified**
+- 654 smoke checks plus 53 targeted checks pass.
+
 ## v1.0.52 — 2026-11-19
 
 **Changed**

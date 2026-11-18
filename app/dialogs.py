@@ -252,7 +252,7 @@ class PromptDialog(GlassDialog):
 
 
 class AiPromptDialog(GlassDialog):
-    """一句话输入框：AI 生成请求、AI 写脚本共用。
+    """一句话输入框：AI 写脚本用。
 
     刻意只放一个多行输入 + 两颗按钮 —— 需求描述本来就不长，
     再加选项、下拉、示例卡片只会让人不知道往哪写。
@@ -269,14 +269,17 @@ class AiPromptDialog(GlassDialog):
         head.setWordWrap(True)
         lay.addWidget(head)
         self.edit = QPlainTextEdit(value)
-        self.edit.setFixedHeight(height - 132)
+        # 输入框只给「最小高度」，剩下交给布局去分：之前按窗口高度倒算固定值，
+        # 字大一点或提示文案换行时输入框会顶到按钮上，正文和按钮叠在一起。
+        self.edit.setMinimumHeight(104)
+        self.edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.edit.setFont(font(13))
         self.edit.setStyleSheet(
             f"QPlainTextEdit {{ background: {t.panel_alt}; border: 1px solid {S(t.border)};"
-            f" border-radius: 9px; padding: 9px 10px; color: {t.text}; selection-background-color: {t.selected}; }}")
+            f" border-radius: 9px; padding: 8px 10px; color: {t.text};"
+            f" selection-background-color: {t.selected}; }}")
         self.edit.setPlaceholderText(placeholder)
-        lay.addWidget(self.edit)
-        lay.addStretch(1)
+        lay.addWidget(self.edit, 1)
         cancel = Button("取消", None, kind="ghost", height=28, padding=12, font_size=12)
         cancel.clicked.connect(self.reject)
         ok = Button("生成", "spark", kind="primary", height=28, padding=16, font_size=12,
@@ -285,6 +288,12 @@ class AiPromptDialog(GlassDialog):
         lay.addWidget(HBox(1, cancel, ok, spacing=6))
         self._ok = ok
         self.edit.textChanged.connect(self._sync)
+        self._sync()
+        # 高度按内容算：标题栏 47 + 上下边距 30 + 两处间距 20 + 输入框 104 + 按钮 28
+        head_h = head.heightForWidth(self.width() - 40) if head.hasHeightForWidth() \
+            else head.sizeHint().height()
+        need = 47 + 30 + head_h + 20 + 104 + 28
+        self.resize(self.width(), max(height, need))
 
     def _sync(self) -> None:
         self._ok.setEnabled(bool(self.edit.toPlainText().strip()))
@@ -2870,7 +2879,6 @@ class CommandPalette(QWidget):
 
     ACTIONS = [
         ("new_request", "新建请求", "plus", "⌘N"),
-        ("ai_request", "用一句话新建请求…", "spark", ""),
         ("new_ws", "新建 WebSocket 请求", "link", ""),
         ("new_sio", "新建 Socket.IO 请求", "link", ""),
         ("new_folder", "新建文件夹", "folder", ""),

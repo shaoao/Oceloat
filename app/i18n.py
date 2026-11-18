@@ -1605,10 +1605,10 @@ _EN.update({
     "通用": "general",
     "推理": "reasoning",
     "AI 写脚本": "AI script",
-    "一句话描述要做什么，只生成这个脚本页能跑的 JavaScript":
-        "Describe the goal — only JavaScript for this script runs is generated",
-    "说明想在{where}里做什么 —— AI 只会写这一页能跑的 JavaScript，不会回答其他问题。":
-        "Describe what {where} should do — only runnable JavaScript is returned.",
+    "说一句想做什么，直接生成这个脚本页能跑的 JavaScript":
+        "Say what you need — JavaScript for this script is generated",
+    "说明想在{where}里做什么，AI 会直接写成可运行的 JavaScript。":
+        "Describe what {where} should do — AI writes the JavaScript directly.",
     "已生成，点「试运行」检查一下": "Generated — hit \"Run\" to check it",
     "AI 没有返回脚本，换个说法再试": "No script returned — try rephrasing",
     "AI 补全": "AI fill",
@@ -1625,18 +1625,6 @@ _EN.update({
     "响应不是 JSON 对象，没有可提取的字段":
         "The response is not a JSON object — nothing to extract",
     "把响应字段存为变量…": "Save response field as variable…",
-    "AI 新建请求": "New request with AI",
-    "描述你要调的接口，AI 会生成方法、地址、请求头与请求体。":
-        "Describe the endpoint — method, URL, headers and body are generated.",
-    "例如：查用户 42 的资料，用 {{token}} 做 Bearer 认证":
-        "e.g. fetch user 42, with {{token}} as Bearer auth",
-    "AI 正在构造请求…": "AI is building the request…",
-    "AI 返回的请求不完整：{err}": "Incomplete request from AI: {err}",
-    "已生成请求，按 ⌘↵ 发送": "Request ready — press ⌘↵ to send",
-    "用一句话新建请求…": "New request from a sentence…",
-    "用一句话生成请求": "Generate a request from a sentence",
-    "描述接口，自动填好方法、地址与请求体":
-        "Describe the endpoint; method, URL and body are filled in",
     "配置变量": "Configure variables",
     "已存入{where} {{{name}}}": "Saved {{name}} to {where}",
     "已存入全局变量 {{{name}}}": "Saved {{name}} to global variables",
@@ -1651,4 +1639,12 @@ _EN.update({
         "Add an API key to enable — it stays on this machine",
     "已就绪": "Ready",
     "{provider} · {model}": "{provider} · {model}",
+})
+
+# 文档窗口：代码折叠 + AI 内容开关（v1.0.53）
+_EN.update({
+    "代码示例": "Code sample",
+    "AI 内容": "AI content",
+    "已显示 AI 内容": "AI content shown",
+    "已隐藏 AI 内容": "AI content hidden",
 })
