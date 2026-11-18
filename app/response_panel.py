@@ -334,6 +334,7 @@ class ResponsePanel(QWidget):
     requestSaveBody = pyqtSignal(bytes, str)
     resendRequested = pyqtSignal()          # 提示条上的「重新发送」
     saveVariable = pyqtSignal(str, str)      # 名字, 值：把提取结果存进环境变量
+    pickVariableRequested = pyqtSignal(str)  # 响应体：从 JSON 里挑字段存成变量
     docRequested = pyqtSignal()              # 打开接口文档窗口
     wsActionRequested = pyqtSignal(str)      # WS 更多菜单：connect / disconnect
     aiExplainRequested = pyqtSignal()        # 用 AI 解释当前失败/异常响应
@@ -1677,6 +1678,7 @@ class ResponsePanel(QWidget):
         menu = Menu(self)
         a_doc = menu.addAction(icons.icon("file", t.text, 13), "查看接口文档…")
         menu.addSeparator()
+        a_var = menu.addAction(icons.icon("layers", t.text, 13), "把响应字段存为变量…")
         a_ai = menu.addAction(icons.icon("spark", t.text, 13), "用 AI 解释这个响应")
         a_body_safe = menu.addAction(icons.icon("lock", t.text, 13), "脱敏复制响应体")
         a_headers = menu.addAction("复制响应头")
@@ -1687,6 +1689,8 @@ class ResponsePanel(QWidget):
             return
         if chosen is a_doc:
             self.docRequested.emit()
+        elif chosen is a_var:
+            self.pickVariableRequested.emit(self._body_text)
         elif chosen is a_ai:
             self.aiExplainRequested.emit()
         elif chosen is a_body_safe:

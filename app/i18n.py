@@ -1558,3 +1558,97 @@ _EN.update({
     "原生思考": "native thinking",
     "自定义": "Custom",
 })
+
+# 变量页合并 / AI 开关 / DeepSeek / 脚本与文档 AI（v1.0.52）
+_EN.update({
+    "所有请求里都用 {{名字}} 引用；同名时环境变量覆盖全局变量。":
+        "Reference them as {{name}} in any request; a same-named environment variable wins.",
+    "跨环境复用的常量：公共域名、团队 Token、通用 ID。这里改了，所有环境立即生效。":
+        "Constants shared by every environment: public host, team token, common IDs.",
+    "每种环境一套值，切换环境整套换掉。当前激活：{name}":
+        "One value set per environment, swapped as a whole. Active: {name}",
+    "未选择": "None",
+    "全局：所有环境都能用。当前环境：{name}":
+        "Global works everywhere. Current environment: {name}",
+    "AI 助手": "AI assistant",
+    "填一次 Key，生成数据、解释报错、写脚本都能直接用。":
+        "Add a key once — data generation, error explanations and script writing all work.",
+    "已关闭 · 设置保留，所有 AI 功能暂停":
+        "Off · settings kept, all AI features paused",
+    "未配置 · 填入 API Key 后可用": "Not configured · add an API key to enable",
+    "已就绪 · {provider} · {model}": "Ready · {provider} · {model}",
+    "服务商": "Provider",
+    "两家的 Key 分开保存，切回来不用重新粘贴。":
+        "Each provider keeps its own key, so switching back needs no re-paste.",
+    "测试连接": "Test connection",
+    "模型 · {name}（点一下切换，立即生效）": "Models · {name} (click to switch, instant)",
+    "自动起名": "Auto naming",
+    "发送后按内容起名；关掉只用 URL 末段。":
+        "Name from content after sending; off keeps the URL tail only.",
+    "自定义模型": "Custom model",
+    "填上模型 ID 就能用，不用等版本更新。":
+        "Enter a model ID and it works — no app update needed.",
+    "添加并使用": "Add and use",
+    "自定义模型 ID，例如 deepseek-chat": "Custom model ID, e.g. deepseek-chat",
+    "留空用官方地址；中转 / 自建网关填这里":
+        "Empty for the official endpoint; fill in for proxies or self-hosted gateways",
+    "Key 只保存在本机 state.json。关掉 AI 只是暂停，Key 与模型选择都不会丢。":
+        "Keys live only in the local state.json. Turning AI off pauses it — nothing is lost.",
+    "可选能力：不配也能正常调试接口，配了只是少敲几行。":
+        "Optional: everything works without it — it just saves some typing.",
+    "AI 已在设置里关闭": "AI is turned off in Settings",
+    "DeepSeek": "DeepSeek",
+    "在 DeepSeek 控制台「API Keys」里创建，形如 sk-xxxxxxxx":
+        "Create one under API Keys in the DeepSeek console; looks like sk-xxxxxxxx",
+    "默认 · 快，写代码与生成数据都稳": "Default · fast, solid for code and data",
+    "先想再答，复杂问题更准，略慢": "Thinks first, better on hard cases, a bit slower",
+    "通用": "general",
+    "推理": "reasoning",
+    "AI 写脚本": "AI script",
+    "一句话描述要做什么，只生成这个脚本页能跑的 JavaScript":
+        "Describe the goal — only JavaScript for this script runs is generated",
+    "说明想在{where}里做什么 —— AI 只会写这一页能跑的 JavaScript，不会回答其他问题。":
+        "Describe what {where} should do — only runnable JavaScript is returned.",
+    "已生成，点「试运行」检查一下": "Generated — hit \"Run\" to check it",
+    "AI 没有返回脚本，换个说法再试": "No script returned — try rephrasing",
+    "AI 补全": "AI fill",
+    "让 AI 补写接口说明、字段含义与常见错误":
+        "Let AI write the overview, field meanings and common errors",
+    "AI 正在补写…": "AI is writing…",
+    "已补全，可复制或保存": "Filled in — copy or save",
+    "AI 没有返回内容": "AI returned nothing",
+    "存为变量": "Save as variable",
+    "选一个字段，起个名字，之后在请求里用 {{名字}} 引用。":
+        "Pick a field, name it, then reference it as {{name}} in requests.",
+    "变量名，例如 token": "Variable name, e.g. token",
+    "当前环境": "Current environment",
+    "响应不是 JSON 对象，没有可提取的字段":
+        "The response is not a JSON object — nothing to extract",
+    "把响应字段存为变量…": "Save response field as variable…",
+    "AI 新建请求": "New request with AI",
+    "描述你要调的接口，AI 会生成方法、地址、请求头与请求体。":
+        "Describe the endpoint — method, URL, headers and body are generated.",
+    "例如：查用户 42 的资料，用 {{token}} 做 Bearer 认证":
+        "e.g. fetch user 42, with {{token}} as Bearer auth",
+    "AI 正在构造请求…": "AI is building the request…",
+    "AI 返回的请求不完整：{err}": "Incomplete request from AI: {err}",
+    "已生成请求，按 ⌘↵ 发送": "Request ready — press ⌘↵ to send",
+    "用一句话新建请求…": "New request from a sentence…",
+    "用一句话生成请求": "Generate a request from a sentence",
+    "描述接口，自动填好方法、地址与请求体":
+        "Describe the endpoint; method, URL and body are filled in",
+    "配置变量": "Configure variables",
+    "已存入{where} {{{name}}}": "Saved {{name}} to {where}",
+    "已存入全局变量 {{{name}}}": "Saved {{name}} to global variables",
+})
+
+_EN.update({
+    "已关闭": "Off",
+    "所有 AI 功能暂停，Key 与模型选择都还在":
+        "All AI features are paused; your key and model choice are kept",
+    "未配置": "Not configured",
+    "填入 API Key 后即可使用，只存在本机":
+        "Add an API key to enable — it stays on this machine",
+    "已就绪": "Ready",
+    "{provider} · {model}": "{provider} · {model}",
+})

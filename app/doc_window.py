@@ -112,6 +112,7 @@ class DocDialog(GlassDialog):
         self.response = response
         self._redact = True
         self._markdown = ""
+        self._ai_extra = ""
         self._lang = "curl"
         self._code_blocks: List[QWidget] = []
         self._outline_items: List[OutlineItem] = []
@@ -180,11 +181,16 @@ class DocDialog(GlassDialog):
         self.copy_btn = Button("复制", "copy", kind="subtle", height=30, padding=10,
                                font_size=12, icon_size=13)
         self.copy_btn.clicked.connect(self._copy)
+        self.ai_btn = Button("AI 补全", "spark", kind="subtle", height=30, padding=10,
+                             font_size=12, icon_size=13,
+                             tooltip="让 AI 补写接口说明、字段含义与常见错误")
+        self.ai_btn.clicked.connect(self._ai_fill)
         self.save_btn = Button("保存 .md", "download", kind="primary", height=30, padding=12,
                                font_size=12, icon_size=13)
         self.save_btn.clicked.connect(self._save)
         self.status = Label("", 10.4, t.text_faint)
         lay.addWidget(self.status, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(self.ai_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addWidget(self.copy_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addWidget(self.save_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self._toolbar_status = self.status
@@ -362,7 +368,12 @@ class DocDialog(GlassDialog):
     # -------------------------------------------------- 渲染 / 交互
     def _render(self) -> None:
         env = self.store.env_vars() if self.store else {}
-        self._markdown = to_markdown(self.request, self.response, env, redact=self._redact)
+        md = to_markdown(self.request, self.response, env, redact=self._redact)
+        # AI 补写的那几段接在正文末尾：正文本身仍是确定性生成的，
+        # AI 只是「补充说明」，出问题也不影响参数表与示例。
+        if self._ai_extra:
+            md = md.rstrip() + "\n\n" + self._ai_extra.strip() + "\n"
+        self._markdown = md
         # 窗口顶部已经有「方法 + 名称 + 地址」名片，正文里再排一遍就是重复。
         # 复制 / 保存出来的 Markdown 仍然是完整的（含标题），只是窗口里省掉。
         self.view.set_markdown(_strip_head(self._markdown))
@@ -376,6 +387,53 @@ class DocDialog(GlassDialog):
                               reason=self.response.reason).strip())
         else:
             self._outline_status.setText(i18n.tr("草稿"))
+
+    # -------------------------------------------------- AI 补全
+    def _ai_fill(self) -> None:
+        """让 AI 补写「接口说明 / 参数含义 / 常见错误」三段，直接进正文。"""
+        from . import ai as ai_mod
+
+        cfg = ai_mod.config(self.store) if self.store else ai_mod.config()
+        ok, why = ai_mod.ready(cfg)
+        if not ok:
+            self._flash(why)
+            return
+        req = self.request or {}
+        headers = req.get("headers") or []
+        params = req.get("params") or []
+        rows = [f"{h.get('key')}: {h.get('value')}" for h in headers if h.get("key")]
+        rows += [f"{p.get('key')}={p.get('value')}" for p in params if p.get("key")]
+        body = str((req.get("body") or {}).get("raw") or "")[:900]
+        resp_text = ""
+        if self.response is not None:
+            text = getattr(self.response, "text", "")
+            resp_text = text() if callable(text) else str(text or "")
+            if self._redact:
+                resp_text = redact_text(resp_text)
+        msgs = ai_mod.messages_for_doc(
+            str(req.get("method") or "GET"), str(req.get("url") or ""),
+            str(req.get("name") or ""), "\n".join(rows), body, resp_text)
+        self.ai_btn.setEnabled(False)
+        self._flash("AI 正在补写…")
+        self._ai_chat = ai_mod.start(
+            msgs, cfg=cfg, max_tokens=800, temperature=0.3,
+            on_done=self._ai_filled, on_error=self._ai_failed)
+
+    def _ai_filled(self, text: str) -> None:
+        self.ai_btn.setEnabled(True)
+        extra = (text or "").strip()
+        if extra.startswith("```"):
+            extra = extra.split("```")[1] if len(extra.split("```")) > 1 else extra
+        if not extra:
+            self._flash("AI 没有返回内容")
+            return
+        self._ai_extra = extra
+        self._render()
+        self._flash("已补全，可复制或保存")
+
+    def _ai_failed(self, message: str) -> None:
+        self.ai_btn.setEnabled(True)
+        self._flash(message[:120])
 
     def _on_redact(self, on: bool) -> None:
         if on == self._redact:

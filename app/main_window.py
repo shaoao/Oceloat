@@ -505,6 +505,7 @@ class ActionRow(QWidget):
 
 class WelcomeView(QWidget):
     newRequest = pyqtSignal()
+    aiRequest = pyqtSignal()
     palette = pyqtSignal()
     envDialog = pyqtSignal()
     samples = pyqtSignal()
@@ -531,12 +532,14 @@ class WelcomeView(QWidget):
 
         rows = VBox(spacing=8)
         r1 = ActionRow("plus", "新建请求", "从空白标签页开始", "⌘N")
+        r4 = ActionRow("spark", "用一句话生成请求", "描述接口，自动填好方法、地址与请求体", "")
         r2 = ActionRow("keyboard", "打开命令面板", "搜索请求或快速执行命令", "⌘K")
-        r3 = ActionRow("globe", "配置环境变量", "用 {{变量}} 在环境间切换", "⌘E")
+        r3 = ActionRow("globe", "配置变量", "用 {{变量}} 在环境间切换", "⌘E")
         r1.clicked.connect(self.newRequest.emit)
+        r4.clicked.connect(self.aiRequest.emit)
         r2.clicked.connect(self.palette.emit)
         r3.clicked.connect(self.envDialog.emit)
-        for r in (r1, r2, r3):
+        for r in (r1, r4, r2, r3):
             r.setFixedWidth(420)
             rows.layout().addWidget(r, 0, Qt.AlignmentFlag.AlignHCenter)
         col.addWidget(rows)
@@ -752,6 +755,7 @@ class MainWindow(QWidget):
             {"copied": "响应已复制", "redacted": "已脱敏复制（token / Cookie 已打码）"}.get(note, "响应已保存"),
             "success"))
         self.response.saveVariable.connect(self._save_env_var)
+        self.response.pickVariableRequested.connect(self._pick_var_from_response)
         self.response.resendRequested.connect(self.send_current)
         self.response.docRequested.connect(self.open_doc)
         self.response.aiExplainRequested.connect(self._ai_explain_response)
@@ -762,6 +766,7 @@ class MainWindow(QWidget):
 
         self.welcome = WelcomeView()
         self.welcome.newRequest.connect(self.new_request)
+        self.welcome.aiRequest.connect(self.ai_new_request)
         self.welcome.palette.connect(self.show_palette)
         self.welcome.envDialog.connect(self.show_envs)
 
@@ -1072,6 +1077,141 @@ class MainWindow(QWidget):
         req["sio"] = default_sio()
         self._open_request_obj(req, node_id=None)
         self.editor.focus_url()
+
+    # -------------------------------------------------- AI 新建 / 自动起名
+    def ai_new_request(self) -> None:
+        """一句话描述 → 一个能直接发送的请求（方法 / 地址 / 头 / 参数 / 请求体）。"""
+        from . import ai as ai_mod
+        from .dialogs import AiPromptDialog
+
+        cfg = ai_mod.config(self.store)
+        ok, why = ai_mod.ready(cfg)
+        if not ok:
+            self.toast.show_message(why, "info")
+            self.show_settings("ai")
+            return
+        dlg = AiPromptDialog(
+            "AI 新建请求",
+            "描述你要调的接口，AI 会生成方法、地址、请求头与请求体。",
+            "例如：查用户 42 的资料，用 {{token}} 做 Bearer 认证", parent=self)
+        if not dlg.exec():
+            return
+        ask = dlg.value()
+        if not ask:
+            return
+        env = self.store.env_vars()
+        self.toast.show_message("AI 正在构造请求…", "info")
+        self._ai_req_chat = ai_mod.start(
+            ai_mod.messages_for_request(ask, env.get("base_url") or ""),
+            cfg=cfg, max_tokens=500, temperature=0.2,
+            on_done=self._on_ai_request, on_error=self._on_ai_request_failed)
+
+    def _on_ai_request(self, text: str) -> None:
+        from . import ai as ai_mod
+
+        try:
+            spec = json.loads(ai_mod.clean_json(text))
+            if not isinstance(spec, dict) or not str(spec.get("url") or "").strip():
+                raise ValueError("缺少 url")
+        except Exception as exc:  # noqa: BLE001
+            self.toast.show_message(i18n.trf("AI 返回的请求不完整：{err}", err=exc), "error")
+            return
+        method = str(spec.get("method") or "GET").upper()
+        if method not in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"):
+            method = "GET"
+        req = new_request(str(spec.get("name") or "AI 请求")[:40], method,
+                          str(spec.get("url") or "").strip())
+        req["headers"] = [kv(str(h.get("key")), str(h.get("value", "")))
+                          for h in (spec.get("headers") or [])
+                          if isinstance(h, dict) and h.get("key")]
+        req["params"] = [kv(str(p.get("key")), str(p.get("value", "")))
+                         for p in (spec.get("params") or [])
+                         if isinstance(p, dict) and p.get("key")]
+        body = spec.get("body")
+        if isinstance(body, (dict, list)):
+            body = json.dumps(body, ensure_ascii=False, indent=2)
+        body = str(body or "").strip()
+        if body:
+            is_json = body[:1] in ("{", "[")
+            req["body"] = {"mode": "json" if is_json else "raw", "raw": body, "form": [],
+                           "file": ""}
+            if is_json and not any(h.get("key", "").lower() == "content-type"
+                                   for h in req["headers"]):
+                req["headers"].append(kv("Content-Type", "application/json"))
+        self._open_request_obj(req, node_id=None)
+        self.toast.show_message("已生成请求，按 ⌘↵ 发送", "success")
+
+    def _on_ai_request_failed(self, message: str) -> None:
+        self.toast.show_message(message, "error")
+
+    @staticmethod
+    def _url_default_name(url: str) -> str:
+        path = (url or "").split("?")[0].split("://")[-1]
+        parts = [p for p in path.split("/") if p]
+        return (parts[-1] if parts else "")[:40]
+
+    def _ai_auto_name(self, tab: Dict[str, Any]) -> None:
+        """请求名还是「未命名 / URL 末段」时，让 AI 起一个更像人话的名字。
+
+        只在名字没有被用户改过时动手（改过就绝不覆盖）；同一个 URL 只问一次。
+        """
+        from . import ai as ai_mod
+
+        if tab.get("ai_named") or not self.store.settings.get("ai_auto_name", True):
+            return
+        req = tab.get("request") or {}
+        url = str(req.get("url") or "").strip()
+        if not url:
+            return
+        name = str(req.get("name") or "").strip()
+        if name and name not in ("Untitled Request", "未命名请求", self._url_default_name(url)):
+            return
+        cfg = ai_mod.config(self.store)
+        ok, _why = ai_mod.ready(cfg)
+        if not ok:
+            return
+        cache = getattr(self, "_ai_name_cache", None)
+        if cache is None:
+            cache = self._ai_name_cache = {}
+        if url in cache:
+            self._apply_ai_name(tab, cache[url])
+            return
+        if getattr(self, "_ai_name_busy", False):
+            return
+        self._ai_name_busy = True
+        tab_id = tab["id"]
+        body = str((req.get("body") or {}).get("raw") or "")
+        self._ai_name_chat = ai_mod.start(
+            ai_mod.messages_for_name(str(req.get("method") or "GET"), url, body),
+            cfg=cfg, max_tokens=40, temperature=0.3,
+            on_done=lambda text: self._on_ai_name(tab_id, url, text),
+            on_error=lambda _e: setattr(self, "_ai_name_busy", False))
+
+    def _on_ai_name(self, tab_id: str, url: str, text: str) -> None:
+        from . import ai as ai_mod
+
+        self._ai_name_busy = False
+        name = ai_mod.clean_line(text, 14)
+        if not name:
+            return
+        cache = getattr(self, "_ai_name_cache", None)
+        if cache is None:
+            cache = self._ai_name_cache = {}
+        cache[url] = name
+        tab = self._tab(tab_id)
+        if tab is not None:
+            self._apply_ai_name(tab, name)
+
+    def _apply_ai_name(self, tab: Dict[str, Any], name: str) -> None:
+        req = tab.get("request") or {}
+        req["name"] = name
+        tab["title"] = name
+        tab["ai_named"] = True
+        self.tabstrip.update_tab(tab["id"], title=name,
+                                 method=req.get("method", "GET"))
+        if tab["id"] == self.tabstrip.current():
+            self.editor.request["name"] = name
+        self._autosave.start()
 
     def _preview_from_sidebar(self, request: Dict[str, Any]) -> None:
         """单击集合项：VSCode 式预览——复用同一个预览标签，标题斜体。"""
@@ -1782,6 +1922,9 @@ class MainWindow(QWidget):
             self.store.push_history(tab["request"], resp.status, resp.elapsed)
             self.sidebar.refresh_history()
             self._autosave.start()       # 落盘合并到 700ms，避免每条响应都同步写 100KB
+            # 名字还是默认值时，发完这一条顺手让 AI 起个更像人话的名字
+            if (tab["request"].get("method") or "").upper() not in REALTIME_METHODS:
+                self._ai_auto_name(tab)
         if tab_id is None or tab_id == self.tabstrip.current():
             self.response.set_response(resp)
             self.response.set_console(tab.get("console") if tab is not None else None)
@@ -1840,6 +1983,24 @@ class MainWindow(QWidget):
         self.env_pill.updateGeometry()
         self.env_pill.update()
         self.toast.show_message(i18n.trf("已保存变量 {{{name}}}", name=name), "success")
+
+    def _pick_var_from_response(self, body: str) -> None:
+        """从 JSON 响应里挑字段存成变量（全局 / 当前环境都行）。"""
+        from .dialogs import VarPickDialog
+
+        if not (body or "").strip():
+            self.toast.show_message("响应是空的，没有可提取的字段", "info")
+            return
+        dlg = VarPickDialog(self.store, body, self)
+        if not dlg.exec():
+            return
+        self.env_pill.updateGeometry()
+        self.env_pill.update()
+        scope = dlg.result_scope()
+        self.toast.show_message(
+            i18n.trf("已存入{where} {{{name}}}",
+                     where="全局变量" if scope == "global" else "环境变量",
+                     name=dlg.result_name()), "success")
 
     def _persist(self) -> None:
         self.store.settings["sidebar_width"] = self._sidebar_target
@@ -2301,6 +2462,8 @@ class MainWindow(QWidget):
         key = payload
         if key == "new_request":
             self.new_request()
+        elif key == "ai_request":
+            self.ai_new_request()
         elif key == "new_ws":
             self.new_websocket()
         elif key == "new_sio":

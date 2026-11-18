@@ -19,9 +19,35 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.51"
+VERSION = "1.0.52"
 
 CHANGELOG = [
+    {
+        "version": "1.0.52",
+        "date": "2026-11-19",
+        "items": [
+            "设置里的「环境变量」「全局变量」合并成一页「变量」：顶部两个分段切换，"
+            "覆盖关系直接写在页头（同名时环境变量优先），不再占两个左侧导航项",
+            "AI 增加总开关：填了 Key 也能一键停用，所有 AI 入口一起熄火；"
+            "Key 与模型选择都保留，重新打开即可继续用",
+            "AI 设置页重新设计：按「开关 → 服务商 → Key → 模型 → 进阶」排，"
+            "状态只用一行小字表达（已就绪 / 未配置 / 已关闭），整页不再有彩色装饰",
+            "新增 DeepSeek 接入：DeepSeek-V3 与 R1 两张模型卡片；两家的 Key 分开保存，"
+            "来回切服务商时自动带出各自的那一把",
+            "新增「一句话生成请求」：欢迎页与命令面板都能进，描述一句就填好方法、地址、"
+            "请求头、查询参数与请求体（JSON 会自动补 Content-Type）",
+            "新增「把响应字段存为变量」：响应更多菜单里选字段，自动按字段名起变量名，"
+            "可以存进全局变量或当前环境",
+            "新增 AI 自动起名（可在设置里关）：请求名还是「未命名 / URL 末段」时，"
+            "发送后换成更像人话的名字；手改过的名字绝不覆盖，同一个地址只问一次",
+            "前置 / 后置脚本新增「AI 写脚本」按钮（按钮组第一位）：在弹出的输入框里说一句需求，"
+            "只生成这一页能跑的 JavaScript；跑题的要求直接拒绝，不会把无关内容写进编辑器",
+            "接口文档窗口新增「AI 补全」：补写接口说明、字段含义与常见错误，接在正文末尾，"
+            "复制与保存 .md 都会带上；打码开关打开时发给模型的响应也是打码后的",
+            "自测 654 项 + 52 项针对性验证（变量优先级、Key 分服务商、AI 开关、"
+            "脚本拒答、文档追加、一句话请求）全部通过",
+        ],
+    },
     {
         "version": "1.0.51",
         "date": "2026-11-19",
@@ -1061,14 +1087,19 @@ def _sample_state() -> Dict[str, Any]:
             "cloud_auto": False,
             "turso_url": "",
             "turso_token": "",
-            # AI：默认接智谱 GLM（有免费模型），换服务商/换模型都只改这里
+            # AI：默认接智谱 GLM（有免费模型），换服务商/换模型都只改这里。
+            # enabled 是总开关：Key 留着也能一键停用，所有 AI 入口一起熄火。
             "ai": {
                 "provider": "glm",
+                "enabled": True,
                 "api_key": "",
+                "key_by_provider": {},
                 "model": "glm-4-flash-250414",
                 "base_url": "",
                 "custom_models": [],
             },
+            # 自动起名：优先用 AI 起，不满足条件时回落到「URL 末段」规则
+            "ai_auto_name": True,
         },
         "open_tabs": [],
         "last_request": None,
@@ -1498,6 +1529,35 @@ class Store:
 
     def global_vars(self) -> List[Dict[str, Any]]:
         return self.data.setdefault("global_vars", [])
+
+    def set_var(self, name: str, value: str, scope: str = "env") -> str:
+        """写一个变量，scope=env 落当前环境（没有就建 Default），global 落全局。
+
+        返回实际写入的位置："global" / "env" / ""（名字为空）。
+        存变量、脚本写值、提取响应都走这里，省得三处各写一套。
+        """
+        name = (name or "").strip()
+        if not name:
+            return ""
+        value = "" if value is None else str(value)
+        if scope == "global":
+            rows = self.global_vars()
+        else:
+            env = self.active_environment()
+            if env is None:
+                env = {"id": "env_default", "name": "Default", "vars": []}
+                self.environments.append(env)
+                self.set_active_env(env["id"])
+            rows = env.setdefault("vars", [])
+        for row in rows:
+            if row.get("key") == name:
+                row["value"] = value
+                row["enabled"] = True
+                break
+        else:
+            rows.append({"key": name, "value": value, "enabled": True})
+        self.save()
+        return "global" if scope == "global" else "env"
 
     def set_active_env(self, env_id: Optional[str]) -> None:
         self.data["active_env"] = env_id

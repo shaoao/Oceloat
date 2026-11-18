@@ -1,5 +1,23 @@
 # What's Changed
 
+## v1.0.52 — 2026-11-19
+
+**Changed**
+- Settings now has a single "Variables" page: environment variables and global variables sit behind one segmented switch, with the override rule (environment wins) stated right in the header. The old separate nav entries are gone.
+- The AI settings page was rebuilt: switch → provider → key → models → advanced, with a single status line (ready / not configured / off) instead of colored decoration.
+
+**Added**
+- AI master switch: keep the key but turn AI off, and every AI entry point goes quiet; key and model choice are preserved.
+- DeepSeek support next to Zhipu GLM (DeepSeek-V3 and R1 cards). Each provider keeps its own key and switching brings the right one back.
+- "New request from a sentence" on the welcome screen and in the command palette: method, URL, headers, query params and body are filled in, with Content-Type added for JSON.
+- "Save response field as variable" in the response more menu: pick a field, get a suggested name, store it globally or in the current environment.
+- AI auto-naming with a switch: unnamed or URL-derived request names become human-readable after sending; hand-renamed requests are never touched, and each URL is only asked once.
+- "AI script" as the first button on the pre-request and post-response script pages: describe the goal in a sentence and get JavaScript that only uses this sandbox's API; off-topic requests are refused and never written into the editor.
+- "AI fill" in the API docs window: appends overview, field meanings and common errors to the generated document — included in copy and "Save .md", and the response sent to the model is redacted while the redact switch is on.
+
+**Verified**
+- 654 smoke checks plus 52 targeted checks (variable precedence, per-provider keys, AI switch, script refusal, doc append, one-sentence requests) all pass.
+
 ## v1.0.51 — 2026-11-19
 
 **Fixed**

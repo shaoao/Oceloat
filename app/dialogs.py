@@ -251,6 +251,211 @@ class PromptDialog(GlassDialog):
         self.edit.setFocus()
 
 
+class AiPromptDialog(GlassDialog):
+    """一句话输入框：AI 生成请求、AI 写脚本共用。
+
+    刻意只放一个多行输入 + 两颗按钮 —— 需求描述本来就不长，
+    再加选项、下拉、示例卡片只会让人不知道往哪写。
+    """
+
+    def __init__(self, title: str, label: str, placeholder: str = "", value: str = "",
+                 parent=None, height: int = 236):
+        super().__init__(parent, 540, height, title)
+        t = theme()
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(20, 14, 20, 16)
+        lay.setSpacing(10)
+        head = Label(label, 11.6, t.text_faint)
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        self.edit = QPlainTextEdit(value)
+        self.edit.setFixedHeight(height - 132)
+        self.edit.setFont(font(13))
+        self.edit.setStyleSheet(
+            f"QPlainTextEdit {{ background: {t.panel_alt}; border: 1px solid {S(t.border)};"
+            f" border-radius: 9px; padding: 9px 10px; color: {t.text}; selection-background-color: {t.selected}; }}")
+        self.edit.setPlaceholderText(placeholder)
+        lay.addWidget(self.edit)
+        lay.addStretch(1)
+        cancel = Button("取消", None, kind="ghost", height=28, padding=12, font_size=12)
+        cancel.clicked.connect(self.reject)
+        ok = Button("生成", "spark", kind="primary", height=28, padding=16, font_size=12,
+                    icon_size=12)
+        ok.clicked.connect(self.accept)
+        lay.addWidget(HBox(1, cancel, ok, spacing=6))
+        self._ok = ok
+        self.edit.textChanged.connect(self._sync)
+
+    def _sync(self) -> None:
+        self._ok.setEnabled(bool(self.edit.toPlainText().strip()))
+
+    def value(self) -> str:
+        return self.edit.toPlainText().strip()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.edit.setFocus()
+        self._sync()
+
+    def keyPressEvent(self, e):
+        # ⌘↵ 生成、esc 取消：和主界面的发送手感一致
+        if (e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                and e.modifiers() & Qt.KeyboardModifier.MetaModifier):
+            self.accept()
+            return
+        if e.key() == Qt.Key.Key_Escape:
+            self.reject()
+            return
+        super().keyPressEvent(e)
+
+
+def json_paths(data: Any, prefix: str = "", depth: int = 0, out: Optional[List] = None,
+               limit: int = 120) -> List[Dict[str, str]]:
+    """把 JSON 摊成「路径 + 值」列表，给取变量用。
+
+    只往下走 4 层、最多 120 条：响应可能是几万行的列表，
+    全展开既慢又没法挑，够用就行。
+    """
+    out = [] if out is None else out
+    if len(out) >= limit or depth > 4:
+        return out
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if len(out) >= limit:
+                break
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(value, (dict, list)):
+                json_paths(value, path, depth + 1, out, limit)
+            else:
+                out.append({"path": path, "value": _scalar_text(value)})
+        return out
+    if isinstance(data, list):
+        if not data:
+            return out
+        if isinstance(data[0], (dict, list)):
+            json_paths(data[0], f"{prefix}[0]" if prefix else "[0]", depth + 1, out, limit)
+        else:
+            out.append({"path": f"{prefix}[0]" if prefix else "[0]",
+                        "value": _scalar_text(data[0])})
+    return out
+
+
+def _scalar_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+class VarPickDialog(GlassDialog):
+    """从响应里挑一个字段存成变量：列表点一下、名字自动填、选全局还是环境。"""
+
+    def __init__(self, store: Store, body: str, parent=None):
+        super().__init__(parent, 560, 520, "存为变量")
+        t = theme()
+        self.store = store
+        self._value = ""
+        self._auto_name = ""
+        self._rows: List[Dict[str, str]] = []
+        try:
+            data = json.loads(body or "")
+        except Exception:  # noqa: BLE001
+            data = None
+        if data is not None:
+            self._rows = json_paths(data)
+
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(20, 14, 20, 16)
+        lay.setSpacing(10)
+        head = Label("选一个字段，起个名字，之后在请求里用 {{名字}} 引用。", 11.4, t.text_faint)
+        head.setWordWrap(True)
+        lay.addWidget(head)
+
+        self.list = QListWidget()
+        self.list.setFont(mono(11.5))
+        self.list.setFrameShape(QListWidget.Shape.NoFrame)
+        self.list.setStyleSheet(
+            f"QListWidget {{ background: {t.panel_alt}; border: 1px solid {S(t.border)};"
+            f" border-radius: 9px; padding: 4px; }}"
+            f"QListWidget::item {{ padding: 5px 6px; border-radius: 6px; }}"
+            f"QListWidget::item:selected {{ background: {t.selected}; color: {t.text}; }}")
+        for row in self._rows:
+            item = QListWidgetItem(f"{row['path']}  =  {row['value'][:46]}")
+            item.setData(Qt.ItemDataRole.UserRole, row)
+            item.setToolTip(row["value"][:600])
+            self.list.addItem(item)
+        if not self._rows:
+            item = QListWidgetItem("响应不是 JSON 对象，没有可提取的字段")
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.list.addItem(item)
+        self.list.currentItemChanged.connect(self._on_pick)
+        lay.addWidget(self.list, 1)
+
+        self.name = QLineEdit()
+        self.name.setObjectName("Field")
+        self.name.setFixedHeight(29)
+        self.name.setFont(mono(11.5))
+        i18n.placeholder(self.name, "变量名，例如 token")
+        self.name.textChanged.connect(self._sync_ok)
+        lay.addWidget(self.name)
+
+        self.scope = SegmentedTabs([("global", "全局变量"), ("env", "当前环境")],
+                                   style="pill", height=26, font_size=11.4, pad_h=11)
+        self.scope.set_current("global", emit=False)
+        hint = Label("", 10.4, t.text_faint)
+        hint.setWordWrap(True)
+        env = store.active_environment()
+        hint.setText(i18n.trf("全局：所有环境都能用。当前环境：{name}",
+                              name=(env or {}).get("name") or i18n.tr("未选择")))
+        lay.addWidget(HBox(self.scope, 1, spacing=8))
+        lay.addWidget(hint)
+
+        cancel = Button("取消", None, kind="ghost", height=28, padding=12, font_size=12)
+        cancel.clicked.connect(self.reject)
+        self.ok = Button("保存", "check", kind="primary", height=28, padding=16, font_size=12,
+                         icon_size=12)
+        self.ok.clicked.connect(self._accept)
+        self.ok.setEnabled(False)
+        lay.addWidget(HBox(1, cancel, self.ok, spacing=6))
+        if self._rows:
+            self.list.setCurrentRow(0)
+
+    def _on_pick(self, item, _prev=None) -> None:
+        if item is None:
+            return
+        row = item.data(Qt.ItemDataRole.UserRole) or {}
+        self._value = str(row.get("value", ""))
+        path = str(row.get("path", ""))
+        tail = path.rstrip("]").split(".")[-1].split("[")[0] if path else ""
+        guess = "".join(ch if (ch.isalnum() or ch in "_-") else "_" for ch in tail)
+        # 用户手动改过名字就别再抢：只有空着、或还是上一次自动填的值时才跟着换
+        current = self.name.text().strip()
+        if guess and (not current or current == self._auto_name):
+            self.name.setText(guess)
+            self._auto_name = guess
+        self._sync_ok()
+
+    def _sync_ok(self) -> None:
+        self.ok.setEnabled(bool(self._value) and bool(self.name.text().strip()))
+
+    def _accept(self) -> None:
+        name = self.name.text().strip()
+        if not name or not self._value:
+            return
+        self.store.set_var(name, self._value, "global" if self.scope.current() == "global"
+                           else "env")
+        self.accept()
+
+    def result_name(self) -> str:
+        return self.name.text().strip()
+
+    def result_scope(self) -> str:
+        return "global" if self.scope.current() == "global" else "env"
+
+
 class ConfirmDialog(GlassDialog):
     """二次确认：删除集合 / 文件夹 / 请求 / 清空历史前都要过这一关。
 
@@ -799,8 +1004,7 @@ class SettingsDialog(GlassDialog):
         ("network", "网络", "globe"),
         ("ai", "AI", "spark"),
         ("cloud", "云同步", "cloud"),
-        ("env", "环境变量", "layers"),
-        ("globals", "全局变量", "layers"),
+        ("env", "变量", "layers"),
         ("data", "数据", "folder"),
         ("about_app", "关于 Ocelot", "book"),
     ]
@@ -809,7 +1013,8 @@ class SettingsDialog(GlassDialog):
         super().__init__(parent, 940, 700, "设置")
         self.store = store
         s = store.settings
-        self._page = page
+        # 旧入口传 "globals"：现在合并进「变量」页，别再开出一个不存在的页
+        self._page = "env" if page == "globals" else page
 
         root = QHBoxLayout(self.body)
         root.setContentsMargins(16, 12, 18, 14)
@@ -829,7 +1034,6 @@ class SettingsDialog(GlassDialog):
         self.stack.addWidget(self._page_ai(s))
         self.stack.addWidget(self._page_cloud(s))
         self.stack.addWidget(self._page_env())
-        self.stack.addWidget(self._page_globals())
         self.stack.addWidget(self._page_data())
         self.stack.addWidget(self._page_about_app())
         right.addWidget(self.stack, 1)
@@ -1095,10 +1299,34 @@ class SettingsDialog(GlassDialog):
 
     # -------------------------------------------------- AI
     def _page_ai(self, s: Dict[str, Any]) -> QWidget:
-        """AI 页：一个 Key、一组模型卡片、可选自定义模型 —— 填完就能用。"""
+        """AI 页：开关 → 服务商与 Key → 模型 → 进阶。
+
+        顺序就是「能不能用 → 接哪家 → 用哪个 → 细调」。整页不放彩色装饰，
+        状态只用一行小字表达，避免设置页看起来比工作区还热闹。
+        """
         t = theme()
         cfg = ai_mod.config(self.store)
         preset = ai_mod.PROVIDERS.get(cfg["provider"]) or ai_mod.PROVIDERS["glm"]
+
+        # ---------- 1. 总开关（只留状态，不再重复页标题）
+        self.ai_enabled = Switch(cfg["enabled"])
+        self.ai_enabled.toggled.connect(self._on_ai_enabled)
+        self.ai_title = Label("", 13.4, t.text, weight=QFont.Weight.DemiBold)
+        self.ai_state = Label("", 10.9, t.text_faint)
+        self.ai_state.setWordWrap(True)
+        hero = Card(radius=12)
+        hl = QVBoxLayout(hero)
+        hl.setContentsMargins(18, 14, 18, 14)
+        hl.setSpacing(0)
+        hl.addWidget(HBox((VBox(self.ai_title, self.ai_state, spacing=3), 1),
+                          self.ai_enabled, spacing=14))
+
+        # ---------- 2. 服务商与 Key
+        self.ai_provider = SegmentedTabs(
+            [(key, info["name"]) for key, info in ai_mod.PROVIDERS.items()],
+            style="pill", height=27, font_size=11.6, pad_h=13)
+        self.ai_provider.set_current(cfg["provider"], emit=False)
+        self.ai_provider.changed.connect(self._on_provider)
 
         self.ai_key = QLineEdit(cfg["api_key"])
         self.ai_key.setObjectName("Field")
@@ -1106,27 +1334,32 @@ class SettingsDialog(GlassDialog):
         self.ai_key.setFont(mono(11.6))
         self.ai_key.setEchoMode(QLineEdit.EchoMode.Password)
         i18n.placeholder(self.ai_key, "粘贴 API Key")
+        self.ai_key.editingFinished.connect(lambda: self._save_ai(quiet=True))
         self.ai_eye = Button("显示", None, kind="ghost", height=24, padding=8, font_size=11.4)
         self.ai_eye.clicked.connect(self._toggle_ai_key)
-        self.ai_save = Button("保存并测试", "check", kind="primary", height=28, padding=14,
+        self.ai_save = Button("测试连接", "check", kind="primary", height=28, padding=14,
                               font_size=12)
         self.ai_save.clicked.connect(self._save_test_ai)
         self.ai_status = Label("", 10.8, t.text_faint)
         self.ai_status.setWordWrap(True)
-        self.ai_key.editingFinished.connect(lambda: self._save_ai(quiet=True))
-        key_card = Card(radius=10)
-        kl = QVBoxLayout(key_card)
-        kl.setContentsMargins(14, 12, 14, 12)
-        kl.setSpacing(8)
-        kl.addWidget(Label("API Key", 10, t.text_faint, weight=QFont.Weight.DemiBold,
-                           spacing=0.8))
-        kl.addWidget(HBox((self.ai_key, 1), self.ai_eye, self.ai_save, spacing=8))
-        hint = Label(i18n.trf("{name} · {hint}", name=i18n.tr(preset["name"]),
-                              hint=i18n.tr(preset.get("key_hint", ""))), 10.6, t.text_faint)
-        hint.setWordWrap(True)
-        kl.addWidget(hint)
-        kl.addWidget(self.ai_status)
+        self.ai_hint = Label("", 10.6, t.text_faint)
+        self.ai_hint.setWordWrap(True)
+        self._set_ai_hint(preset)
 
+        conn = Card(radius=12)
+        cl = QVBoxLayout(conn)
+        cl.setContentsMargins(16, 10, 16, 12)
+        cl.setSpacing(9)
+        cl.addWidget(self._row("服务商", "两家的 Key 分开保存，切回来不用重新粘贴。",
+                               self.ai_provider))
+        cl.addWidget(Divider())
+        cl.addWidget(Label("API KEY", 9.4, t.text_faint, weight=QFont.Weight.DemiBold,
+                           spacing=1.0))
+        cl.addWidget(HBox((self.ai_key, 1), self.ai_eye, self.ai_save, spacing=8))
+        cl.addWidget(self.ai_hint)
+        cl.addWidget(self.ai_status)
+
+        # ---------- 3. 模型
         self._ai_models = ai_mod.models_for(cfg)
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
@@ -1138,15 +1371,20 @@ class SettingsDialog(GlassDialog):
             card.picked.connect(self._on_model_pick)
             grid.addWidget(card, i // 2, i % 2)
             self._model_cards.append(card)
-        model_host = QWidget()
-        model_host.setLayout(grid)
-        model_block = self._section("模型（全部免费额度内可用）", model_host)
+        self._model_host = QWidget()
+        self._model_host.setLayout(grid)
+        self.ai_model_title = Label("", 10, t.text_faint,
+                                    weight=QFont.Weight.DemiBold, spacing=0.8)
+        self._sync_model_title()
 
+        # ---------- 4. 进阶
+        self.ai_auto_name = Switch(bool(s.get("ai_auto_name", True)))
+        self.ai_auto_name.toggled.connect(self._on_ai_auto_name)
         self.ai_custom = QLineEdit()
         self.ai_custom.setObjectName("Field")
         self.ai_custom.setFixedHeight(28)
         self.ai_custom.setFont(mono(11.5))
-        i18n.placeholder(self.ai_custom, "自定义模型 ID，例如 glm-4-flash")
+        i18n.placeholder(self.ai_custom, "自定义模型 ID，例如 deepseek-chat")
         self.ai_custom_add = Button("添加并使用", "plus", kind="subtle", height=28,
                                     padding=12, font_size=11.6)
         self.ai_custom_add.clicked.connect(self._add_custom_model)
@@ -1154,27 +1392,82 @@ class SettingsDialog(GlassDialog):
         self.ai_base.setObjectName("Field")
         self.ai_base.setFixedHeight(28)
         self.ai_base.setFont(mono(11.5))
-        i18n.placeholder(self.ai_base, "留空用官方地址；中转/自建网关填这里")
+        i18n.placeholder(self.ai_base, "留空用官方地址；中转 / 自建网关填这里")
         self.ai_base.editingFinished.connect(self._save_ai_base)
         more = self._card(
-            self._row_stack("自定义模型", "接入新模型：填上模型 ID 就能用，不用等更新。",
+            self._row("自动起名", "发送后按内容起名；关掉只用 URL 末段。",
+                      self.ai_auto_name),
+            self._row_stack("自定义模型", "填上模型 ID 就能用，不用等版本更新。",
                             HBox((self.ai_custom, 1), self.ai_custom_add, spacing=8)),
             self._row_stack("服务地址", "仅在用中转或自建网关时填写。", self.ai_base),
         )
-        tips = Card(radius=10)
-        tl2 = QVBoxLayout(tips)
-        tl2.setContentsMargins(14, 12, 14, 12)
-        tl2.setSpacing(6)
-        for line in (
-            "· 请求体里点「AI 生成」：按字段名生成一份真实数据，边生成边写进编辑器",
-            "· 响应报错时点「AI 解释」：直接给原因和修法，不用自己猜",
-            "· Key 只存在本机 state.json，不会上传到任何地方",
-        ):
-            lab = Label(i18n.tr(line), 10.8, t.text_dim)
-            lab.setWordWrap(True)
-            tl2.addWidget(lab)
-        return self._page_shell("AI", "配置一次，之后生成测试数据、解释报错都能直接用。",
-                                key_card, model_block, more, tips)
+
+        tip = Label("Key 只保存在本机 state.json。关掉 AI 只是暂停，Key 与模型选择都不会丢。",
+                    10.5, t.text_faint)
+        tip.setWordWrap(True)
+        self._refresh_ai_state()
+        return self._page_shell("AI", "可选能力：不配也能正常调试接口，配了只是少敲几行。",
+                                hero, conn, VBox(self.ai_model_title, self._model_host,
+                                                 spacing=8), more, tip)
+
+    # -------------------------------------------------- AI 状态与切服务商
+    def _set_ai_hint(self, preset: Dict[str, Any]) -> None:
+        self.ai_hint.setText(i18n.trf("{name} · {hint}", name=i18n.tr(preset["name"]),
+                                      hint=i18n.tr(preset.get("key_hint", ""))))
+
+    def _sync_model_title(self) -> None:
+        cfg = ai_mod.config(self.store)
+        self.ai_model_title.setText(
+            i18n.trf("模型 · {name}（点一下切换，立即生效）", name=cfg["provider_name"]))
+
+    def _refresh_ai_state(self) -> None:
+        cfg = ai_mod.config(self.store)
+        if not cfg["enabled"]:
+            title, detail, color = (i18n.tr("已关闭"),
+                                    i18n.tr("所有 AI 功能暂停，Key 与模型选择都还在"),
+                                    theme().text_dim)
+        elif not cfg["api_key"]:
+            title, detail, color = (i18n.tr("未配置"),
+                                    i18n.tr("填入 API Key 后即可使用，只存在本机"),
+                                    theme().text_dim)
+        else:
+            title = i18n.tr("已就绪")
+            detail = i18n.trf("{provider} · {model}",
+                              provider=cfg["provider_name"], model=cfg["model"])
+            color = theme().success
+        self.ai_title.setText(title)
+        self.ai_title.setStyleSheet(f"color: {color}; background: transparent;")
+        self.ai_state.setText(detail)
+
+    def _on_ai_enabled(self, on: bool) -> None:
+        self.store.settings.setdefault("ai", {})["enabled"] = bool(on)
+        self.store.save()
+        self._refresh_ai_state()
+        self.settingsChanged.emit()
+
+    def _on_ai_auto_name(self, on: bool) -> None:
+        self.store.settings["ai_auto_name"] = bool(on)
+        self.store.save()
+        self.settingsChanged.emit()
+
+    def _on_provider(self, key: str) -> None:
+        ai_cfg = self.store.settings.setdefault("ai", {})
+        if key not in ai_mod.PROVIDERS or key == ai_cfg.get("provider"):
+            return
+        self._save_ai(quiet=True)          # 先把当前这家的 Key 存进 key_by_provider
+        preset = ai_mod.PROVIDERS[key]
+        ai_cfg["provider"] = key
+        ai_cfg["model"] = preset["default_model"]
+        ai_cfg["base_url"] = ""
+        self.store.save()
+        cfg = ai_mod.config(self.store)
+        self.ai_key.setText(cfg["api_key"])
+        self.ai_base.setText("")
+        self.ai_status.setText("")
+        self._set_ai_hint(preset)
+        self._sync_model_title()
+        self._refresh_model_grid()
+        self._refresh_ai_state()
 
     def _toggle_ai_key(self) -> None:
         showing = self.ai_key.echoMode() == QLineEdit.EchoMode.Normal
@@ -1183,14 +1476,18 @@ class SettingsDialog(GlassDialog):
         self.ai_eye.setText(i18n.tr("显示") if showing else i18n.tr("隐藏"))
 
     def _ai_cfg(self) -> Dict[str, Any]:
-        s = self.store.settings
-        ai_cfg = s.setdefault("ai", {})
-        ai_cfg["api_key"] = self.ai_key.text().strip()
+        ai_cfg = self.store.settings.setdefault("ai", {})
+        key = self.ai_key.text().strip()
+        provider = ai_cfg.get("provider") or "glm"
+        ai_cfg.setdefault("key_by_provider", {})[provider] = key
+        if provider == "glm":
+            ai_cfg["api_key"] = key       # 兼容 1.0.51 的单 Key 字段
         return ai_mod.config(self.store)
 
     def _save_ai(self, quiet: bool = False) -> None:
         cfg = self._ai_cfg()
         self.store.save()
+        self._refresh_ai_state()
         if not quiet:
             ok, why = ai_mod.ready(cfg)
             self.ai_status.setText(i18n.tr("已保存，可以开始用了") if ok else why)
@@ -1207,7 +1504,8 @@ class SettingsDialog(GlassDialog):
         self.store.settings.setdefault("ai", {})["model"] = model_id
         for card in self._model_cards:
             card.set_selected(card.model.get("id") == model_id)
-        self._save_ai(quiet=True)
+        self.store.save()
+        self._refresh_ai_state()
         self.ai_status.setText(i18n.trf("已切换到 {model}", model=model_id))
         self.ai_status.setStyleSheet(f"color: {theme().text_faint}; background: transparent;")
 
@@ -1223,11 +1521,12 @@ class SettingsDialog(GlassDialog):
         self.store.save()
         self.ai_custom.clear()
         self._refresh_model_grid()
+        self._refresh_ai_state()
 
     def _refresh_model_grid(self) -> None:
-        """重建模型卡片：加过自定义模型后立刻能点选。"""
+        """重建模型卡片：切服务商、加过自定义模型后立刻能点选。"""
         cfg = ai_mod.config(self.store)
-        host = self._model_cards[0].parentWidget() if self._model_cards else None
+        host = getattr(self, "_model_host", None)
         if host is None:
             return
         grid = host.layout()
@@ -1245,6 +1544,7 @@ class SettingsDialog(GlassDialog):
     def _save_test_ai(self) -> None:
         cfg = self._ai_cfg()
         self.store.save()
+        self._refresh_ai_state()
         ok, why = ai_mod.ready(cfg)
         if not ok:
             self.ai_status.setText(why)
@@ -1255,7 +1555,7 @@ class SettingsDialog(GlassDialog):
         self.ai_status.setStyleSheet(f"color: {theme().text_faint}; background: transparent;")
         msgs = [{"role": "system", "content": "只回复两个字：可用"},
                 {"role": "user", "content": "连通性测试"}]
-        # 200 而不是 16：GLM-4.5 这类会思考的模型先花 token 推理，给太少会「有回复但空内容」
+        # 200 而不是 16：GLM-4.5 / R1 这类会思考的模型先花 token 推理，给太少会「有回复但空内容」
         self._ai_test = ai_mod.start(
             msgs, cfg=cfg, max_tokens=200, temperature=0,
             on_done=lambda text: self._on_ai_tested(True, text),
@@ -1271,6 +1571,7 @@ class SettingsDialog(GlassDialog):
         else:
             self.ai_status.setText(text)
             self.ai_status.setStyleSheet(f"color: {theme().danger}; background: transparent;")
+        self._refresh_ai_state()
 
     # -------------------------------------------------- 云同步
     def _page_cloud(self, s: Dict[str, Any]) -> QWidget:
@@ -1443,22 +1744,56 @@ class SettingsDialog(GlassDialog):
             self.dataReloaded.emit()
 
     def _page_env(self) -> QWidget:
-        self.env_editor = EnvEditor(self.store)
-        return self._page_shell("环境变量", "{{变量}} 会按当前激活的环境替换。", self.env_editor)
+        """变量页：环境变量 / 全局变量 用分段控件切换，不再占两个左侧导航项。
 
-    def _page_globals(self) -> QWidget:
-        """全局变量：不跟环境走，任何环境、任何请求里都能引用。"""
+        这两件事本来就该放在一起看 —— 优先级关系（环境覆盖全局）只有并排才说得清。
+        """
         t = theme()
+        self.env_editor = EnvEditor(self.store)
+        self.env_editor.setMinimumHeight(432)
+
         self.globals_editor = KVEditor("变量名", "值", empty_hint="添加全局变量",
                                        with_types=False)
-        self.globals_editor.setMinimumHeight(300)
+        self.globals_editor.setMinimumHeight(432)
         self.globals_editor.set_rows(self.store.global_vars())
         self.globals_editor.changed.connect(self._save_globals)
-        note = Label("在所有请求里用 {{名字}} 引用；环境变量里同名的会覆盖全局变量。", 11,
-                     t.text_faint)
-        note.setWordWrap(True)
-        return self._page_shell("全局变量", "跨环境复用的变量，比如公共域名、团队 Token、通用 ID。",
-                                note, self.globals_editor)
+
+        self.vars_stack = QStackedWidget()
+        self.vars_stack.addWidget(self.env_editor)
+        self.vars_stack.addWidget(self.globals_editor)
+        self.vars_stack.setMinimumHeight(432)
+
+        self.vars_seg = SegmentedTabs([("env", "环境变量"), ("global", "全局变量")],
+                                      style="pill", height=27, font_size=11.6, pad_h=13)
+        self.vars_seg.set_current("env", emit=False)
+        self.vars_seg.changed.connect(self._on_vars_seg)
+
+        self.vars_note = Label("", 10.8, t.text_faint)
+        self.vars_note.setWordWrap(True)
+
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+        lay.addWidget(HBox(self.vars_seg, 1, spacing=10))
+        lay.addWidget(self.vars_note)
+        lay.addWidget(self.vars_stack, 1)
+        self._on_vars_seg("env")
+        return self._page_shell(
+            "变量", "所有请求里都用 {{名字}} 引用；同名时环境变量覆盖全局变量。", box)
+
+    def _on_vars_seg(self, key: str) -> None:
+        global_ = key == "global"
+        self.vars_stack.setCurrentIndex(1 if global_ else 0)
+        env = self.store.active_environment()
+        if global_:
+            self.vars_note.setText(i18n.tr(
+                "跨环境复用的常量：公共域名、团队 Token、通用 ID。这里改了，所有环境立即生效。"))
+        else:
+            self.vars_note.setText(i18n.trf(
+                "每种环境一套值，切换环境整套换掉。当前激活：{name}",
+                name=(env or {}).get("name") or i18n.tr("未选择")))
+        self.vars_note.setStyleSheet(f"color: {theme().text_faint}; background: transparent;")
 
     def _save_globals(self) -> None:
         self.store.data["global_vars"] = self.globals_editor.rows()
@@ -1949,10 +2284,6 @@ class EnvEditor(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
-
-        head = HBox(Label("激活的环境会用于替换 {{变量}}", 10.5, theme().text_faint, mono_font=True),
-                    1, spacing=8)
-        lay.addWidget(head)
 
         content = QHBoxLayout()
         content.setSpacing(12)
@@ -2539,12 +2870,13 @@ class CommandPalette(QWidget):
 
     ACTIONS = [
         ("new_request", "新建请求", "plus", "⌘N"),
+        ("ai_request", "用一句话新建请求…", "spark", ""),
         ("new_ws", "新建 WebSocket 请求", "link", ""),
         ("new_sio", "新建 Socket.IO 请求", "link", ""),
         ("new_folder", "新建文件夹", "folder", ""),
         ("send", "发送当前请求", "send", "⌘↵"),
         ("save", "保存到集合", "download", "⌘S"),
-        ("env", "环境变量…", "globe", ""),
+        ("env", "变量…", "globe", ""),
         ("trash", "打开回收站", "trash", ""),
         ("trash_settings", "回收站自动清理设置…", "trash", ""),
         ("settings", "设置…", "sliders", "⌘,"),

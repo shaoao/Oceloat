@@ -23,16 +23,6 @@ from . import i18n
 
 # ---------------------------------------------------------------- 服务商与模型
 
-PROVIDERS: Dict[str, Dict[str, Any]] = {
-    "glm": {
-        "name": "智谱 GLM",
-        "base": "https://open.bigmodel.cn/api/paas/v4",
-        "default_model": "glm-4-flash-250414",
-        "doc": "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
-        "key_hint": "在智谱开放平台「API Keys」里创建，形如 xxxxxxxx.yyyyyyyy",
-    },
-}
-
 # 默认清单全部是免费/低价模型：先给能直接用的，再给要思考的。
 # badge / desc 直接渲染成设置页里的模型卡片，加模型只要往这里加一条。
 MODELS: List[Dict[str, Any]] = [
@@ -45,6 +35,34 @@ MODELS: List[Dict[str, Any]] = [
     {"id": "glm-4.1v", "label": "GLM-4.1V", "badge": "原生思考",
      "desc": "最严谨，但慢，适合绕的问题", "free": True},
 ]
+
+# DeepSeek 与 GLM 共用同一套 OpenAI 兼容协议，区别只在 base 与模型名。
+# 每个服务商可以带自己的模型表（没有就回落到 MODELS），加服务商 = 加一段配置。
+DEEPSEEK_MODELS: List[Dict[str, Any]] = [
+    {"id": "deepseek-chat", "label": "DeepSeek-V3", "badge": "通用",
+     "desc": "默认 · 快，写代码与生成数据都稳"},
+    {"id": "deepseek-reasoner", "label": "DeepSeek-R1", "badge": "推理",
+     "desc": "先想再答，复杂问题更准，略慢"},
+]
+
+PROVIDERS: Dict[str, Dict[str, Any]] = {
+    "glm": {
+        "name": "智谱 GLM",
+        "base": "https://open.bigmodel.cn/api/paas/v4",
+        "default_model": "glm-4-flash-250414",
+        "doc": "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
+        "key_hint": "在智谱开放平台「API Keys」里创建，形如 xxxxxxxx.yyyyyyyy",
+        "models": MODELS,
+    },
+    "deepseek": {
+        "name": "DeepSeek",
+        "base": "https://api.deepseek.com/v1",
+        "default_model": "deepseek-chat",
+        "doc": "https://platform.deepseek.com/api_keys",
+        "key_hint": "在 DeepSeek 控制台「API Keys」里创建，形如 sk-xxxxxxxx",
+        "models": DEEPSEEK_MODELS,
+    },
+}
 
 
 def config(store: Any = None) -> Dict[str, Any]:
@@ -59,19 +77,29 @@ def config(store: Any = None) -> Dict[str, Any]:
     raw = dict((store.settings.get("ai") if store else {}) or {})
     provider = raw.get("provider") or "glm"
     preset = PROVIDERS.get(provider) or PROVIDERS["glm"]
+    # Key 按服务商分开存：GLM 与 DeepSeek 的 Key 格式不同，来回切不该互相覆盖。
+    # api_key 是 1.0.51 的旧字段，保留作 glm 的兼容读。
+    keys = raw.get("key_by_provider") or {}
+    api_key = str(keys.get(provider) or "").strip()
+    if not api_key and provider == "glm":
+        api_key = (raw.get("api_key") or "").strip()
     return {
         "provider": provider if provider in PROVIDERS else "glm",
         "provider_name": preset["name"],
         "base": (raw.get("base_url") or "").strip().rstrip("/") or preset["base"],
         "model": (raw.get("model") or "").strip() or preset["default_model"],
-        "api_key": (raw.get("api_key") or "").strip(),
+        "api_key": api_key,
         "custom_models": list(raw.get("custom_models") or []),
+        # 总开关：填了 Key 也可以随时关掉，所有入口一起停用，不用删 Key
+        "enabled": bool(raw.get("enabled", True)),
     }
 
 
 def models_for(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """默认模型 + 用户自加的模型，去重保序。"""
-    out = [dict(m) for m in MODELS]
+    """当前服务商的模型 + 用户自加的模型，去重保序。"""
+    preset = PROVIDERS.get(cfg.get("provider") or "glm") or PROVIDERS["glm"]
+    base = preset.get("models") or MODELS
+    out = [dict(m) for m in base]
     seen = {m["id"] for m in out}
     for m in cfg.get("custom_models") or []:
         mid = str((m or {}).get("id") or "").strip()
@@ -85,6 +113,8 @@ def models_for(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 def ready(cfg: Optional[Dict[str, Any]] = None) -> tuple:
     """(是否可用, 原因)。原因直接可以显示给用户。"""
     cfg = cfg or config()
+    if not cfg.get("enabled", True):
+        return False, i18n.tr("AI 已在设置里关闭")
     if not cfg.get("api_key"):
         return False, i18n.tr("还没填 API Key")
     if not cfg.get("model"):
@@ -289,6 +319,115 @@ def messages_for_error(method: str, url: str, status: int = 0, detail: str = "",
             {"role": "user", "content": "\n".join(parts)}]
 
 
+# 脚本生成：把可用 API 写死在提示词里，模型没有空间「自由发挥」，
+# 也只能产出这个沙箱里真正能跑的东西（没有 require / fetch / import）。
+_SYS_SCRIPT = (
+    "你是 API 调试工具里的 JavaScript 脚本生成器，只负责写「{where}」。"
+    "硬性规则：\n"
+    "1. 只输出可直接运行的 JavaScript 代码，不要 Markdown 代码块、不要注释说明、不要任何解释文字；\n"
+    "2. 只能用下面列出的 API，禁止使用 require / import / fetch / XMLHttpRequest / setTimeout / DOM；\n"
+    "3. 不要编造不存在的接口；请求里没有的信息不要猜；\n"
+    "4. 代码控制在 20 行以内，能不用变量就不用变量；\n"
+    "5. 如果用户的要求和这个脚本无关（比如问别的、聊天、要改请求本身），"
+    "只输出一行注释：// {refuse}\n"
+    "可用 API：\n{api}"
+)
+
+_API_PRE = (
+    "req.url / req.method / req.headers / req.params / req.body / req.cookies\n"
+    "req.setHeader(name, value) / req.getHeader(name) / req.removeHeader(name)\n"
+    "req.setParam(name, value) / req.removeParam(name) / req.setBody(text)\n"
+    "req.json()\n"
+    "pw.env.get(name) / pw.env.set(name, value) / pw.env.unset(name) / pw.env.has(name)\n"
+    "pw.env.resolve(\"{{token}}\") / pw.env.toObject()\n"
+    "console.log / info / warn / error\n"
+    "test(name, function () { ... })"
+)
+
+_API_POST = (
+    "res.status / res.statusText / res.time / res.body / res.headers\n"
+    "res.getHeader(name) / res.setHeader(name, value) / res.removeHeader(name)\n"
+    "res.json()\n"
+    "pw.env.get(name) / pw.env.set(name, value) / pw.env.has(name) / pw.env.resolve(text)\n"
+    "console.log / info / warn / error\n"
+    "test(name, function () { ... })"
+)
+
+
+def messages_for_script(ask: str, kind: str = "pre", method: str = "GET", url: str = "",
+                        body: str = "") -> List[Dict[str, str]]:
+    """把一句需求变成脚本。kind=pre 只能碰 req / pw，post 还能读 res。"""
+    where = "前置脚本（请求发送前执行）" if kind == "pre" else "后置脚本（收到响应后执行）"
+    api = _API_PRE if kind == "pre" else _API_POST
+    system = _SYS_SCRIPT.format(where=where, api=api,
+                                refuse=i18n.tr("这超出了当前脚本的范围"))
+    ctx = [f"请求：{method.upper()} {url or '(未填写地址)'}"]
+    if body.strip():
+        ctx.append("请求体（截断）：\n" + body.strip()[:800])
+    ctx.append("需求：" + (ask or "").strip()[:600])
+    return [{"role": "system", "content": system},
+            {"role": "user", "content": "\n".join(ctx)}]
+
+
+_SYS_REQUEST = (
+    "你是 API 调试工具的请求构造器。根据用户的一句描述，生成一个可发送的 HTTP 请求。"
+    "只输出一个 JSON 对象，不要解释、不要 Markdown 代码块：\n"
+    '{"name": "简短中文名", "method": "GET|POST|PUT|PATCH|DELETE", '
+    '"url": "完整地址（可以用 {{base_url}} 占位）", '
+    '"headers": [{"key": "Content-Type", "value": "application/json"}], '
+    '"params": [{"key": "", "value": ""}], "body": "请求体字符串"}。\n'
+    "规则：url 必须完整可请求；不确定的字段留空数组；body 只在需要时给，"
+    "JSON 请求体要合法；name 不超过 14 个字。"
+)
+
+
+def messages_for_request(ask: str, base_url: str = "") -> List[Dict[str, str]]:
+    parts = ["描述：" + (ask or "").strip()[:800]]
+    if base_url.strip():
+        parts.append("可用的基础地址：" + base_url.strip())
+    return [{"role": "system", "content": _SYS_REQUEST},
+            {"role": "user", "content": "\n".join(parts)}]
+
+
+_SYS_DOC = (
+    "你是技术文档编辑。用户给你一个 HTTP 请求和它的响应，请补写接口文档里最容易被漏掉的部分。"
+    "只输出 Markdown，不要重复已有的参数表，不要输出一级标题。"
+    "结构固定为三个二级标题：## 接口说明（2-4 句：做什么、什么时候用）、"
+    "## 参数含义（只解释真正需要解释的字段，用列表）、"
+    "## 常见错误（列出可能的失败情况与处理，用列表）。"
+    "语言与用户一致（中文就写中文）；总长度不超过 400 字；不要编造响应里没有的字段。"
+)
+
+
+def messages_for_doc(method: str, url: str, name: str = "", params: str = "",
+                     body: str = "", response: str = "") -> List[Dict[str, str]]:
+    parts = [f"接口：{name or '(未命名)'} · {method.upper()} {url or '(未知地址)'}"]
+    if params.strip():
+        parts.append("参数与请求头（截断）：\n" + params.strip()[:900])
+    if body.strip():
+        parts.append("请求体（截断）：\n" + body.strip()[:900])
+    if response.strip():
+        parts.append("响应示例（截断）：\n" + response.strip()[:1600])
+    else:
+        parts.append("还没有响应示例，只写接口说明与常见错误。")
+    return [{"role": "system", "content": _SYS_DOC},
+            {"role": "user", "content": "\n".join(parts)}]
+
+
+_SYS_NAME = (
+    "给一个 HTTP 请求起名字。只输出名字本身：不超过 12 个汉字（英文用 3 个单词内），"
+    "不要引号、不要句号、不要解释、不要 Markdown。"
+)
+
+
+def messages_for_name(method: str, url: str, body: str = "") -> List[Dict[str, str]]:
+    parts = [f"{method.upper()} {url or '(未知地址)'}"]
+    if body.strip():
+        parts.append("请求体（截断）：\n" + body.strip()[:500])
+    return [{"role": "system", "content": _SYS_NAME},
+            {"role": "user", "content": "\n".join(parts)}]
+
+
 # ---------------------------------------------------------------- 小工具
 
 def clean_json(text: str) -> str:
@@ -307,6 +446,32 @@ def clean_json(text: str) -> str:
     if end > start:
         return s[start:end + 1]
     return s[start:]
+
+
+def clean_code(text: str) -> str:
+    """模型输出 → 可直接塞进脚本编辑器的代码：去围栏、去掉首尾的解释性文字。"""
+    s = (text or "").strip()
+    if "```" in s:
+        parts = s.split("```")
+        # 取最长的一段：通常是围栏里的代码；短段多是语言标记或结尾说明
+        s = max(parts[1:] or [s], key=len)
+        if s[:12].lower().startswith(("javascript", "js\n", "js\n")):
+            s = s.split("\n", 1)[1] if "\n" in s else ""
+    lines = [ln.rstrip() for ln in s.strip().split("\n")]
+    # 去掉「以下是脚本」这类开场白：第一行不是代码特征就丢
+    while lines and lines[0].strip() and not any(
+            ch in lines[0] for ch in "=();{}[]\"'`/"):
+        lines.pop(0)
+    return "\n".join(lines).strip()
+
+
+def clean_line(text: str, limit: int = 24) -> str:
+    """模型输出 → 单行文本（名字、标题）：取第一行、去引号、限长。"""
+    for line in (text or "").split("\n"):
+        s = line.strip().strip("`\"'“”‘’。.,")
+        if s:
+            return s[:limit]
+    return ""
 
 
 def json_keys(text: str, limit: int = 24) -> List[str]:
