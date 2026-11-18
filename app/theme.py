@@ -341,6 +341,7 @@ def mono(size: float = 12, weight: QFont.Weight = QFont.Weight.Normal, spacing: 
 # PATCH 粉 / TRACE 紫。深色主题用高亮版，浅色主题用同色相的暗版。
 METHOD_COLORS_DARK = {
     "WS": "#3E9E9C",
+    "SIO": "#4FA3B8",
     "SSE": "#7C8CD8",
     "GET": "#49A665",
     "POST": "#DA6530",
@@ -354,6 +355,7 @@ METHOD_COLORS_DARK = {
 }
 METHOD_COLORS_LIGHT = {
     "WS": "#2A6E6C",
+    "SIO": "#2F6E7E",
     "SSE": "#4A57A8",
     "GET": "#2E7A48",
     "POST": "#A64A1C",

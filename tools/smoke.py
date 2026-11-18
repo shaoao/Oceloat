@@ -3427,6 +3427,147 @@ def main() -> int:
         _i18n.set_language(old_lang, notify=False)
         w.sidebar.refresh_theme()
         dlg.deleteLater()
+
+        # ============================================================
+        # Socket.IO（v1.0.45）：辅助函数 / 默认数据 / UI / 协议 / i18n
+        # ============================================================
+        from app.sio_client import (SocketIoClient, ns_prefix, normalize_ns,
+                                    sio_url as _sio_url)
+        from app.sio_panel import SioComposer, default_sio, ensure_sio
+        from app.request_panel import SIO_METHOD
+        from app.theme import method_color as _method_color
+
+        check("SIO 地址补全为 Engine.IO 握手",
+              _sio_url("http://localhost:3000") == "ws://localhost:3000/socket.io/?EIO=4&transport=websocket",
+              _sio_url("http://localhost:3000"))
+        check("SIO 保留已有查询参数", "token=a" in _sio_url("http://x:3000/chat?token=a"),
+              _sio_url("http://x:3000/chat?token=a"))
+        check("SIO 命名空间规整", normalize_ns("admin") == "/admin" and normalize_ns("") == "/")
+        check("SIO 默认命名空间不加前缀",
+              ns_prefix("/") == "" and ns_prefix("/admin") == "/admin,")
+        check("SIO 方法有独立配色",
+              _method_color("SIO", _theme()).lower() not in ("", "#000000"))
+
+        w.new_socketio()
+        app.processEvents()
+        check("新建的是 Socket.IO 请求",
+              w.current_tab()["request"].get("method") == SIO_METHOD)
+        check("SIO 是独立页面，不显示 HTTP 页签",
+              w.editor.is_sio() and w.editor.sio_page.isVisible()
+              and not w.editor.head.isVisible() and not w.editor.pages.isVisible())
+        check("SIO 页有命名空间 / 认证 / 事件编辑器",
+              w.editor.sio.namespace is not None and w.editor.sio.auth is not None
+              and w.editor.sio.event_name is not None and w.editor.sio.editor is not None)
+        check("默认数据字段齐全",
+              all(k in default_sio() for k in
+                  ("namespace", "auth", "event", "ack", "auto_reconnect", "messages", "draft")))
+        check("ensure_sio 补齐旧请求缺字段",
+              ensure_sio({"method": "SIO"})["namespace"] == "/")
+        check("新建请求菜单含 Socket.IO 入口", callable(w.sidebar.create_request_in))
+        created = w.sidebar.create_request_in(None, "SIO")
+        check("侧栏能创建 SIO 请求并带默认数据",
+              created.get("method") == "SIO" and isinstance(created.get("sio"), dict))
+        # 命令面板动作已登记
+        from app.dialogs import CommandPalette as _CP
+        check("命令面板有 Socket.IO 动作",
+              any(a[0] == "new_sio" for a in _CP.ACTIONS))
+
+        # --- 真实协议：本地模拟一个 Socket.IO 服务端 ---
+        sio_srv = QWebSocketServer("smoke-sio", QWebSocketServer.SslMode.NonSecureMode)
+        check("本地 Socket.IO 服务监听成功",
+              sio_srv.listen(QHostAddress.SpecialAddress.LocalHost, 0), sio_srv.errorString())
+        sio_port = sio_srv.serverPort()
+        sio_peers = []
+        seen = {}
+
+        def _sio_new():
+            s = sio_srv.nextPendingConnection()
+            sio_peers.append(s)
+
+            def on_msg(t):
+                if t == "2":                      # Engine.IO ping -> pong
+                    s.sendTextMessage("3")
+                    return
+                if t.startswith("40"):            # 客户端 CONNECT
+                    body = t[2:]
+                    ns = "/"
+                    payload = ""
+                    if body.startswith("/"):
+                        i = body.find(",")
+                        ns = body[:i] if i >= 0 else body
+                        payload = body[i + 1:] if i >= 0 else ""
+                    seen["ns"], seen["auth"] = ns, payload
+                    prefix = ns + "," if ns != "/" else ""
+                    s.sendTextMessage("40" + prefix + _json.dumps({"sid": "SIDX"}))
+                    s.sendTextMessage("42" + prefix + _json.dumps(["hello", {"x": 1}]))
+                    s.sendTextMessage("42" + prefix + _json.dumps(["needack", 7, "d"]))
+                    return
+                if t.startswith("42"):            # 客户端事件
+                    rest = t[2:]
+                    if rest.startswith("/"):
+                        rest = rest[rest.find(",") + 1:]
+                    arr = _json.loads(rest)
+                    name = arr[0]
+                    ack = None
+                    if len(arr) >= 2 and isinstance(arr[-1], int) and not isinstance(arr[-1], bool):
+                        ack = arr[-1]
+                    args = [a for a in arr[1:] if a is not ack]
+                    if ack is not None:
+                        s.sendTextMessage("43" + str(ack) + _json.dumps(["pong"]))
+                    else:
+                        s.sendTextMessage("42" + _json.dumps(["echoed", name] + args))
+                    return
+                if t.startswith("41"):
+                    s.sendTextMessage("41")
+
+            s.textMessageReceived.connect(on_msg)
+            s.sendTextMessage("0" + _json.dumps({"sid": "ENGX"}))
+
+        sio_srv.newConnection.connect(_sio_new)
+
+        # 用独立客户端测协议（信号断言不受主窗口当前 tab 干扰）
+        c = SocketIoClient()
+        cframes, cevents, cacks = [], [], []
+        c.frame.connect(cframes.append)
+        c.eventReceived.connect(lambda n, a: cevents.append((n, a)))
+        c.acked.connect(lambda i, a: cacks.append((i, a)))
+        c.connect_to(f"http://127.0.0.1:{sio_port}", namespace="/chat",
+                     auth='{"token":"abc"}', auto_reconnect=False, verify_ssl=True)
+        check("SIO 会话能建立", wait_until(lambda: c.state == "open", 8000),
+              c.state + " " + str([f.preview() for f in cframes]))
+        check("SIO 命名空间送到服务端", seen.get("ns") == "/chat", str(seen))
+        check("SIO 认证 JSON 送到服务端",
+              _json.loads(seen.get("auth", "{}")).get("token") == "abc", str(seen))
+        check("SIO 能收到事件", wait_until(lambda: any(n == "hello" for n, a in cevents), 4000),
+              str(cevents))
+        check("SIO 普通整数参数不误判为 ACK",
+              any(n == "needack" for n, a in cevents), str(cevents))
+        check("SIO 能发事件并收回声", c.emit_event("say", '{"m":"hi"}')
+              and wait_until(lambda: any(n == "echoed" for n, a in cevents), 4000),
+              str(cevents))
+        check("SIO ACK 字典已初始化（不崩溃）", hasattr(c, "_acks") and c._acks == {}, str(getattr(c, "_acks", None)))
+        check("SIO 能发带 ACK 的事件并收回执",
+              c.emit_event("ask", '"q"', with_ack=True)
+              and wait_until(lambda: len(cacks) >= 1, 4000)
+              and cacks[0][0] == 1 and "pong" in cacks[0][1], str(cacks))
+        c._ping()
+        check("SIO 心跳能测延迟", wait_until(lambda: c.latency > 0, 4000), str(c.latency))
+        c.disconnect_ws()
+        check("SIO 能主动断开", wait_until(lambda: not c.busy, 5000), c.state)
+        sio_srv.close()
+
+        # --- i18n：新建的 SIO 词条都能翻译 ---
+        _i18n.set_language("en", notify=False)
+        check("SIO 命名空间英文", _i18n.tr("命名空间") == "Namespace")
+        check("SIO 认证英文", _i18n.tr("认证 JSON") == "Auth JSON")
+        check("SIO 发送事件英文", _i18n.tr("发送事件") == "Emit event")
+        check("SIO 命令面板动作英文",
+              _i18n.tr("新建 Socket.IO 请求") == "New Socket.IO Request")
+        check("SIO 已连接英文", _i18n.trf("Socket.IO 已连接 · {p}", p="default namespace")
+              == "Socket.IO connected · default namespace")
+        check("SIO ACK 模板英文", _i18n.trf("等待 ACK · {id}", id=2) == "Awaiting ACK · 2")
+        _i18n.set_language(old_lang, notify=False)
+
         return 0
 
     def finish():

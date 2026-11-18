@@ -50,7 +50,8 @@ from .code_editor import CodeView, human_elapsed
 from .dialogs import CodeDialog, CommandPalette, EnvDialog, ImportCurlDialog, SettingsDialog
 from .http_client import ApiClient, Response
 from .ws_client import WsClient
-from .request_panel import RequestEditor
+from .sio_client import SocketIoClient
+from .request_panel import REALTIME_METHODS, SIO_METHOD, RequestEditor
 from .response_panel import ResponsePanel
 from .sidebar import Sidebar
 from .store import Store, kv, new_request, resolve_vars, uid
@@ -587,6 +588,14 @@ class MainWindow(QWidget):
         self.ws.closed.connect(self._on_ws_closed)
         self.ws.failed.connect(self._on_ws_failed)
         self.ws.ponged.connect(self._on_ws_pong)
+        # Socket.IO：复用同一套日志/状态槽，按当前标签选择 client
+        self.sio = SocketIoClient(self)
+        self.sio.stateChanged.connect(self._on_ws_state)
+        self.sio.frame.connect(self._on_ws_frame)
+        self.sio.opened.connect(self._on_ws_opened)
+        self.sio.closed.connect(self._on_ws_closed)
+        self.sio.failed.connect(self._on_ws_failed)
+        self.sio.ponged.connect(self._on_ws_pong)
         self._ws_tab: Optional[str] = None
         self._ws_replay_hook = None
         # 连接时长每秒走一格：不然「已连接 42.60s」会一直停在连上那一刻
@@ -724,6 +733,7 @@ class MainWindow(QWidget):
         self.editor.scriptsChanged.connect(self._on_scripts_changed)
         self.editor.sendRequested.connect(self.send_current)
         self.editor.wsSendRequested.connect(self._ws_send)
+        self.editor.sioSendRequested.connect(self._sio_send)
         self.editor.cancelRequested.connect(self._abort)
         self.editor.saveRequested.connect(self.save_current)
         self.editor.codeRequested.connect(self.show_code)
@@ -733,6 +743,7 @@ class MainWindow(QWidget):
         self.editor.duplicateRequested.connect(self._duplicate_request)
         self.response = ResponsePanel()
         self.response.ws_view.replay.connect(self._ws_replay)
+        self.response.sio_view.eventReplay.connect(self._sio_replay)
         self.response.wsActionRequested.connect(self._on_ws_action)
         self.response.setMinimumHeight(180)
         self.response.requestSaveBody.connect(lambda body, note: self.toast.show_message(
@@ -1050,6 +1061,15 @@ class MainWindow(QWidget):
         self._open_request_obj(req, node_id=None)
         self.editor.focus_url()
 
+    def new_socketio(self) -> None:
+        """新建 Socket.IO 请求：默认停在「事件」页，命名空间 / 认证就地填。"""
+        from .sio_panel import default_sio
+
+        req = new_request("Socket.IO Request", SIO_METHOD, "")
+        req["sio"] = default_sio()
+        self._open_request_obj(req, node_id=None)
+        self.editor.focus_url()
+
     def _preview_from_sidebar(self, request: Dict[str, Any]) -> None:
         """单击集合项：VSCode 式预览——复用同一个预览标签，标题斜体。"""
         node_id = request.get("id")
@@ -1118,9 +1138,10 @@ class MainWindow(QWidget):
         if self._inflight_tab == tab_id:
             self._abort()
         if self._ws_tab == tab_id:
-            # 关掉正在连的 WebSocket 标签：连接不能留成孤儿
-            if self.ws.busy:
-                self.ws.disconnect_ws()
+            # 关掉正在连的实时标签：连接不能留成孤儿
+            client = self._realtime_client()
+            if client.busy:
+                client.disconnect_ws()
             self._ws_tab = None
         self.tabs_data = [t for t in self.tabs_data if t["id"] != tab_id]
         if self._active_tab_id == tab_id:
@@ -1289,8 +1310,8 @@ class MainWindow(QWidget):
         self.sidebar.reveal(tab.get("node_id"))
         try:
             self.editor.load(tab["request"])
-            if (tab["request"].get("method") or "").upper() == "WS":
-                # WebSocket 标签：连接可能还活着，把日志和状态原样铺回去
+            if (tab["request"].get("method") or "").upper() in REALTIME_METHODS:
+                # 实时标签：连接可能还活着，把日志和状态原样铺回去
                 self._ws_show(tab)
             elif tab.get("response") is not None:
                 self.response.set_response(tab["response"])
@@ -1358,10 +1379,11 @@ class MainWindow(QWidget):
         # 请求改了不销毁上一次的响应：很多人只是把 POST 改成 GET 想对照结果，
         # 一改结果就全没了。保留内容 + 顶部一条「上一次的结果」提示，明确不误导。
         # WebSocket 标签不参与这套：连接还在，日志不该被一条 stale 提示盖掉。
-        if (req.get("method") or "").upper() != "WS" and self.response.is_ws_view():
-            # 从 WS 改回 HTTP：WebSocket 的日志页不再成立，回到空态等新响应
+        realtime = (req.get("method") or "").upper() in REALTIME_METHODS
+        if not realtime and self.response.is_ws_view():
+            # 从实时协议改回 HTTP：日志页不再成立，回到空态等新响应
             self.response.show_empty()
-        if (req.get("method") or "").upper() != "WS" and (
+        if not realtime and (
                 tab.get("response") is not None or self.response.response is not None):
             tab["stale"] = True
             self.response.mark_stale()
@@ -1420,9 +1442,10 @@ class MainWindow(QWidget):
     # -------------------------------------------------- 发送
     def send_current(self) -> None:
         tab = self.current_tab()
-        if tab is not None and (tab["request"].get("method") or "").upper() == "WS":
-            # 已连上时 ⌘↵ 就是「发这条消息」；还没连上就是「建立连接」
-            if self.ws.is_open and self._ws_tab == tab["id"]:
+        if tab is not None and (tab["request"].get("method") or "").upper() in REALTIME_METHODS:
+            # 已连上时 ⌘↵ 就是「发这条消息 / 事件」；没连上就是「建立连接」
+            client = self.sio if (tab["request"].get("method") or "").upper() == SIO_METHOD else self.ws
+            if client.is_open and self._ws_tab == tab["id"]:
                 self._ws_send_from_composer()
             else:
                 self.ws_toggle(tab)
@@ -1455,12 +1478,20 @@ class MainWindow(QWidget):
         self.client.send(req, settings, self.store.env_vars())
 
     def _abort(self) -> None:
-        if self.ws.busy:
-            self.ws.disconnect_ws()
-            return
+        for client in (self.sio, self.ws):
+            if client.busy:
+                client.disconnect_ws()
+                return
         self.client.abort()
 
-    # -------------------------------------------------- WebSocket
+    # -------------------------------------------------- WebSocket / Socket.IO
+    def _realtime_client(self):
+        """当前实时标签用哪条连接；不依赖界面当前页，避免跨标签串线。"""
+        tab = self._tab(self._ws_tab) if self._ws_tab else None
+        if tab is not None and (tab.get("request", {}).get("method") or "").upper() == SIO_METHOD:
+            return self.sio
+        return self.ws
+
     @staticmethod
     def _ws_session(tab: Dict[str, Any]) -> Dict[str, Any]:
         sess = tab.get("ws_session")
@@ -1469,6 +1500,11 @@ class MainWindow(QWidget):
                     "uptime": 0.0, "url": ""}
             tab["ws_session"] = sess
         return sess
+
+    def _realtime_url(self) -> str:
+        """实时协议只取地址栏原文（解析环境变量），不掺 HTTP 的查询参数表。"""
+        raw = self.editor.urlbar.url_text()
+        return resolve_vars(raw, self.store.env_vars()).strip()
 
     def _ws_headers(self, req: Dict[str, Any]) -> List[tuple]:
         """握手头：请求头 + Cookie + 认证，全部按当前环境变量解析。"""
@@ -1504,27 +1540,35 @@ class MainWindow(QWidget):
 
     def _ws_show(self, tab: Dict[str, Any]) -> None:
         sess = self._ws_session(tab)
+        method = (tab.get("request", {}).get("method") or "").upper()
+        kind = "sio" if method == SIO_METHOD else "ws"
         if self._ws_tab == tab["id"]:
-            sess["state"] = self.ws.state
-            sess["uptime"] = self.ws.stats().get("uptime", 0.0)
+            client = self.sio if kind == "sio" else self.ws
+            sess["state"] = client.state
+            sess["uptime"] = client.stats().get("uptime", 0.0)
         # 切回一个还连着（或已断开）的标签时，按钮要保持「断开 / 连接」的正确语义
         self.editor.set_ws_state(sess["state"] if self._ws_tab == tab["id"] else "idle")
-        self.response.show_ws(sess, sess.get("url") or tab["request"].get("url", ""))
+        self.response.show_ws(sess, sess.get("url") or tab["request"].get("url", ""),
+                              kind=kind)
 
     def ws_toggle(self, tab: Dict[str, Any]) -> None:
         """连接 / 断开。切换标签时连接跟着走，但日志各存各的。"""
         tid = tab["id"]
-        if self._ws_tab == tid and self.ws.busy:
-            self.ws.disconnect_ws()
-            return
         req = tab["request"]
-        url = self.editor._final_url()
-        if not url.strip():
-            self.toast.show_message("请先填写 WebSocket 地址", "error")
+        sio = (req.get("method") or "").upper() == SIO_METHOD
+        client = self.sio if sio else self.ws
+        if self._ws_tab == tid and client.busy:
+            client.disconnect_ws()
+            return
+        url = self._realtime_url()
+        if not url:
+            self.toast.show_message(
+                i18n.tr("请先填写 Socket.IO 地址") if sio
+                else i18n.tr("请先填写 WebSocket 地址"), "error")
             self.editor.focus_url()
             return
-        if self.ws.busy:
-            self.ws.disconnect_ws()
+        if client.busy:
+            client.disconnect_ws()
         # 前置脚本：先把环境变量 / 认证算好再握手，和 HTTP 一致
         try:
             self.client._run_pre_script(req, self.store.env_vars())
@@ -1536,22 +1580,33 @@ class MainWindow(QWidget):
                      "uptime": 0.0, "url": url})
         self.editor.set_ws_state("connecting")
         if self.tabstrip.current() == tid:
-            self.response.show_ws(sess, url)
-        option = (req.get("ws") or {})
-        ok = self.ws.connect_to(url, self._ws_headers(req),
-                                str(option.get("subprotocol") or ""),
-                                auto_reconnect=bool(option.get("auto_reconnect", True)),
-                                ping_secs=int(option.get("ping") or 0),
-                                verify_ssl=bool(self.store.settings.get("verify_ssl", True)))
+            self.response.show_ws(sess, url, kind="sio" if sio else "ws")
+        verify = bool(self.store.settings.get("verify_ssl", True))
+        if sio:
+            from .sio_panel import ensure_sio
+            option = ensure_sio(req)
+            ok = self.sio.connect_to(
+                url, self._ws_headers(req), "",
+                namespace=str(option.get("namespace") or "/"),
+                auth=str(option.get("auth") or ""),
+                auto_reconnect=bool(option.get("auto_reconnect", True)),
+                ping_secs=0, verify_ssl=verify)
+        else:
+            option = req.get("ws") or {}
+            ok = self.ws.connect_to(
+                url, self._ws_headers(req), str(option.get("subprotocol") or ""),
+                auto_reconnect=bool(option.get("auto_reconnect", True)),
+                ping_secs=int(option.get("ping") or 0), verify_ssl=verify)
         if not ok:
             self.editor.set_ws_state("idle")
 
     def _on_ws_action(self, action: str) -> None:
         """响应面板「…」菜单里的连接操作，复用地址栏那一套连接逻辑。"""
         tab = self.current_tab()
-        if tab is None or not (tab.get("request", {}).get("method", "").upper() == "WS"):
+        if tab is None or (tab.get("request", {}).get("method", "").upper()
+                           not in REALTIME_METHODS):
             return
-        busy = self.ws.busy
+        busy = self._realtime_client().busy
         if action == "disconnect" and not busy:
             self.toast.show_message(i18n.tr("当前没有连接"), "info")
             return
@@ -1563,11 +1618,31 @@ class MainWindow(QWidget):
         tab = self.current_tab()
         if tab is None:
             return
+        if self.editor.is_sio():
+            self._sio_send(self.editor.sio.event_value(), self.editor.sio.payload(),
+                           self.editor.sio.ack_enabled())
+            return
         text = self.editor.ws.payload()
         if not text.strip():
-            self.toast.show_message("先输入要发送的内容", "info")
+            self.toast.show_message(i18n.tr("先输入要发送的内容"), "info")
             return
         self._ws_send(text, self.editor.ws.kind_key() == "binary")
+
+    def _sio_send(self, event: str, payload: str, with_ack: bool = False) -> None:
+        if not self.sio.is_open:
+            self.toast.show_message(i18n.tr("先连接再发送事件"), "error")
+            return
+        if not self.sio.emit_event(event, payload, with_ack):
+            return
+        if with_ack:
+            self.toast.show_message(i18n.tr("事件已发出，等待 ACK"), "info")
+
+    def _sio_replay(self, event: str, payload: str) -> None:
+        """双击事件日志：事件名和载荷一起填回编辑器，改一改就能重发。"""
+        self.editor.sio.event_name.setText(event or "")
+        self.editor.sio.editor.setPlainText(payload or "")
+        self.editor.sio.editor.setFocus()
+        self.toast.show_message(i18n.tr("已填入事件编辑器，⌘↵ 发送"), "success")
 
     def _ws_replay(self, text: str) -> None:
         """双击日志里的一条消息：填回编辑器，改一改就能重发。"""
@@ -1575,7 +1650,7 @@ class MainWindow(QWidget):
             return
         self.editor.ws.editor.setPlainText(text)
         self.editor.ws.editor.setFocus()
-        self.toast.show_message("已填入编辑器，⌘↵ 发送", "success")
+        self.toast.show_message(i18n.tr("已填入编辑器，⌘↵ 发送"), "success")
 
     def _ws_send(self, text: str, binary: bool) -> None:
         if not self.ws.is_open:
@@ -1593,10 +1668,11 @@ class MainWindow(QWidget):
 
     def _ws_tick_update(self) -> None:
         tab = self._tab(self._ws_tab) if self._ws_tab else None
-        if tab is None or not self.ws.is_open:
+        client = self._realtime_client()
+        if tab is None or not client.is_open:
             self._ws_tick.stop()
             return
-        stats = self.ws.stats()
+        stats = client.stats()
         self._ws_session(tab)["uptime"] = stats.get("uptime", 0.0)
         if self.tabstrip.current() == tab["id"]:
             self.response.ws_set_state("open", stats)
@@ -1607,10 +1683,12 @@ class MainWindow(QWidget):
             self._ws_session(tab)["state"] = state
         if tab is not None and self.tabstrip.current() == tab["id"]:
             self.editor.set_ws_state(state)
-            self.response.ws_set_state(state, self.ws.stats())
+            self.response.ws_set_state(state, self._realtime_client().stats())
 
     def _on_ws_opened(self, protocol: str) -> None:
         tab = self._tab(self._ws_tab) if self._ws_tab else None
+        client = self._realtime_client()
+        sio = client is self.sio
         if tab is not None:
             sess = self._ws_session(tab)
             sess["protocol"] = protocol or ""
@@ -1618,10 +1696,15 @@ class MainWindow(QWidget):
         self.editor.set_ws_state("open")
         self._ws_tick.start()
         if tab is not None and self.tabstrip.current() == tab["id"]:
-            self.response.ws_set_state("open", self.ws.stats())
-        self.toast.show_message(
-            i18n.trf("已连接 · 子协议 {p}", p=protocol) if protocol
-            else i18n.tr("WebSocket 已连接"), "success")
+            self.response.ws_set_state("open", client.stats())
+        if sio:
+            self.toast.show_message(
+                i18n.trf("Socket.IO 已连接 · {p}", p=protocol or i18n.tr("默认命名空间")),
+                "success")
+        else:
+            self.toast.show_message(
+                i18n.trf("已连接 · 子协议 {p}", p=protocol) if protocol
+                else i18n.tr("WebSocket 已连接"), "success")
 
     def _on_ws_closed(self, code: int, reason: str) -> None:
         tab = self._tab(self._ws_tab) if self._ws_tab else None
@@ -1630,7 +1713,7 @@ class MainWindow(QWidget):
         self.editor.set_ws_state("idle")
         self._ws_tick.stop()
         if tab is not None and self.tabstrip.current() == tab["id"]:
-            self.response.ws_set_state("closed", self.ws.stats())
+            self.response.ws_set_state("closed", self._realtime_client().stats())
         if code not in (1000, 1005, 1006):
             self.toast.show_message(i18n.trf("连接已关闭（{code}）{reason}",
                                              code=code, reason=reason), "info")
@@ -1638,7 +1721,7 @@ class MainWindow(QWidget):
     def _on_ws_failed(self, message: str) -> None:
         self.editor.set_ws_state("idle")
         # 自动重连会一次次失败：只在第一次弹提示，后面让日志里的系统消息说话
-        if getattr(self.ws, "_attempt", 0) <= 1:
+        if getattr(self._realtime_client(), "_attempt", 0) <= 1:
             self.toast.show_message(message, "error")
 
     def _on_ws_pong(self, ms: int) -> None:
@@ -1658,10 +1741,11 @@ class MainWindow(QWidget):
         # 日志有上限：长时间订阅的行情类连接不该把内存吃光
         if len(log) > 4000:
             del log[:len(log) - 4000]
-        sess["uptime"] = self.ws.stats().get("uptime", 0.0)
+        client = self._realtime_client()
+        sess["uptime"] = client.stats().get("uptime", 0.0)
         if self.tabstrip.current() == tab["id"]:
             self.response.ws_add_frame(frame)
-            self.response.ws_set_state(self.ws.state, self.ws.stats())
+            self.response.ws_set_state(client.state, client.stats())
 
     def _on_response(self, resp: Response) -> None:
         tab_id = self._inflight_tab
@@ -2169,6 +2253,8 @@ class MainWindow(QWidget):
             self.new_request()
         elif key == "new_ws":
             self.new_websocket()
+        elif key == "new_sio":
+            self.new_socketio()
         elif key == "new_folder":
             self.sidebar._new_folder()
             self.toast.show_message("已新建文件夹", "success")
@@ -2362,6 +2448,10 @@ class MainWindow(QWidget):
             self.ws.abort()           # WebSocket 连接不能留成孤儿
         except Exception:             # noqa: BLE001
             pass
+        try:
+            self.sio.abort()          # Socket.IO 连接同样不能留成孤儿
+        except Exception:             # noqa: BLE001
+            pass
         self._persist()
         self._cloud_upload_on_exit()
         self._wait_cloud()
@@ -2404,6 +2494,10 @@ class MainWindow(QWidget):
             pass
         try:
             self.ws.abort()
+        except Exception:                 # noqa: BLE001
+            pass
+        try:
+            self.sio.abort()
         except Exception:                 # noqa: BLE001
             pass
 

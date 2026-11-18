@@ -1,5 +1,17 @@
 # What's Changed
 
+## v1.0.45 — 2026-11-18
+
+**Added**
+- Socket.IO requests with a dedicated "Events" page, creatable from the New Request menu and command palette.
+- Lightweight Engine.IO v4 / Socket.IO v4 over websocket transport: handshake, namespaces, auth JSON, event emit/listen, ACK receipts, heartbeat and auto-reconnect — no extra dependency.
+- Distinctive touches: auto-discovered events with one-click filtering, frequent events for one-click reload, double-click an event to load it back, JSON payload highlighting and formatting, clear-after-send.
+
+**Fixed**
+- Initialized the ACK registry to prevent a crash, and stopped treating ordinary integer data as an ACK id on server events that request a receipt.
+- Auto-reconnect now keeps the namespace and auth; Socket.IO connections are fully closed on exit, leaving no orphans.
+- Complete Chinese/English strings for namespace, auth, events, ACK and discovered events.
+
 ## v1.0.44 — 2026-11-18
 
 **Changed**

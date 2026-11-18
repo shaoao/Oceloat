@@ -46,6 +46,8 @@ from .widgets import (
 # 所以不出现在这张下拉表里，避免把普通请求切成一个半 HTTP 半 WS 的怪东西。
 METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"]
 WS_METHOD = "WS"
+SIO_METHOD = "SIO"
+REALTIME_METHODS = (WS_METHOD, SIO_METHOD)
 
 # HTTP 请求区的标签集合；WebSocket 有自己的一整页（见 RequestEditor.ws_page），
 # 不共用这套页签。
@@ -481,17 +483,22 @@ class UrlBar(QWidget):
             self.send_btn.set_kind("primary")
 
     def _on_method_mode(self, method: str) -> None:
-        """切到 WS 时地址栏、按钮、提示全换成连接语义。"""
-        ws = (method or "").upper() == WS_METHOD
-        self._ws_mode = ws
-        i18n.placeholder(self.url, "ws:// 或 wss:// 地址，例如 wss://echo.websocket.org"
-                         if ws else "输入请求地址，例如 https://httpbin.org/get")
-        self.url.setToolTip("" if not ws else i18n.tr(
-            "支持 ws:// wss://；直接粘 http(s) 地址会自动改写"))
-        self.method.set_locked(ws)
-        if ws:
+        """切到 WS / Socket.IO 时地址栏、按钮、提示全换成连接语义。"""
+        upper = (method or "").upper()
+        realtime = upper in REALTIME_METHODS
+        sio = upper == SIO_METHOD
+        self._ws_mode = realtime
+        i18n.placeholder(
+            self.url,
+            ("ws:// 或 wss:// 地址，例如 ws://localhost:3000/socket.io" if sio
+             else "ws:// 或 wss:// 地址，例如 wss://echo.websocket.org")
+            if realtime else "输入请求地址，例如 https://httpbin.org/get")
+        self.url.setToolTip("" if not realtime else i18n.tr(
+            "支持 ws:// wss://；直接粘 http(s) 地址会自动补全 Socket.IO 路径")
+            if sio else i18n.tr("支持 ws:// wss://；直接粘 http(s) 地址会自动改写"))
+        self.method.set_locked(realtime)
+        if realtime:
             # 已连接时重新 load（切标签 / 刷新界面）不能把按钮打回「连接」。
-            # 只有真的不在连接过程中才回到 idle。
             if self._ws_state not in ("open", "connecting", "closing"):
                 self.set_ws_state("idle")
             else:
@@ -1298,6 +1305,7 @@ class RequestEditor(QWidget):
     sendRequested = pyqtSignal()
     cancelRequested = pyqtSignal()
     wsSendRequested = pyqtSignal(str, bool)      # WebSocket 消息（内容, 是否二进制）
+    sioSendRequested = pyqtSignal(str, str, bool)  # Socket.IO（事件, 载荷, 是否等 ACK）
     saveRequested = pyqtSignal()
     codeRequested = pyqtSignal()
     copyCurlRequested = pyqtSignal()
@@ -1361,11 +1369,16 @@ class RequestEditor(QWidget):
         self.scripts_post = ScriptPage(store=self.store, kind="post")
         self.scripts_post.changed.connect(self._on_scripts)
         from .ws_panel import WsComposer
+        from .sio_panel import SioComposer
 
         self.ws = WsComposer()
         self.ws.changed.connect(self._on_ws_changed)
         self.ws.sendRequested.connect(self.wsSendRequested.emit)
         self.ws.headersToggled.connect(self._open_ws_headers)
+        self.sio = SioComposer()
+        self.sio.changed.connect(self._on_sio_changed)
+        self.sio.sendRequested.connect(self.sioSendRequested.emit)
+        self.sio.headersToggled.connect(self._open_ws_headers)
         self._mode = "http"
 
         # WebSocket 是独立的一套界面：只有「消息 + 握手头」两件事，
@@ -1406,6 +1419,13 @@ class RequestEditor(QWidget):
         wl.addWidget(self.ws, 1)
         self.ws_page.hide()
 
+        self.sio_page = QWidget()
+        sl = QVBoxLayout(self.sio_page)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(0)
+        sl.addWidget(self.sio, 1)
+        self.sio_page.hide()
+
         self.head = QWidget()
         hl = QHBoxLayout(self.head)
         hl.setContentsMargins(14, 4, 10, 0)
@@ -1422,6 +1442,7 @@ class RequestEditor(QWidget):
         lay.addWidget(self.head_div)
         lay.addWidget(self.pages, 1)
         lay.addWidget(self.ws_page, 1)
+        lay.addWidget(self.sio_page, 1)
         self.urlbar.refresh_node()
 
     def refresh_node(self) -> None:
@@ -1465,6 +1486,7 @@ class RequestEditor(QWidget):
             self.body.load(request.get("body", {}))
             self.auth.load(request.get("auth", {}), request.get("id", ""))
             self.ws.load(request)
+            self.sio.load(request)
             scripts = request.get("scripts", {}) or {}
             self.scripts_pre.load({"pre": scripts.get("pre", "")})
             self.scripts_post.load({"post": scripts.get("post", "")})
@@ -1474,34 +1496,41 @@ class RequestEditor(QWidget):
         self.pages.set_current(self.tabs.current(), animate=False)
 
     def _set_mode(self, method: str, animate: bool = True) -> None:
-        """HTTP 请求 / WebSocket：两套完全独立的界面，只切显示的那一页。
+        """HTTP / WebSocket / Socket.IO：三套完全独立的界面，只切显示的那一页。
 
-        WebSocket 没有请求体、没有查询参数、没有后置脚本，把 HTTP 那些页签
-        摆在那里只会让人以为能用 —— 所以整块换掉，不做「半套」。
+        实时协议没有请求体、查询参数、后置脚本，把 HTTP 那些页签摆在那里只会
+        让人以为能用 —— 所以整块换掉，不做「半套」。
         """
-        # 地址栏要跟着换语义（连接 / 断开、ws 地址占位），即便模式没变，
-        # 每次 load 也重算一次，否则新开的 WS 标签还显示「发送」。
+        # 地址栏每次 load 都重算，否则新开的实时标签还显示「发送」
         self.urlbar._on_method_mode(method)
-        mode = "ws" if (method or "").upper() == WS_METHOD else "http"
+        upper = (method or "").upper()
+        mode = ("ws" if upper == WS_METHOD else
+                "sio" if upper == SIO_METHOD else "http")
         if mode != self._mode:
             self._mode = mode
             if mode == "http":
                 self.tabs.set_items(HTTP_TABS, current="params")
                 self.pages.set_current("params", animate=animate)
-        is_ws = mode == "ws"
-        self.head.setVisible(not is_ws)
-        self.head_div.setVisible(not is_ws)
-        self.pages.setVisible(not is_ws)
-        self.ws_page.setVisible(is_ws)
+        realtime = mode != "http"
+        self.head.setVisible(not realtime)
+        self.head_div.setVisible(not realtime)
+        self.pages.setVisible(not realtime)
+        self.ws_page.setVisible(mode == "ws")
+        self.sio_page.setVisible(mode == "sio")
         if not self._loading:
             self._refresh_counts()
 
     def is_ws(self) -> bool:
-        return self._mode == "ws"
+        """是否实时协议页（WebSocket 或 Socket.IO）；保留旧调用名。"""
+        return self._mode != "http"
+
+    def is_sio(self) -> bool:
+        return self._mode == "sio"
 
     def set_ws_state(self, state: str) -> None:
         self.urlbar.set_ws_state(state)
-        self.ws.set_connected(state == "open")
+        composer = self.sio if self._mode == "sio" else self.ws
+        composer.set_connected(state == "open")
 
     def _sync_request(self, *, script_only: bool = False) -> None:
         if self._loading or self._syncing or not self.request:
@@ -1509,13 +1538,16 @@ class RequestEditor(QWidget):
         self.request["method"] = self.urlbar.method.method()
         self.request["url"] = self.urlbar.url_text()
         self.request["params"] = self.params.rows()
-        if self._mode != "ws":
-            # WS 的握手头是弹层直接写进 request 的，这里不要去覆盖它
+        if self._mode == "http":
+            # 实时协议的握手头是弹层直接写进 request 的，这里不要去覆盖它
             self.request["headers"] = self.headers.rows()
         self.request["cookies"] = self.cookies.rows()
         self.request["body"] = self.body.dump()
         self.request["auth"] = self.auth.dump()
-        self.ws.dump(self.request)
+        if self._mode == "sio":
+            self.sio.dump(self.request)
+        elif self._mode == "ws":
+            self.ws.dump(self.request)
         self.request["scripts"] = {
             "pre": self.scripts_pre.dump().get("pre", ""),
             "post": self.scripts_post.dump().get("post", ""),
@@ -1559,13 +1591,15 @@ class RequestEditor(QWidget):
             self.request["name"] = name[:40]
 
     def _refresh_counts(self) -> None:
-        if self._mode == "ws":
+        if self._mode in ("ws", "sio"):
             headers = len(self.request.get("headers") or [])
-            messages = len((self.request.get("ws") or {}).get("messages") or [])
-            self.ws.set_headers_count(headers)
+            key, composer = (("ws", self.ws) if self._mode == "ws"
+                             else ("sio", self.sio))
+            messages = len((self.request.get(key) or {}).get("messages") or [])
+            composer.set_headers_count(headers)
+            composer.set_messages_count(messages)
             self.count_label.setText("")
             self.params_preview.setText("")
-            self.ws.set_messages_count(messages)
             return
         for key in ("body", "cookies", "post", "auth", "pre"):
             if self.tabs.has(key):
@@ -1644,7 +1678,8 @@ class RequestEditor(QWidget):
                 pass
         popup = WsHeadersPopup(self, self.request.get("headers") or [])
         popup.changed.connect(self._on_ws_headers_rows)
-        btn = self.ws.headers_btn
+        composer = self.sio if self._mode == "sio" else self.ws
+        btn = composer.headers_btn
         popup.popup_at(btn.mapToGlobal(QPoint(btn.width() - popup.width() + 8,
                                              btn.height() + 8)))
         self._ws_headers_popup = popup
@@ -1653,11 +1688,17 @@ class RequestEditor(QWidget):
         self.request["headers"] = list(rows or [])
         # HTTP 那一侧的请求头表跟着同步：导出、发请求用的是同一份数据
         self.headers.set_rows(self.request["headers"])
-        self.ws.set_headers_count(len(self.request["headers"]))
+        composer = self.sio if self._mode == "sio" else self.ws
+        composer.set_headers_count(len(self.request["headers"]))
         if not self._loading:
             self._sync_request()
 
     def _on_ws_changed(self) -> None:
+        self._refresh_counts()
+        if not self._loading:
+            self._sync_request()
+
+    def _on_sio_changed(self) -> None:
         self._refresh_counts()
         if not self._loading:
             self._sync_request()

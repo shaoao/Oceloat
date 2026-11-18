@@ -554,10 +554,14 @@ class ResponsePanel(QWidget):
         self.center.addWidget(self.error)
         self.center.addWidget(self.content)
         from .ws_panel import WsLogView
+        from .sio_panel import SioLogView
 
         self.ws_view = WsLogView()
         self.center.addWidget(self.ws_view)
+        self.sio_view = SioLogView()
+        self.center.addWidget(self.sio_view)
         self._is_ws = False
+        self._realtime_kind = "ws"
 
         self.find_bar = FindBar()
         self.find_bar.hide()
@@ -925,15 +929,17 @@ class ResponsePanel(QWidget):
     WS_STATE_TEXT = {"idle": "未连接", "connecting": "连接中", "open": "已连接",
                      "closing": "断开中", "closed": "已断开"}
 
-    def show_ws(self, session: Optional[dict], url: str = "") -> None:
-        """切到 WebSocket 视图：顶部状态胶囊 + 帧日志，不参与 HTTP 的响应逻辑。"""
+    def show_ws(self, session: Optional[dict], url: str = "", kind: str = "ws") -> None:
+        """切到实时协议视图：顶部状态胶囊 + 帧日志，不参与 HTTP 的响应逻辑。"""
         self.stale_bar.hide()
         self.shimmer.stop()
         if getattr(self, "spinner", None) is not None:
             self.spinner.stop()
         self.response = None
         self._is_ws = True
-        self.center.setCurrentWidget(self.ws_view)
+        self._realtime_kind = "sio" if kind == "sio" else "ws"
+        view = self.sio_view if self._realtime_kind == "sio" else self.ws_view
+        self.center.setCurrentWidget(view)
         self.tabs_row.hide()
         self._set_head_visible(True)
         self.meta.show()
@@ -942,7 +948,7 @@ class ResponsePanel(QWidget):
         self.url_label.setText(url)
         self.url_label.setToolTip(url)
         session = session or {}
-        self.ws_view.set_frames(session.get("log") or [])
+        view.set_frames(session.get("log") or [])
         self.ws_set_state(session.get("state", "idle"),
                           {"bytes_in": sum(f.size for f in (session.get("log") or [])
                                            if getattr(f, "dir", "") == "in"),
@@ -963,17 +969,21 @@ class ResponsePanel(QWidget):
             up * 1000, lambda ms: human_elapsed(int(ms)) if ms >= 50 else "")
         self.size_label.animate_number(
             int(stats.get("bytes_in") or 0), lambda b: human_size(int(b)))
-        self.type_label.setText("WebSocket")
+        self.type_label.setText("Socket.IO" if self._realtime_kind == "sio" else "WebSocket")
         self._set_metrics_visible(bool(up >= 0.05))
         self._set_dots(True)
         self.dot3.hide()
 
+    def _active_realtime_view(self):
+        return self.sio_view if self._realtime_kind == "sio" else self.ws_view
+
     def ws_add_frame(self, frame) -> None:
-        if self.center.currentWidget() is self.ws_view:
-            self.ws_view.add_frame(frame)
+        view = self._active_realtime_view()
+        if self.center.currentWidget() is view:
+            view.add_frame(frame)
 
     def ws_clear(self) -> None:
-        self.ws_view.clear()
+        self._active_realtime_view().clear()
 
     def is_ws_view(self) -> bool:
         return self._is_ws
@@ -1582,9 +1592,9 @@ class ResponsePanel(QWidget):
             QApplication.clipboard().setText(self.stats.text())
             self.requestSaveBody.emit(b"", "copied")
         elif chosen is a_export:
-            self.ws_view._export()
+            self._active_realtime_view()._export()
         elif chosen is a_clear:
-            self.ws_view.clear()
+            self._active_realtime_view().clear()
 
     # -------------------------------------------------- 更多（分享 / 脱敏）
     def _show_more_menu(self) -> None:

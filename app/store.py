@@ -19,9 +19,21 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.44"
+VERSION = "1.0.45"
 
 CHANGELOG = [
+    {
+        "version": "1.0.45",
+        "date": "2026-11-18",
+        "items": [
+            "新增 Socket.IO 请求：独立「事件」页，从新建请求菜单和命令面板都能创建",
+            "轻量实现 Engine.IO v4 / Socket.IO v4（websocket 传输）：握手、命名空间、认证 JSON、事件收发、ACK 回执、心跳与自动重连",
+            "特色功能：日志自动「发现的事件」一键筛选、常用事件一键回填、双击事件回填编辑器、载荷 JSON 高亮与格式化、发送后清空",
+            "修复 ACK 字典未初始化导致的崩溃，以及服务端带 ACK 事件把普通整数误判成回执的问题",
+            "自动重连保留命名空间与认证，退出时彻底断开 Socket.IO 连接，不留孤儿",
+            "完整中英文词条：命名空间 / 认证 / 事件 / ACK / 发现事件等全部随语言切换",
+        ],
+    },
     {
         "version": "1.0.44",
         "date": "2026-11-18",

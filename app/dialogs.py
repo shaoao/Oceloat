@@ -2254,6 +2254,7 @@ class CommandPalette(QWidget):
     ACTIONS = [
         ("new_request", "新建请求", "plus", "⌘N"),
         ("new_ws", "新建 WebSocket 请求", "link", ""),
+        ("new_sio", "新建 Socket.IO 请求", "link", ""),
         ("new_folder", "新建文件夹", "folder", ""),
         ("send", "发送当前请求", "send", "⌘↵"),
         ("save", "保存到集合", "download", "⌘S"),

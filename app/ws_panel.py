@@ -1183,9 +1183,10 @@ class WsLogView(QWidget):
     def _export(self) -> None:
         if not self._frames:
             return
-        path, _ = QFileDialog.getSaveFileName(self.window(), i18n.tr("导出消息日志"),
-                                              "websocket-log.json",
-                                              i18n.tr("JSON (*.json);;文本 (*.log)"))
+        path, _ = QFileDialog.getSaveFileName(
+            self.window(), i18n.tr("导出消息日志"),
+            getattr(self, "_log_name", "websocket-log.json"),
+            i18n.tr("JSON (*.json);;文本 (*.log)"))
         if not path:
             return
         rows = [{"time": datetime.datetime.fromtimestamp(f.at).isoformat(timespec="milliseconds"),

@@ -981,7 +981,7 @@ class Sidebar(QWidget):
 
     # -------------------------------------------------- 增删改
     def _new_menu(self) -> None:
-        """「新建请求」：先选类型（HTTP / WebSocket）再建，不再只能建 HTTP。"""
+        """「新建请求」：先选类型（HTTP / WebSocket / Socket.IO）再建。"""
         if self._mode == "history":
             self._clear_history()
             return
@@ -989,6 +989,8 @@ class Sidebar(QWidget):
         menu = Menu(self)
         a_http = menu.addAction(icons.icon("send", t.text, 14), i18n.tr("HTTP 请求"))
         a_ws = menu.addAction(icons.icon("link", t.text, 14), i18n.tr("WebSocket 请求"))
+        a_sio = menu.addAction(icons.icon("link", method_color("SIO", t), 14),
+                               i18n.tr("Socket.IO 请求"))
         menu.addSeparator()
         a_folder = menu.addAction(icons.icon("folder", t.text, 14), i18n.tr("新建文件夹"))
         pos = self.new_btn.mapToGlobal(QPoint(0, 0))
@@ -998,6 +1000,8 @@ class Sidebar(QWidget):
             self._new_request()
         elif chosen is a_ws:
             self.create_request_in(self._selected_folder(), "WS")
+        elif chosen is a_sio:
+            self.create_request_in(self._selected_folder(), "SIO")
         elif chosen is a_folder:
             self._new_folder()
 
@@ -1023,11 +1027,17 @@ class Sidebar(QWidget):
 
     def create_request_in(self, parent_id: Optional[str], method: str = "GET", url: str = "") -> Dict:
         node = new_request("Untitled Request", method, url)
-        if (method or "").upper() == "WS":
+        upper = (method or "").upper()
+        if upper == "WS":
             from .ws_panel import default_ws
 
             node["name"] = "WebSocket Request"
             node["ws"] = default_ws()
+        elif upper == "SIO":
+            from .sio_panel import default_sio
+
+            node["name"] = "Socket.IO Request"
+            node["sio"] = default_sio()
         self.store.add_node(parent_id, node)
         self.store.save()
         self.refresh()

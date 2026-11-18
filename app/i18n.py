@@ -1396,3 +1396,62 @@ _EN.update({
     "有内容": "Has body",
     "{n} 字": "{n} chars",
 })
+
+# Socket.IO 请求（v1.0.45）：事件 / 命名空间 / 认证 / ACK / 发现事件
+_EN.update({
+    "Socket.IO 请求": "Socket.IO Request",
+    "新建 Socket.IO 请求": "New Socket.IO Request",
+    "请先填写 Socket.IO 地址": "Enter a Socket.IO address first",
+    "命名空间": "Namespace",
+    "认证 JSON": "Auth JSON",
+    "等 ACK": "Wait for ACK",
+    "重连": "Reconnect",
+    "事件名，例如 chat message": "Event name, e.g. chat message",
+    "保存事件": "Save event",
+    "发送事件": "Emit event",
+    "事件": "Event",
+    "过滤事件或内容": "Filter events or content",
+    "输入事件载荷。JSON 会高亮；留空表示事件不带数据。":
+        "Event payload. JSON is highlighted; leave empty to send no data.",
+    "默认命名空间填 /，自定义填 /admin":
+        "Use / for the default namespace, /admin for a custom one",
+    "连接时随 40 包发送的认证对象，必须是合法 JSON":
+        "Auth object sent with the 40 packet on connect; must be valid JSON",
+    "开启后这次事件会带 ack id，收到回执会在日志里显示":
+        "Attach an ack id to this event; the receipt shows in the log",
+    "把 JSON 载荷排版成易读的缩进格式":
+        "Format the JSON payload into readable indentation",
+    "存进常用事件，下次一点就填":
+        "Save to frequent events for one-click reuse",
+    "先连接再发送事件": "Connect first, then emit an event",
+    "还没连接：点左上角「连接」建立 Socket.IO 连接。":
+        "Not connected: click Connect at the top left to start a Socket.IO session.",
+    "常用事件 · {n}": "Frequent events · {n}",
+    "单击展开详情（可同时展开多条），双击事件填回事件编辑器":
+        "Click to expand details (multiple allowed); double-click an event to load it back",
+    "发现的事件 · {n}": "Discovered events · {n}",
+    "{name} · {n} 次，点击筛选": "{name} · {n} time(s), click to filter",
+    "还没有事件。连接后收发、ACK 和心跳都会实时出现在这里。":
+        "No events yet. After connecting, sent/received events, ACKs and pings appear here live.",
+    "先输入事件名": "Enter an event name first",
+    "认证 JSON 无效：{msg}": "Invalid auth JSON: {msg}",
+    "传输已建立 · 命名空间 {ns}": "Transport established · namespace {ns}",
+    "已加入命名空间 {ns}": "Joined namespace {ns}",
+    "服务端断开命名空间 {ns}": "Server left namespace {ns}",
+    "等待 ACK · {id}": "Awaiting ACK · {id}",
+    "暂不支持二进制附件事件，请发送 JSON 或文本事件":
+        "Binary attachment events are not supported; send JSON or text events",
+    "请先填写 ws:// 或 wss:// 地址": "Enter a ws:// or wss:// address first",
+    "连接被服务端拒绝": "Connection rejected by server",
+    "服务端主动断开": "Server disconnected",
+    "服务端已关闭传输": "Server closed the transport",
+    "事件已发出，等待 ACK": "Event emitted, awaiting ACK",
+    "已填入事件编辑器，⌘↵ 发送": "Loaded into the event editor, ⌘↵ to emit",
+    "Socket.IO 已连接 · {p}": "Socket.IO connected · {p}",
+    "默认命名空间": "default namespace",
+    "ws:// 或 wss:// 地址，例如 ws://localhost:3000/socket.io":
+        "ws:// or wss:// address, e.g. ws://localhost:3000/socket.io",
+    "支持 ws:// wss://；直接粘 http(s) 地址会自动补全 Socket.IO 路径":
+        "Supports ws:// wss://; http(s) URLs are rewritten with the Socket.IO path",
+    "JSON (*.json);;文本 (*.log)": "JSON (*.json);;Text (*.log)",
+})
