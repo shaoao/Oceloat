@@ -1272,6 +1272,13 @@ _EN.update({
     "导出消息日志": "Export message log",
     "清空日志": "Clear log",
     "复制这条消息": "Copy this message",
+    "断开连接": "Disconnect",
+    "建立连接": "Connect",
+    "复制 WebSocket 地址": "Copy WebSocket URL",
+    "复制会话统计": "Copy session stats",
+    "导出消息日志…": "Export message log…",
+    "清空消息日志": "Clear message log",
+    "当前没有连接": "No active connection",
     "单击看完整内容，双击把收到的消息填回编辑器":
         "Click for the full payload; double-click to load a received message into the editor",
     "已填入编辑器，⌘↵ 发送": "Loaded into the editor — ⌘↵ to send",

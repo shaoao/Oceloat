@@ -1,5 +1,30 @@
 # What's Changed
 
+## v1.0.36 — 2026-11-18
+
+**Fixed**
+- WebSocket detail code frames no longer render on a dead-black viewport: the
+  background now follows the theme's code background (a shade close to the
+  window base), so keys / strings / numbers keep the full syntax-highlight
+  palette against a surface that matches the app.
+- Plain-text frames whose payload is JSON now get the **JSON** tab and syntax
+  highlighting too. Previously only frames tagged `json` at send time did,
+  which left a JSON body showing a lone **Raw** tab with no colours.
+- Expanding a log card no longer lets later frames cover it. The incremental
+  append path now uses each open card's real height instead of a fixed 80px,
+  and auto-scroll pauses while any card is open — so the expanded content
+  stays in view and can be scrolled through.
+- The "…" button in the response header now does something in a WebSocket
+  session. It opens a WS-specific menu: connect / disconnect, copy URL, copy
+  session stats, export the message log and clear it.
+
+**Removed**
+- The "Saved messages: store anything you send often…" empty-state hint in the
+  WebSocket composer; the chips and their tooltips speak for themselves.
+
+**Verified**
+- Self-test suite extended to 550 checks.
+
 ## v1.0.35 — 2026-11-18
 
 **Changed**

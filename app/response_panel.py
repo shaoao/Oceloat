@@ -334,6 +334,7 @@ class ResponsePanel(QWidget):
     resendRequested = pyqtSignal()          # 提示条上的「重新发送」
     saveVariable = pyqtSignal(str, str)      # 名字, 值：把提取结果存进环境变量
     docRequested = pyqtSignal()              # 打开接口文档窗口
+    wsActionRequested = pyqtSignal(str)      # WS 更多菜单：connect / disconnect
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -950,6 +951,7 @@ class ResponsePanel(QWidget):
     def ws_set_state(self, state: str, stats: Optional[dict] = None) -> None:
         if not self._is_ws:
             return
+        self._ws_state = state
         t = theme()
         label = self.WS_STATE_TEXT.get(state, state)
         self.pill.set_text(label)
@@ -1543,9 +1545,53 @@ class ResponsePanel(QWidget):
             return
         super().keyPressEvent(e)
 
+    # -------------------------------------------------- WebSocket 更多菜单
+    def _show_ws_menu(self) -> None:
+        """WS 会话的「…」菜单：连接操作、日志处理、地址与统计复制。
+
+        以前这颗按钮在 WS 视图里点开毫无反应（菜单方法开头就因为
+        response is None 返回了），用户截图里专门圈出来问「这个按钮有啥
+        功能」。这里给它一套真正用得上的 WS 操作。
+        """
+        t = theme()
+        menu = Menu(self)
+        connected = getattr(self, "_ws_state", "idle") in ("open", "connecting")
+        a_toggle = menu.addAction(
+            icons.icon("stop" if connected else "link", t.text, 13),
+            i18n.tr("断开连接") if connected else i18n.tr("建立连接"))
+        menu.addSeparator()
+        a_copy_url = menu.addAction(icons.icon("link", t.text, 13),
+                                    i18n.tr("复制 WebSocket 地址"))
+        a_copy_stats = menu.addAction("复制会话统计")
+        a_export = menu.addAction(icons.icon("download", t.text, 13),
+                                  i18n.tr("导出消息日志…"))
+        a_clear = menu.addAction(icons.icon("trash", t.text, 13),
+                                 i18n.tr("清空消息日志"))
+        pos = self.more_btn.mapToGlobal(QPoint(0, self.more_btn.height() + 4))
+        chosen = menu.exec(pos)
+        if chosen is None:
+            return
+        if chosen is a_toggle:
+            self.wsActionRequested.emit("disconnect" if connected else "connect")
+        elif chosen is a_copy_url:
+            url = self.url_label.text()
+            if url:
+                QApplication.clipboard().setText(url)
+                self.requestSaveBody.emit(b"", "copied")
+        elif chosen is a_copy_stats:
+            QApplication.clipboard().setText(self.stats.text())
+            self.requestSaveBody.emit(b"", "copied")
+        elif chosen is a_export:
+            self.ws_view._export()
+        elif chosen is a_clear:
+            self.ws_view.clear()
+
     # -------------------------------------------------- 更多（分享 / 脱敏）
     def _show_more_menu(self) -> None:
         """把「生成文档 / 脱敏复制」收在一颗按钮里，头部不至于挤成一排图标。"""
+        if self._is_ws:
+            self._show_ws_menu()
+            return
         if self.response is None:
             return
         t = theme()

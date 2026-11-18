@@ -398,8 +398,10 @@ class WsComposer(QWidget):
             self._chips.append(chip)
         self.saved_lay.addStretch(1)
         n = len(messages)
-        self.saved_note.setText(i18n.trf("常用消息 · {n}", n=n) if n
-                                else i18n.tr("常用消息：把要反复发的内容存下来，点击即填入"))
+        # 空态不再摆一整行说明文案（用户觉得占地方）；胶囊本身就是提示，
+        # 悬停有说明。有内容时才显示一个简短计数。
+        self.saved_note.setText(i18n.trf("常用消息 · {n}", n=n) if n else "")
+        self.saved_note.setVisible(bool(n))
         self.saved_scroll.setVisible(bool(n))
 
 
@@ -520,6 +522,17 @@ class FrameCard(QWidget):
     H = 80
     heightChanged = pyqtSignal()
 
+    @staticmethod
+    def _looks_json(text: str) -> bool:
+        s = (text or "").lstrip()
+        if s[:1] not in ("{", "["):
+            return False
+        try:
+            json.loads(s)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     def __init__(self, frame, parent=None):
         super().__init__(parent)
         self.frame = frame
@@ -528,12 +541,13 @@ class FrameCard(QWidget):
         self.collapsed = False
         self._syncing = False
 
-        if frame.kind == "json":
-            items = [("pretty", "JSON"), ("raw", "Raw")]
-        elif frame.kind == "binary":
+        if frame.kind == "binary":
             items = [("hex", "Hex"), ("raw", "Raw")]
         else:
-            items = [("raw", "Raw")]
+            # 文本帧也一律给出 JSON 页：内容是合法 JSON 时美化显示，否则原样
+            # 呈现。用户截过图问「为什么只有一个 Raw，JSON 那个显示呢」——
+            # 光靠 frame.kind 判定会把带前缀 / 大段的 JSON 误判成 text。
+            items = [("pretty", "JSON"), ("raw", "Raw")]
         self.tabs = SegmentedTabs(items, style="underline", height=24,
                                   font_size=10.8, pad_h=9, show_badges=False)
         self.tabs.changed.connect(self._render)
@@ -552,12 +566,22 @@ class FrameCard(QWidget):
         bl.addWidget(copy, 0)
 
         self.body_label = Label("响应体", 10, theme().text_faint)
-        self.code_card = Card(radius=8, fill="elevated")
+        # 代码卡与底色同族：参考图的响应体区只比窗口底色深一点点，
+        # 不再用偏亮的 elevated，避免黑框里套一块灰板的割裂感。
+        self.code_card = Card(radius=8, fill=theme().code_bg)
         cl = QVBoxLayout(self.code_card)
         cl.setContentsMargins(8, 5, 8, 5)
         cl.setSpacing(0)
-        self.body = CodeView(read_only=True, highlight=(frame.kind == "json"),
+        # 内容是 JSON 就开高亮：日志行上的类型来自发送时选的模式，纯文本模式
+        # 发出去的 JSON 会被标成 text，照样该有 key / 字符串 / 数字的分色。
+        self.body = CodeView(read_only=True, highlight=self._looks_json(self._raw),
                              show_gutter=True)
+        # QPlainTextEdit 的 viewport 默认拿 palette 的 base（纯黑），光靠
+        # `background: transparent` 盖不住。显式铺一层跟底色同族的代码底色，
+        # 既不是死黑，也让整块区域跟卡片背景连成一体。
+        t = theme()
+        self.body.setStyleSheet(
+            f"QPlainTextEdit {{ background: {t.code_bg}; color: {t.text}; border: none; }}")
         # 内容再长也不出滚动条：折行 + 卡片跟着内容长高，滚动交给外层日志区
         self.body.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.body.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -580,6 +604,15 @@ class FrameCard(QWidget):
         p.setBrush(C(t.panel_alt))
         p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 9, 9)
         p.end()
+
+    def refresh_theme(self) -> None:
+        """切换主题时同步代码卡底色与代码区样式（控件是懒创建的）。"""
+        t = theme()
+        self.code_card._fill = t.code_bg
+        self.body.setStyleSheet(
+            f"QPlainTextEdit {{ background: {t.code_bg}; color: {t.text}; border: none; }}")
+        self.code_card.update()
+        self.body.update()
 
     # -------------------------------------------------- 高度
     def sync_height(self) -> bool:
@@ -679,9 +712,9 @@ class FrameList(QWidget):
                 self._tops = []
                 for frame in self.frames:
                     self._tops.append(top)
-                    card = self._cards.get(id(frame))
-                    h = card.height() if card is not None else self.CARD_H
-                    top += self.ROW_H + (h if id(frame) in self._expanded else 0)
+                    h = (self._card_height(frame) if id(frame) in self._expanded
+                         else 0)
+                    top += self.ROW_H + h
                 self.setFixedHeight(max(1, int(top + 4)))
                 if not self._sync_cards():
                     break
@@ -730,19 +763,28 @@ class FrameList(QWidget):
         self._relayout()
         self.update()
 
+    def _card_height(self, frame) -> int:
+        """展开卡片的实际高度；未展开 / 尚未创建时用预估高度。"""
+        card = self._cards.get(id(frame))
+        return card.height() if card is not None else self.CARD_H
+
     def append(self, frame) -> None:
-        # 增量追加：不要每来一帧就重新遍历几千行算偏移
+        # 增量追加：不要每来一帧就重新遍历几千行算偏移。
+        # 关键：上一行如果正展开着，必须用它的「实际」高度。之前这里写死
+        # CARD_H=80，长 JSON 卡片 1200px 高却按 80 累加，于是新帧直接盖到
+        # 展开卡片身上、滚动范围也跟着缩水 —— 表现为「点开后滑不下去」。
         key = id(frame)
         if self._tops:
             prev = self.frames[-1] if self.frames else None
-            prev_h = self.ROW_H + (self.CARD_H if prev is not None
+            prev_h = self.ROW_H + (self._card_height(prev) if prev is not None
                                    and id(prev) in self._expanded else 0)
             top = self._tops[-1] + prev_h
         else:
             top = 4.0
         self.frames.append(frame)
         self._tops.append(top)
-        height = top + self.ROW_H + (self.CARD_H if key in self._expanded else 0) + 4
+        height = top + self.ROW_H + (self._card_height(frame)
+                                     if key in self._expanded else 0) + 4
         self.setFixedHeight(max(1, int(height)))
         self._sync_cards()
         self.update()
@@ -1035,6 +1077,11 @@ class WsLogView(QWidget):
 
     def _stick(self, *_a) -> None:
         if not self._auto_scroll:
+            return
+        # 只要还有展开的详情卡，就暂停「自动跟到底」：否则展开一张长卡片时
+        # rangeChanged 会把视图猛地拽到列表底部，刚点开的内容反而看不见。
+        # 收起全部卡片后自然恢复跟随。
+        if self.list._expanded:
             return
         bar = self.scroll.verticalScrollBar()
         if bar is not None:

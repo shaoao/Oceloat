@@ -2981,9 +2981,27 @@ def main() -> int:
                   and all(c.isVisible() for c in view.list._cards.values()),
                   str(len(view.list._cards)))
             card = view.list._cards[id(view.list.frames[rows[0]])]
-            if card.tabs.has("json"):
-                card.tabs.set_current("json", emit=True)
-                check("JSON 页签显示分行排版", "\n" in card.body.toPlainText())
+            check("文本帧也有 JSON 页签", card.tabs.has("pretty"),
+                  str([i["key"] for i in card.tabs._items]))
+            if card.tabs.has("pretty"):
+                card.tabs.set_current("pretty", emit=True)
+                src = card.frame.preview(20000).lstrip()
+                is_json = False
+                if src[:1] in ("{", "["):
+                    try:
+                        _json.loads(src)
+                        is_json = True
+                    except Exception:  # noqa: BLE001
+                        pass
+                check("JSON 页签显示分行排版",
+                      (not is_json) or "\n" in card.body.toPlainText())
+            else:
+                card.tabs.set_current("raw", emit=True)
+            from app.theme import theme as _theme
+            check("代码区底色跟随主题而非纯黑",
+                  _theme().code_bg.lower() != "#000000"
+                  and _theme().code_bg in card.body.styleSheet(),
+                  _theme().code_bg)
             check("代码框没有滚动条",
                   card.body.verticalScrollBarPolicy()
                   == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
@@ -3002,6 +3020,25 @@ def main() -> int:
             check("代码框能展开回来", card.code_card.isVisible()
                   and card.height() >= h_open)
             check("统计数字带补间动画", view.stats._num_anim is not None)
+
+            # 展开的卡片后面再来消息：必须按真实高度排布，不能盖在详情上
+            from app.ws_client import WsFrame as _F
+            before_tops = list(view.list._tops)
+            card_bottom = before_tops[rows[0]] + view.list.ROW_H + card.height()
+            view.list.append(_F("in", "text", b"later"))
+            app.processEvents()
+            last_top = view.list._tops[rows[0] + 1] if rows[0] + 1 < len(view.list._tops) else -1
+            check("新消息不会盖住展开卡片", last_top >= card_bottom - 2,
+                  f"card bottom {card_bottom:.0f}, next top {last_top:.0f}")
+            view.list.frames.pop()
+            view.list._tops.pop()
+            view.list._relayout()
+            app.processEvents()
+
+        # WS 视图下「…」按钮要给出一套专属功能，不能再点了没反应
+        check("WS 更多菜单有专属回调", w.response.is_ws_view()
+              and callable(getattr(w.response, "_show_ws_menu", None)))
+        check("WS 动作入口可用", callable(getattr(w, "_on_ws_action", None)))
 
         from app.ws_client import WsFrame as _WsFrame
 

@@ -732,6 +732,7 @@ class MainWindow(QWidget):
         self.editor.duplicateRequested.connect(self._duplicate_request)
         self.response = ResponsePanel()
         self.response.ws_view.replay.connect(self._ws_replay)
+        self.response.wsActionRequested.connect(self._on_ws_action)
         self.response.setMinimumHeight(180)
         self.response.requestSaveBody.connect(lambda body, note: self.toast.show_message(
             {"copied": "响应已复制", "redacted": "已脱敏复制（token / Cookie 已打码）"}.get(note, "响应已保存"),
@@ -1543,6 +1544,19 @@ class MainWindow(QWidget):
                                 verify_ssl=bool(self.store.settings.get("verify_ssl", True)))
         if not ok:
             self.editor.set_ws_state("idle")
+
+    def _on_ws_action(self, action: str) -> None:
+        """响应面板「…」菜单里的连接操作，复用地址栏那一套连接逻辑。"""
+        tab = self.current_tab()
+        if tab is None or not (tab.get("request", {}).get("method", "").upper() == "WS"):
+            return
+        busy = self.ws.busy
+        if action == "disconnect" and not busy:
+            self.toast.show_message(i18n.tr("当前没有连接"), "info")
+            return
+        if action == "connect" and busy:
+            return
+        self.ws_toggle(tab)
 
     def _ws_send_from_composer(self) -> None:
         tab = self.current_tab()
