@@ -1263,6 +1263,7 @@ _EN.update({
     "已连接": "Connected",
     "断开中": "Disconnecting",
     "已断开": "Disconnected",
+    "正在连接 {target}": "Connecting to {target}",
     "连接": "Connect",
     "断开": "Disconnect",
     "接收": "Received",
@@ -1313,6 +1314,7 @@ _EN.update({
 _EN.update({
     "回收站": "Trash",
     "回收站（空）": "Trash (empty)",
+    "回收站 · {n} 项": "Trash · {n} item(s)",
     "移入回收站": "Move to Trash",
     "恢复选中": "Restore selected",
     "彻底删除": "Delete permanently",

@@ -22,6 +22,8 @@ except Exception:                               # noqa: BLE001
 
 from PyQt6.QtNetwork import QNetworkRequest
 
+from . import i18n
+
 STATE_IDLE = "idle"
 STATE_CONNECTING = "connecting"
 STATE_OPEN = "open"
@@ -215,7 +217,8 @@ class WsClient(QObject):
             except Exception:                    # noqa: BLE001
                 pass
         self._set_state(STATE_CONNECTING)
-        self._emit(WsFrame("sys", "open", f"正在连接 {target}".encode("utf-8")))
+        self._emit(WsFrame("sys", "open",
+                           i18n.trf("正在连接 {target}", target=target).encode("utf-8")))
         sock.open(req)
         return True
 

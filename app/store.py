@@ -19,9 +19,21 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.43"
+VERSION = "1.0.44"
 
 CHANGELOG = [
+    {
+        "version": "1.0.44",
+        "date": "2026-11-18",
+        "items": [
+            "回收站时间分组改用集合树同款箭头，数量贴到组头最右侧，和历史分组保持一致",
+            "移除回收站列表上方多余的「最早删除」信息，整块空间留给删除记录",
+            "修复集合树与历史列表悬停时鼠标不变手型的问题，条目可点区域反馈更清楚",
+            "回收站整体和筛选栏略加宽，英文下 Custom / 自定义日期框不再被遮挡",
+            "补齐英文词条：回收站条目悬浮提示与 WebSocket「正在连接」日志会随语言切换正确显示",
+            "历史单条删除与清空历史都加上轻量消散动画：细扫线掠过、细环扩散、淡出收拢",
+        ],
+    },
     {
         "version": "1.0.43",
         "date": "2026-11-18",

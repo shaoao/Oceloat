@@ -20,7 +20,7 @@ from PyQt6.QtCore import (
     QVariantAnimation,
     pyqtSignal,
 )
-from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -110,6 +110,90 @@ class TrashFly(QWidget):
                           14 * scale, 1.7)
         p.drawPixmap(QPointF(x - pm.width() / 2, y - pm.height() / 2), pm)
         p.setOpacity(1.0)
+        p.end()
+
+
+# ---------------------------------------------------------------- 历史删除动画
+class HistoryVanish(QWidget):
+    """历史行删除时的轻量消散动画：抓一张快照，细扫线掠过 + 细环扩散 + 淡出收拢。
+
+    整段只有一个 QVariantAnimation，不建窗口、不起线程；清空时使用整块视口快照，
+    单条删除只抓那一行，动画结束立刻隐藏并释放快照。
+    """
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self._p = 0.0
+        self._shots: List[Tuple[QPixmap, QRectF]] = []
+        self.hide()
+
+    def vanish(self, shots: List[Tuple[QPixmap, QRectF]], duration: int = 720) -> None:
+        host = self.parentWidget()
+        shots = [(pm, r) for pm, r in shots if not pm.isNull()]
+        if host is None or not shots:
+            return
+        self._shots = shots
+        self.setGeometry(host.rect())
+        self.raise_()
+        self.show()
+
+        def _set(v):
+            self._p = float(v)
+            self.update()
+
+        def _done():
+            self.hide()
+            self._p = 0.0
+            self._shots = []
+
+        _anim_stop(getattr(self, "_anim", None))
+        self._anim = animate(self, 0.0, 1.0, duration, _set,
+                             QEasingCurve.Type.Linear, on_done=_done)
+
+    def paintEvent(self, _e):  # noqa: N802
+        if not (0.0 < self._p < 1.0) or not self._shots:
+            return
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        for idx, (pm, rect) in enumerate(self._shots):
+            delay = min(0.18, idx * 0.045)
+            span = max(0.3, 1.0 - delay)
+            u = min(1.0, max(0.0, (self._p - delay) / span))
+            e = u * u * (3.0 - 2.0 * u)          # smoothstep：起步轻、收尾稳
+            alpha = 1.0 - 0.85 * e
+            dpr = pm.devicePixelRatio() or 1.0
+            w, h = pm.width() / dpr, pm.height() / dpr
+            # 从右往左把旧行擦掉：原位收缩，不飘到下一行上糊成一团
+            visible = max(0.0, 1.0 - e)
+            y = rect.top() - 3.0 * e
+            target = QRectF(rect.left(), y, w * visible, h)
+            source = QRectF(0, 0, pm.width() * visible, pm.height())
+
+            p.save()
+            p.setOpacity(alpha)
+            p.drawPixmap(target, pm, source)
+            p.restore()
+
+            # 一道主题色细扫线：跟着擦除边界从右往左收，像被轻轻抹掉
+            sweep = QColor(t.accent)
+            sweep.setAlpha(int(150 * alpha))
+            p.setPen(QPen(sweep, 1.2))
+            sx = rect.left() + w * visible
+            p.drawLine(QPointF(sx, y), QPointF(sx, y + h))
+
+            # 行尾一圈极淡的扩散环：给删除一点「噗」的呼吸感
+            ring = QColor(t.text_faint)
+            ring.setAlpha(int(110 * alpha * (1.0 - u)))
+            p.setPen(QPen(ring, 1.0))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            rr = 10.0 + 34.0 * u
+            p.drawEllipse(QRectF(rect.right() - 18.0 - rr,
+                                 rect.center().y() - 3.0 * e - rr * 0.55,
+                                 rr * 2, rr * 1.1))
         p.end()
 
 
@@ -347,6 +431,11 @@ class CollectionsTree(QTreeWidget):
             _anim_stop(self._hover_anim)
             self._hover_v = 0.0
             self._hover_anim.start()
+        # 视口才是真正接收鼠标的控件：悬停条目时给手型，空白区保持箭头
+        if e.buttons() == Qt.MouseButton.NoButton:
+            self.viewport().setCursor(
+                Qt.CursorShape.PointingHandCursor if item is not None
+                else Qt.CursorShape.ArrowCursor)
         super().mouseMoveEvent(e)
 
     def _on_hover(self, v):
@@ -356,6 +445,7 @@ class CollectionsTree(QTreeWidget):
     def leaveEvent(self, e):  # noqa: N802
         self._hover_item = None
         self._hover_v = 0.0
+        self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
         self.viewport().update()
         super().leaveEvent(e)
 
@@ -648,13 +738,15 @@ class Sidebar(QWidget):
         self._build()
         # 删除飞入动画：挂在最上层，鼠标事件穿透，不影响集合树交互
         self._trash_fly = TrashFly(self)
+        self._history_vanish = HistoryVanish(self)
         self.refresh()
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
-        fly = getattr(self, "_trash_fly", None)
-        if fly is not None and not fly.isHidden():
-            fly.setGeometry(self.rect())
+        for overlay in (getattr(self, "_trash_fly", None),
+                        getattr(self, "_history_vanish", None)):
+            if overlay is not None and not overlay.isHidden():
+                overlay.setGeometry(self.rect())
 
     # -------------------------------------------------- 构建
     def _build(self) -> None:
@@ -689,9 +781,11 @@ class Sidebar(QWidget):
         self.tree.structureChanged.connect(self._on_structure_changed)
         self.tree.requestContext.connect(self._show_context)
         self.tree.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        # QTreeView 的列头边界会给出 SplitHCursor；集合树没有可调列宽，统一回普通箭头
-        for w in (self.tree, self.tree.viewport(), self.tree.header()):
+        # QTreeView 的列头边界会给出 SplitHCursor；集合树没有可调列宽，统一回普通箭头。
+        # 视口不能钉死箭头：条目上的手型在 CollectionsTree.mouseMoveEvent 里按悬停切换。
+        for w in (self.tree, self.tree.header()):
             w.setCursor(Qt.CursorShape.ArrowCursor)
+        self.tree.viewport().unsetCursor()
         root.addWidget(self.tree, 1)
 
         # 历史
@@ -706,7 +800,8 @@ class Sidebar(QWidget):
         self.history_scroll.setWidget(self.history_host)
         self.history_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.history_scroll.hide()
-        self.history_scroll.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+        # 子控件自己带 PointingHandCursor；视口不要强制覆盖，否则悬停只剩箭头
+        self.history_scroll.viewport().unsetCursor()
         root.addWidget(self.history_scroll, 1)
 
         # 底部操作条
@@ -834,6 +929,7 @@ class Sidebar(QWidget):
         """语言 / 主题切换后：重译 tooltip 并重绘（行内文案在 paintEvent 里实时翻译）。"""
         self.transfer_btn.setToolTip(i18n.tr("导入 / 导出集合"))
         self.folder_btn.setToolTip(i18n.tr("新建文件夹"))
+        self._sync_trash_badge()
         self.tree.viewport().update()
         if self._mode == "history":
             self.refresh_history()
@@ -949,10 +1045,13 @@ class Sidebar(QWidget):
                                  i18n.tr("清空全部历史记录？集合与环境变量不受影响，但历史无法恢复。"),
                                  i18n.tr("清空")):
             return
+        # 先抓当前视口快照，再清数据：旧内容以消散动画退出，不生硬闪没
+        shots = self._history_snapshots()
+        self._history_vanish.vanish(shots, 780)
         self.store.clear_history()
         self.store.save()
         self.refresh_history()
-        self.notify.emit("历史已清空")
+        self.notify.emit(i18n.tr("历史已清空"))
 
     def rename_node(self, node_id: str, name: str) -> None:
         node = self.store.find(node_id)
@@ -1264,7 +1363,26 @@ class Sidebar(QWidget):
         req["id"] = req.get("id") or ""
         self.openRequest.emit(req)
 
+    def _history_snapshots(self, row: Optional[QWidget] = None):
+        """抓一行或整个历史视口的快照，坐标换算到 Sidebar 供动画覆盖层使用。"""
+        if row is not None:
+            if not row.isVisible():
+                return []
+            pm = row.grab()
+            pos = row.mapTo(self, QPoint(0, 0))
+            return [(pm, QRectF(pos.x(), pos.y(), row.width(), row.height()))]
+        vp = self.history_scroll.viewport()
+        if not vp.isVisible():
+            return []
+        pm = vp.grab()
+        pos = vp.mapTo(self, QPoint(0, 0))
+        return [(pm, QRectF(pos.x(), pos.y(), vp.width(), vp.height()))]
+
     def _remove_history(self, entry_id: str) -> None:
+        row = next((r for r in getattr(self, "_hist_rows", [])
+                    if r.entry.get("id") == entry_id), None)
+        shots = self._history_snapshots(row)
+        self._history_vanish.vanish(shots, 680)
         self.store.data["history"] = [h for h in self.store.history if h.get("id") != entry_id]
         self.store.save()
         self.refresh_history()

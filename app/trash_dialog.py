@@ -277,7 +277,7 @@ class TrashList(QWidget):
         if y < 0:
             return QRectF(-100, -100, 1, 1)
         r = QRectF(3, y + 3, self.width() - 6, self.ROW_H - 6)
-        return QRectF(r.right() - 96 - self.DETAIL_W, r.center().y() - self.DETAIL_H / 2,
+        return QRectF(r.right() - 146 - self.DETAIL_W, r.center().y() - self.DETAIL_H / 2,
                       self.DETAIL_W, self.DETAIL_H)
 
     def _toggle_group(self, g: Dict[str, Any]) -> None:
@@ -371,14 +371,27 @@ class TrashList(QWidget):
             col.setAlphaF(0.55 + 0.45 * g["factor"])
             p.setPen(col)
             p.setFont(font(11, weight=QFont.Weight.DemiBold))
-            # chevron 用字符绘制，折叠态 ▸ / 展开态 ▾（随 factor 渐显）
-            cv = "▾" if g["factor"] >= 0.5 else "▸"
-            p.drawText(QRectF(hr.left() + 8, hr.top(), 16, hr.height()),
-                       int(Qt.AlignmentFlag.AlignVCenter), cv)
-            p.setPen(C(t.text_dim))
-            cap = f"{i18n.tr(g['label'])}  ·  {len(g['recs'])}"
-            p.drawText(QRectF(hr.left() + 28, hr.top(), hr.width() - 36, hr.height()),
-                       int(Qt.AlignmentFlag.AlignVCenter), cap)
+            # 与集合树 / 历史分组完全同款：chevron_right 图标，收起朝右、展开朝下
+            icon_col = QColor(t.text_faint)
+            icon_col.setAlphaF(0.55 + 0.45 * g["factor"])
+            pm = icons.pixmap("chevron_right",
+                              icon_col.name(QColor.NameFormat.HexArgb), 11, 2.0)
+            p.save()
+            p.translate(hr.left() + 12, hr.center().y())
+            if g["expanded"]:
+                p.rotate(90)
+            p.drawPixmap(QPointF(-5.5, -5.5), pm)
+            p.restore()
+            p.setPen(col)
+            # 标题靠左，数量和历史一样贴最右边
+            p.drawText(QRectF(hr.left() + 26, hr.top(), hr.width() - 70, hr.height()),
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                       i18n.tr(g["label"]))
+            p.setFont(mono(10))
+            p.setPen(C(t.text_faint))
+            p.drawText(QRectF(hr.right() - 38, hr.top(), 30, hr.height()),
+                       int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                       str(len(g["recs"])))
 
             # ---- 组内记录：按 factor 裁剪高度，动画展开时逐行揭示 ----
             body_h = len(g["recs"]) * self.ROW_H * g["factor"]
@@ -417,20 +430,20 @@ class TrashList(QWidget):
                 p.setPen(C(t.text))
                 p.setFont(font(12.2, weight=QFont.Weight.DemiBold))
                 name = node.get("name") or i18n.tr("未命名")
-                p.drawText(QRectF(tx, r.top() + 9, r.right() - tx - 92, 18),
+                p.drawText(QRectF(tx, r.top() + 9, r.right() - tx - 146, 18),
                            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                            p.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight,
-                                                      int(r.right() - tx - 92)))
+                                                      int(r.right() - tx - 146)))
                 detail = rec.get("_detail", "")
                 p.setPen(C(t.text_faint))
                 p.setFont(mono(10.3))
-                p.drawText(QRectF(tx, r.top() + 28, r.right() - tx - 92, 16),
+                p.drawText(QRectF(tx, r.top() + 28, r.right() - tx - 146, 16),
                            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                            p.fontMetrics().elidedText(detail, Qt.TextElideMode.ElideRight,
-                                                      int(r.right() - tx - 92)))
+                                                      int(r.right() - tx - 146)))
                 p.setPen(C(t.text_faint))
                 p.setFont(mono(10))
-                p.drawText(QRectF(r.right() - 88, r.top() + 12, 80, 18),
+                p.drawText(QRectF(r.right() - 138, r.top() + 12, 130, 18),
                            int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
                            _fmt_deleted(rec.get("deleted_at", 0)))
                 if i == self._hover:
@@ -738,14 +751,11 @@ class TrashDialog(GlassDialog):
     restored = pyqtSignal(list)          # 恢复完成，携带 node_id 列表（侧边栏定位）
 
     def __init__(self, store: Store, parent=None):
-        super().__init__(parent, 940, 620, i18n.tr("回收站"))
+        super().__init__(parent, 1030, 620, i18n.tr("回收站"))
         self.store = store
         self._type = "all"
         self._range = "all"
         self._query = ""
-        t0 = theme()
-        # 提前建好，_right_panel 和 reload 都要用（与 _stat_bar 构建顺序解耦）
-        self.stat_oldest = Label("-", 12, t0.text_dim, mono_font=True)
         self._flash = ActionFlash(self.body)
         self._build()
 
@@ -803,8 +813,7 @@ class TrashDialog(GlassDialog):
                               weight=QFont.Weight.DemiBold)
         self.stat_folder = Label("0", 19, t.warning, mono_font=True,
                                  weight=QFont.Weight.DemiBold)
-        # 三项统计紧凑靠左；「最早删除」移到右侧列表上方，和卡片图标对齐
-        # （stat_oldest 在 __init__ 里已建好）
+        # 三项统计紧凑靠左，其余空间留给搜索框
         for w, cap, col in (
             (self.stat_total, i18n.tr("全部条目"), None),
             (self.stat_req, i18n.tr("请求"), t.info),
@@ -816,7 +825,7 @@ class TrashDialog(GlassDialog):
         # 搜索框放右上，和统计条同一行；显式描边，避免和深色背景糊在一起
         self.search = QLineEdit()
         self.search.setPlaceholderText(i18n.tr("搜索名称 / URL / 方法"))
-        self.search.setFixedSize(228, 30)
+        self.search.setFixedSize(268, 30)
         self.search.setStyleSheet(f"""
             QLineEdit {{ background: {t.card}; color: {t.text};
                 border: 1px solid {S(t.border_strong)}; border-radius: 6px;
@@ -830,9 +839,9 @@ class TrashDialog(GlassDialog):
     def _left_panel(self) -> QWidget:
         t = theme()
         panel = QWidget()
-        # 加宽侧栏：自定义日期范围两个日期框 + 箭头需要足够横向空间，
-        # 210 会把第二个日期框截掉，这里给到 258。
-        panel.setFixedWidth(258)
+        # 加宽侧栏：英文下 Any time / Today / 7 days / 30 days / Custom
+        # 五个 pill 实际宽度约 322，284 时 Custom 仍会被切，这里给到 334。
+        panel.setFixedWidth(334)
         vl = QVBoxLayout(panel)
         vl.setContentsMargins(0, 0, 0, 0)
         vl.setSpacing(9)
@@ -887,27 +896,11 @@ class TrashDialog(GlassDialog):
         return panel
 
     def _right_panel(self) -> QWidget:
-        """右侧整块给删除记录：顶部一条「最早删除」，其余全是列表。
-
-        详情不再常驻占地方，改成 hover 行内的小按钮弹出浮层。
-        """
-        t = theme()
+        """右侧整块给删除记录；详情改成 hover 行内的小按钮弹出浮层。"""
         wrap = QWidget()
         vl = QVBoxLayout(wrap)
         vl.setContentsMargins(0, 0, 0, 0)
         vl.setSpacing(2)
-
-        # 「最早删除」移到列表上方，左边缘和列表卡片里的图标对齐：
-        # 卡片图标 x = list 内边距 3 + bx 9 = 12，这里统一用 12。
-        oldest_row = QWidget()
-        ol = QHBoxLayout(oldest_row)
-        ol.setContentsMargins(12, 2, 0, 2)
-        ol.setSpacing(6)
-        ol.addWidget(self.stat_oldest, 0, Qt.AlignmentFlag.AlignVCenter)
-        ol.addWidget(Label(i18n.tr("最早删除"), 10, t.text_faint),
-                     0, Qt.AlignmentFlag.AlignVCenter)
-        ol.addStretch(1)
-        vl.addWidget(oldest_row, 0)
 
         self.list_scroll = QScrollArea()
         self.list_scroll.setWidgetResizable(True)
@@ -961,8 +954,6 @@ class TrashDialog(GlassDialog):
         self.stat_total.setText(str(len(recs)))
         self.stat_req.setText(str(n_req))
         self.stat_folder.setText(str(n_folder))
-        stamps = [r.get("deleted_at", 0) for r in recs if r.get("deleted_at")]
-        self.stat_oldest.setText(_fmt_deleted(min(stamps)) if stamps else "-")
 
         shown = [r for r in recs if self._match(r)]
         shown.sort(key=lambda r: r.get("deleted_at", 0), reverse=True)

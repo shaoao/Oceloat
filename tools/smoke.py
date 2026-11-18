@@ -3236,11 +3236,10 @@ def main() -> int:
         dlg._on_search("")
         check("自定义日期控件已主题化",
               "QCalendarWidget" in dlg.date_from.calendarWidget().styleSheet())
-        # v1.0.42：常驻详情去掉、最早删除移到列表上方、详情浮层 + hover 按钮 + 动画
+        # v1.0.42：常驻详情去掉、详情浮层 + hover 按钮 + 动画
         check("常驻详情面板已移除", not hasattr(dlg, "detail_scroll"))
-        check("最早删除移到列表上方",
-              dlg.stat_oldest.parent() is not None and
-              dlg.stat_oldest.parent() is not dlg.search.parent())
+        # v1.0.44：列表上方不再有「最早删除」那一行
+        check("最早删除信息已移除", not hasattr(dlg, "stat_oldest"))
         check("有详情浮层", hasattr(dlg, "_detail_popup") and
               hasattr(dlg._detail_popup, "detail"))
         check("hover 详情按钮有命中区", callable(dlg.list._detail_rect))
@@ -3381,6 +3380,52 @@ def main() -> int:
         dlg.list.selected = {target}
         dlg._restore()
         check("恢复发出 node_id 信号", plain["id"] in got_ids, str(got_ids))
+
+        # v1.0.44：手型光标 / 英文词条 / 历史删除动画 / 回收站宽度与分组样式
+        from PyQt6.QtGui import QMouseEvent as _QME
+        from PyQt6.QtCore import QPointF as _QPF
+        probe = _nr("光标测试", "GET", "https://cursor.test")
+        st.collections.append(probe)
+        w.sidebar.refresh()
+        tree = w.sidebar.tree
+        item = tree.topLevelItem(0)
+        if item is not None:
+            rect = tree.visualItemRect(item)
+            ev = _QME(_QME.Type.MouseMove, _QPF(rect.center()),
+                      Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
+                      Qt.KeyboardModifier.NoModifier)
+            tree.mouseMoveEvent(ev)
+            check("集合树条目悬停恢复手型",
+                  tree.viewport().cursor().shape() == Qt.CursorShape.PointingHandCursor)
+        check("历史行本身带手型",
+              all(r.cursor().shape() == Qt.CursorShape.PointingHandCursor
+                  for r in getattr(w.sidebar, "_hist_rows", [])) or
+              not getattr(w.sidebar, "_hist_rows", []))
+        check("历史视口不再强制覆盖光标",
+              w.sidebar.history_scroll.viewport().cursor().shape()
+              == Qt.CursorShape.ArrowCursor)
+        check("历史删除动画对象存在",
+              hasattr(w.sidebar, "_history_vanish") and
+              callable(getattr(w.sidebar._history_vanish, "vanish", None)) and
+              callable(getattr(w.sidebar._history_vanish, "paintEvent", None)))
+        check("历史快照抓取可用", callable(w.sidebar._history_snapshots))
+        check("回收站宽度略增", dlg.width() >= 1030 and
+              dlg.date_row.parent().width() >= 330,
+              f"{dlg.width()}/{dlg.date_row.parent().width()}")
+        check("最早删除标签不再出现",
+              not any(lb.text() == "最早删除" for lb in dlg.findChildren(QLabel)))
+
+        _i18n.set_language("en", notify=False)
+        check("英文连接日志已翻译",
+              _i18n.trf("正在连接 {target}", target="wss://echo.test")
+              == "Connecting to wss://echo.test")
+        check("英文回收站提示已翻译",
+              _i18n.trf("回收站 · {n} 项", n=7) == "Trash · 7 item(s)")
+        w.sidebar.refresh_theme()
+        check("语言切换同步回收站提示", "Trash" in w.sidebar.trash_btn.toolTip(),
+              w.sidebar.trash_btn.toolTip())
+        _i18n.set_language(old_lang, notify=False)
+        w.sidebar.refresh_theme()
         dlg.deleteLater()
         return 0
 

@@ -1,5 +1,15 @@
 # What's Changed
 
+## v1.0.44 — 2026-11-18
+
+**Changed**
+- Trash time groups now use the same chevron as the collection tree, with the item count aligned right like history groups.
+- Removed the redundant "Oldest deleted" strip above the trash list.
+- Fixed hover cursors: collection tree and history rows now show the pointing-hand cursor again.
+- Slightly widened the trash window and filter sidebar so English "Custom" and the date inputs are no longer clipped.
+- Filled in missing English strings for the trash tooltip and WebSocket "Connecting to …" log line.
+- Added a light dissolve animation for deleting a single history entry and clearing all history: sweep line, soft ring, fade-and-collapse.
+
 ## v1.0.43 — 2026-11-18
 
 **Changed**
