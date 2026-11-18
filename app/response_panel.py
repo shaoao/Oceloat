@@ -1555,28 +1555,31 @@ class ResponsePanel(QWidget):
             return
         super().keyPressEvent(e)
 
-    # -------------------------------------------------- WebSocket 更多菜单
+    # -------------------------------------------------- 实时会话更多菜单
     def _show_ws_menu(self) -> None:
-        """WS 会话的「…」菜单：连接操作、日志处理、地址与统计复制。
+        """WS / Socket.IO 会话的「…」菜单：连接操作、日志处理、地址与统计复制。
 
-        以前这颗按钮在 WS 视图里点开毫无反应（菜单方法开头就因为
-        response is None 返回了），用户截图里专门圈出来问「这个按钮有啥
-        功能」。这里给它一套真正用得上的 WS 操作。
+        文案按当前实时协议区分——Socket.IO 视图不再误显示「复制 WebSocket 地址 /
+        导出消息日志」，而是对应的 Socket.IO / 事件日志，避免让用户以为串了页面。
         """
         t = theme()
+        sio = getattr(self, "_realtime_kind", "ws") == "sio"
         menu = Menu(self)
         connected = getattr(self, "_ws_state", "idle") in ("open", "connecting")
         a_toggle = menu.addAction(
             icons.icon("stop" if connected else "link", t.text, 13),
             i18n.tr("断开连接") if connected else i18n.tr("建立连接"))
         menu.addSeparator()
-        a_copy_url = menu.addAction(icons.icon("link", t.text, 13),
-                                    i18n.tr("复制 WebSocket 地址"))
-        a_copy_stats = menu.addAction("复制会话统计")
-        a_export = menu.addAction(icons.icon("download", t.text, 13),
-                                  i18n.tr("导出消息日志…"))
-        a_clear = menu.addAction(icons.icon("trash", t.text, 13),
-                                 i18n.tr("清空消息日志"))
+        a_copy_url = menu.addAction(
+            icons.icon("link", t.text, 13),
+            i18n.tr("复制 Socket.IO 地址") if sio else i18n.tr("复制 WebSocket 地址"))
+        a_copy_stats = menu.addAction(i18n.tr("复制会话统计"))
+        a_export = menu.addAction(
+            icons.icon("download", t.text, 13),
+            i18n.tr("导出事件日志…") if sio else i18n.tr("导出消息日志…"))
+        a_clear = menu.addAction(
+            icons.icon("trash", t.text, 13),
+            i18n.tr("清空事件日志") if sio else i18n.tr("清空消息日志"))
         pos = self.more_btn.mapToGlobal(QPoint(0, self.more_btn.height() + 4))
         chosen = menu.exec(pos)
         if chosen is None:

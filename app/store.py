@@ -19,9 +19,19 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.46"
+VERSION = "1.0.47"
 
 CHANGELOG = [
+    {
+        "version": "1.0.47",
+        "date": "2026-11-19",
+        "items": [
+            "WebSocket 与 Socket.IO 请求页改为 HTTP 同款 underline 双页签：WebSocket 分「通讯 / 协议」，Socket.IO 分「通讯 / 认证」",
+            "通讯页只留日常收发：命名空间、事件名、载荷输入、JSON/Text 切换、格式化、保存与发送",
+            "低频配置移入第二页：WebSocket 的协议参数、Socket.IO 的握手认证与 ACK/重连选项，分组排版更清爽",
+            "Socket.IO 载荷输入区新增 JSON / 文本切换（控制高亮与格式化），更多菜单改为 Socket.IO 专属文案：复制地址、导出/清空事件日志",
+        ],
+    },
     {
         "version": "1.0.46",
         "date": "2026-11-19",

@@ -1455,3 +1455,20 @@ _EN.update({
         "Supports ws:// wss://; http(s) URLs are rewritten with the Socket.IO path",
     "JSON (*.json);;文本 (*.log)": "JSON (*.json);;Text (*.log)",
 })
+
+# 通讯 / 协议、通讯 / 认证双页签与实时会话专属菜单（v1.0.47）
+_EN.update({
+    "通讯": "Chat",
+    "协议": "Protocol",
+    "连接参数": "Connection parameters",
+    "连接行为": "Connection behavior",
+    "握手认证": "Handshake auth",
+    "载荷": "Payload",
+    "以上选项在建立连接时生效，断开重连后会重新应用。":
+        "These options apply when the connection is established and reapply after reconnecting.",
+    "认证对象在连接时随握手发送；连接行为在断开重连后重新应用。":
+        "The auth object is sent with the handshake; connection behavior reapplies after reconnecting.",
+    "复制 Socket.IO 地址": "Copy Socket.IO URL",
+    "导出事件日志…": "Export event log…",
+    "清空事件日志": "Clear event log",
+})

@@ -1,5 +1,13 @@
 # What's Changed
 
+## v1.0.47 — 2026-11-19
+
+**Changed**
+- WebSocket and Socket.IO request pages now use the same underline tab style as HTTP requests: WebSocket splits into Chat / Protocol, Socket.IO into Chat / Auth.
+- The Chat page keeps only day-to-day sending: namespace, event name, payload, JSON/Text switch, format, save and send.
+- Low-frequency settings moved to a second tab: connection parameters for WebSocket, handshake auth and ACK/reconnect options for Socket.IO.
+- Socket.IO payload input gains a JSON/Text switch (controls highlighting and formatting), and its "More" menu now shows Socket.IO-specific actions: copy URL, export/clear event log.
+
 ## v1.0.46 — 2026-11-19
 
 **Changed**

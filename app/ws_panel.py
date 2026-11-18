@@ -152,61 +152,8 @@ class WsComposer(QWidget):
         self._loading = False
         self._chips: List[MsgChip] = []
 
-        # --- 连接选项（子协议 / 心跳 / 重连）
         t = theme()
-        self.proto = QLineEdit()
-        self.proto.setObjectName("Field")
-        self.proto.setFixedHeight(26)
-        i18n.placeholder(self.proto, "可留空")
-        self.proto.textChanged.connect(self._on_option)
-        self.ping = QLineEdit()
-        self.ping.setObjectName("Field")
-        self.ping.setFixedHeight(26)
-        self.ping.setFixedWidth(56)
-        i18n.placeholder(self.ping, "0")
-        self.ping.setToolTip(i18n.tr("心跳间隔（秒），0 表示不发"))
-        self.ping.textChanged.connect(self._on_option)
-        self.reconnect_sw = Switch(True)
-        self.reconnect_sw.toggled.connect(lambda _v: self._on_option())
-        self.clear_sw = Switch(False)
-        self.clear_sw.toggled.connect(lambda _v: self._on_option())
-
-        # 选项统一排版：第一行协议输入（stretch 填满），第二行低频开关 + 握手头。
-        # 与 Socket.IO 页共用同一套骨架，视觉一致、输入框不再留半截空白。
-        opts = Card(radius=9)
-        ov = QVBoxLayout(opts)
-        ov.setContentsMargins(12, 6, 12, 6)
-        ov.setSpacing(6)
-
-        row1 = QHBoxLayout()
-        row1.setSpacing(8)
-        row1.addWidget(Label("子协议", 10.6, t.text_faint))
-        row1.addWidget(self.proto, 1)
-        row1.addSpacing(8)
-        row1.addWidget(Label("心跳", 10.6, t.text_faint))
-        row1.addWidget(self.ping)
-        row1.addWidget(Label("秒", 10.4, t.text_faint))
-        ov.addLayout(row1)
-
-        row2 = QHBoxLayout()
-        row2.setSpacing(8)
-        row2.addWidget(Label("自动重连", 10.9, t.text_dim))
-        row2.addWidget(self.reconnect_sw)
-        row2.addSpacing(6)
-        row2.addWidget(Label("发送后清空", 10.9, t.text_dim))
-        row2.addWidget(self.clear_sw)
-        row2.addStretch(1)
-        od = Divider(vertical=True)
-        od.setFixedHeight(14)
-        row2.addWidget(od)
-        self.headers_btn = Button("握手头", "list", kind="ghost", height=24,
-                                  padding=8, font_size=10.8, icon_size=11)
-        self.headers_btn.setToolTip(i18n.tr("连接时一起发送的请求头，例如 Authorization"))
-        self.headers_btn.clicked.connect(self.headersToggled.emit)
-        row2.addWidget(self.headers_btn)
-        ov.addLayout(row2)
-
-        # --- 消息编辑
+        # --- 「通讯」页：消息类型 / 输入 / 发送 / 常用消息
         self.kind = SegmentedTabs([(k, label) for k, label in KINDS],
                                   style="pill", height=26, font_size=11.4, pad_h=11)
         self.kind.changed.connect(self._on_kind)
@@ -231,8 +178,7 @@ class WsComposer(QWidget):
         # 输入中的草稿写回请求：切走标签再切回来，内容还在。
         self.editor.textChanged.connect(self._on_draft_changed)
 
-        # --- 常用消息：横向一条胶囊，放不下就横向滚
-        self.saved_note = Label("常用消息", 10.4, theme().text_faint)
+        self.saved_note = Label("常用消息", 10.4, t.text_faint)
         self.saved_host = QWidget()
         self.saved_lay = QHBoxLayout(self.saved_host)
         self.saved_lay.setContentsMargins(0, 0, 4, 0)
@@ -244,14 +190,88 @@ class WsComposer(QWidget):
         self.saved_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.saved_scroll.hide()
 
+        chat_page = QWidget()
+        cl = QVBoxLayout(chat_page)
+        cl.setContentsMargins(14, 10, 14, 12)
+        cl.setSpacing(8)
+        cl.addWidget(tools)
+        cl.addWidget(self.editor, 1)
+        cl.addWidget(self.saved_note)
+        cl.addWidget(self.saved_scroll)
+
+        # --- 「协议」页：握手级配置，单独成页不干扰日常收发
+        self.proto = QLineEdit()
+        self.proto.setObjectName("Field")
+        self.proto.setFixedHeight(28)
+        i18n.placeholder(self.proto, "可留空")
+        self.proto.textChanged.connect(self._on_option)
+        self.ping = QLineEdit()
+        self.ping.setObjectName("Field")
+        self.ping.setFixedHeight(28)
+        self.ping.setFixedWidth(64)
+        i18n.placeholder(self.ping, "0")
+        self.ping.setToolTip(i18n.tr("心跳间隔（秒），0 表示不发"))
+        self.ping.textChanged.connect(self._on_option)
+        self.reconnect_sw = Switch(True)
+        self.reconnect_sw.toggled.connect(lambda _v: self._on_option())
+        self.clear_sw = Switch(False)
+        self.clear_sw.toggled.connect(lambda _v: self._on_option())
+
+        proto_card = Card(radius=10)
+        pcv = QVBoxLayout(proto_card)
+        pcv.setContentsMargins(16, 14, 16, 14)
+        pcv.setSpacing(12)
+        pcv.addWidget(Label(i18n.tr("连接参数"), 11, t.text_dim))
+        p1 = QHBoxLayout()
+        p1.setSpacing(10)
+        p1.addWidget(Label("子协议", 11, t.text_faint))
+        p1.addWidget(self.proto, 1)
+        p1.addSpacing(10)
+        p1.addWidget(Label("心跳", 11, t.text_faint))
+        p1.addWidget(self.ping)
+        p1.addWidget(Label("秒", 10.4, t.text_faint))
+        pcv.addLayout(p1)
+        pcv.addWidget(Divider())
+        pcv.addWidget(Label(i18n.tr("连接行为"), 11, t.text_dim))
+        p2 = QHBoxLayout()
+        p2.setSpacing(10)
+        p2.addWidget(Label("自动重连", 11, t.text_dim))
+        p2.addWidget(self.reconnect_sw)
+        p2.addSpacing(10)
+        p2.addWidget(Label("发送后清空", 11, t.text_dim))
+        p2.addWidget(self.clear_sw)
+        p2.addStretch(1)
+        self.headers_btn = Button("握手头", "list", kind="ghost", height=26, padding=10,
+                                  font_size=11, icon_size=12)
+        self.headers_btn.setToolTip(i18n.tr("连接时一起发送的请求头，例如 Authorization"))
+        self.headers_btn.clicked.connect(self.headersToggled.emit)
+        p2.addWidget(self.headers_btn)
+        pcv.addLayout(p2)
+        hint = Label(i18n.tr("以上选项在建立连接时生效，断开重连后会重新应用。"),
+                     10.4, t.text_faint)
+        hint.setWordWrap(True)
+        pcv.addWidget(hint)
+        pcv.addStretch(1)
+
+        proto_page = QWidget()
+        pl = QVBoxLayout(proto_page)
+        pl.setContentsMargins(14, 10, 14, 12)
+        pl.setSpacing(0)
+        pl.addWidget(proto_card, 1)
+
+        # 与 HTTP 请求页同款 underline 页签：只有「通讯 / 协议」两页。
+        self.tabs = SegmentedTabs([("chat", "通讯"), ("protocol", "协议")],
+                                  style="underline", height=32, pad_h=10, font_size=12.2)
+        self.tabs.changed.connect(self._on_tab)
+        self.stack = QStackedWidget()
+        self.stack.addWidget(chat_page)
+        self.stack.addWidget(proto_page)
+
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 8, 14, 10)
-        lay.setSpacing(8)
-        lay.addWidget(opts)
-        lay.addWidget(tools)
-        lay.addWidget(self.editor, 1)
-        lay.addWidget(self.saved_note)
-        lay.addWidget(self.saved_scroll)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self.tabs)
+        lay.addWidget(self.stack, 1)
         self._refresh_saved()
 
     # -------------------------------------------------- 数据
@@ -324,6 +344,10 @@ class WsComposer(QWidget):
 
     def _on_option(self) -> None:
         self.changed.emit()
+
+    def _on_tab(self, key: str) -> None:
+        """通讯 / 协议双页签：只有两页，直接按 key 切。"""
+        self.stack.setCurrentIndex(1 if key == "protocol" else 0)
 
     def _on_kind(self, key: str) -> None:
         self.editor.set_language("json" if key == "json" else None)

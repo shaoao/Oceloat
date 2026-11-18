@@ -10,7 +10,7 @@ import json
 from typing import Any, Dict, List
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QStackedWidget, QVBoxLayout, QWidget
 
 from . import i18n
 from .code_editor import CodeView
@@ -22,12 +22,15 @@ from .ws_panel import KIND_LABEL, MsgChip, WsLogView
 # 日志行上的技术标签保持大写短词，不需要翻译
 KIND_LABEL.update({"event": "EVENT", "ack": "ACK"})
 
+# 载荷输入区支持 JSON / 文本两种模式（只影响高亮与格式化，不改变协议内容）
+PAYLOAD_KINDS = [("text", "文本"), ("json", "JSON")]
+
 
 def default_sio() -> Dict[str, Any]:
     return {
         "messages": [], "namespace": "/", "auth": "", "ack": False,
         "auto_reconnect": True, "clear_after_send": False,
-        "event": "message", "draft": "",
+        "event": "message", "draft": "", "kind": "json",
     }
 
 
@@ -59,69 +62,27 @@ class SioComposer(QWidget):
         self._chips: List[MsgChip] = []
 
         t = theme()
+        # --- 「通讯」页：命名空间 + 事件载荷输入 / 发送 / 常用事件
+        # 命名空间单独一行、stretch 填满。
         self.namespace = QLineEdit()
         self.namespace.setObjectName("Field")
-        self.namespace.setFixedHeight(26)
+        self.namespace.setFixedHeight(28)
         i18n.placeholder(self.namespace, "/")
         self.namespace.setToolTip(i18n.tr("默认命名空间填 /，自定义填 /admin"))
         self.namespace.textChanged.connect(self._on_option)
+        ns_row = QHBoxLayout()
+        ns_row.setSpacing(10)
+        ns_row.addWidget(Label("命名空间", 11, t.text_faint))
+        ns_row.addWidget(self.namespace, 1)
 
-        self.auth = QLineEdit()
-        self.auth.setObjectName("Field")
-        self.auth.setFixedHeight(26)
-        i18n.placeholder(self.auth, '{"token": "..."}')
-        self.auth.setToolTip(i18n.tr("连接时随 40 包发送的认证对象，必须是合法 JSON"))
-        self.auth.textChanged.connect(self._on_option)
+        # 载荷模式：JSON / 文本切换，只影响高亮与格式化
+        self.kind = SegmentedTabs(PAYLOAD_KINDS, style="pill", height=26,
+                                  font_size=11.4, pad_h=11)
+        self.kind.changed.connect(self._on_kind)
 
-        self.ack_sw = Switch(False)
-        self.ack_sw.setToolTip(i18n.tr("开启后这次事件会带 ack id，收到回执会在日志里显示"))
-        self.ack_sw.toggled.connect(lambda _v: self._on_option())
-        self.clear_sw = Switch(False)
-        self.clear_sw.toggled.connect(lambda _v: self._on_option())
-        self.reconnect_sw = Switch(True)
-        self.reconnect_sw.toggled.connect(lambda _v: self._on_option())
-
-        # 与 WebSocket 页共用同一套骨架：第一行协议输入按比例填满，
-        # 第二行低频开关 + 握手头，label / 间距 / 配色完全一致。
-        opts = Card(radius=9)
-        ov = QVBoxLayout(opts)
-        ov.setContentsMargins(12, 6, 12, 6)
-        ov.setSpacing(6)
-
-        row1 = QHBoxLayout()
-        row1.setSpacing(8)
-        row1.addWidget(Label("命名空间", 10.6, t.text_faint))
-        row1.addWidget(self.namespace, 1)
-        row1.addSpacing(8)
-        row1.addWidget(Label("认证 JSON", 10.6, t.text_faint))
-        row1.addWidget(self.auth, 3)
-        ov.addLayout(row1)
-
-        row2 = QHBoxLayout()
-        row2.setSpacing(8)
-        row2.addWidget(Label("等 ACK", 10.9, t.text_dim))
-        row2.addWidget(self.ack_sw)
-        row2.addSpacing(6)
-        row2.addWidget(Label("重连", 10.9, t.text_dim))
-        row2.addWidget(self.reconnect_sw)
-        row2.addSpacing(6)
-        row2.addWidget(Label("发送后清空", 10.9, t.text_dim))
-        row2.addWidget(self.clear_sw)
-        row2.addStretch(1)
-        od = Divider(vertical=True)
-        od.setFixedHeight(14)
-        row2.addWidget(od)
-        self.headers_btn = Button("握手头", "list", kind="ghost", height=24,
-                                  padding=8, font_size=10.8, icon_size=11)
-        self.headers_btn.setToolTip(i18n.tr("连接时一起发送的请求头，例如 Authorization"))
-        self.headers_btn.clicked.connect(self.headersToggled.emit)
-        row2.addWidget(self.headers_btn)
-        ov.addLayout(row2)
-
-        # 事件名 stretch 填满整行，按钮紧凑靠右；和 WebSocket 的工具行观感一致。
         self.event_name = QLineEdit()
         self.event_name.setObjectName("Field")
-        self.event_name.setFixedHeight(26)
+        self.event_name.setFixedHeight(28)
         i18n.placeholder(self.event_name, "事件名，例如 chat message")
         self.event_name.textChanged.connect(self._on_option)
 
@@ -136,8 +97,8 @@ class SioComposer(QWidget):
         self.send_btn = Button("发送事件", "send", kind="primary", height=26, padding=12,
                                font_size=11.6, icon_size=12)
         self.send_btn.clicked.connect(self._send)
-        tools = HBox((self.event_name, 1), self.fmt_btn, self.save_btn, self.send_btn,
-                     spacing=8, margins=(0, 0, 0, 0))
+        tools = HBox(self.kind, self.event_name, 1, self.fmt_btn, self.save_btn,
+                     self.send_btn, spacing=8, margins=(0, 0, 0, 0))
 
         self.editor = CodeView(read_only=False, highlight=True, show_gutter=False)
         self.editor.setMinimumHeight(68)
@@ -157,14 +118,86 @@ class SioComposer(QWidget):
         self.saved_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.saved_scroll.hide()
 
+        chat_page = QWidget()
+        cl = QVBoxLayout(chat_page)
+        cl.setContentsMargins(14, 10, 14, 12)
+        cl.setSpacing(8)
+        cl.addLayout(ns_row)
+        cl.addWidget(tools)
+        cl.addWidget(self.editor, 1)
+        cl.addWidget(self.saved_note)
+        cl.addWidget(self.saved_scroll)
+
+        # --- 「认证」页：握手期认证与连接行为，单独成页
+        self.auth = QLineEdit()
+        self.auth.setObjectName("Field")
+        self.auth.setFixedHeight(28)
+        i18n.placeholder(self.auth, '{"token": "..."}')
+        self.auth.setToolTip(i18n.tr("连接时随 40 包发送的认证对象，必须是合法 JSON"))
+        self.auth.textChanged.connect(self._on_option)
+
+        self.ack_sw = Switch(False)
+        self.ack_sw.setToolTip(i18n.tr("开启后这次事件会带 ack id，收到回执会在日志里显示"))
+        self.ack_sw.toggled.connect(lambda _v: self._on_option())
+        self.clear_sw = Switch(False)
+        self.clear_sw.toggled.connect(lambda _v: self._on_option())
+        self.reconnect_sw = Switch(True)
+        self.reconnect_sw.toggled.connect(lambda _v: self._on_option())
+
+        auth_card = Card(radius=10)
+        av = QVBoxLayout(auth_card)
+        av.setContentsMargins(16, 14, 16, 14)
+        av.setSpacing(12)
+        av.addWidget(Label(i18n.tr("握手认证"), 11, t.text_dim))
+        a1 = QHBoxLayout()
+        a1.setSpacing(10)
+        a1.addWidget(Label("认证 JSON", 11, t.text_faint))
+        a1.addWidget(self.auth, 1)
+        av.addLayout(a1)
+        av.addWidget(Divider())
+        av.addWidget(Label(i18n.tr("连接行为"), 11, t.text_dim))
+        a2 = QHBoxLayout()
+        a2.setSpacing(10)
+        a2.addWidget(Label("等 ACK", 11, t.text_dim))
+        a2.addWidget(self.ack_sw)
+        a2.addSpacing(10)
+        a2.addWidget(Label("重连", 11, t.text_dim))
+        a2.addWidget(self.reconnect_sw)
+        a2.addSpacing(10)
+        a2.addWidget(Label("发送后清空", 11, t.text_dim))
+        a2.addWidget(self.clear_sw)
+        a2.addStretch(1)
+        self.headers_btn = Button("握手头", "list", kind="ghost", height=26, padding=10,
+                                  font_size=11, icon_size=12)
+        self.headers_btn.setToolTip(i18n.tr("连接时一起发送的请求头，例如 Authorization"))
+        self.headers_btn.clicked.connect(self.headersToggled.emit)
+        a2.addWidget(self.headers_btn)
+        av.addLayout(a2)
+        hint = Label(i18n.tr("认证对象在连接时随握手发送；连接行为在断开重连后重新应用。"),
+                     10.4, t.text_faint)
+        hint.setWordWrap(True)
+        av.addWidget(hint)
+        av.addStretch(1)
+
+        auth_page = QWidget()
+        al = QVBoxLayout(auth_page)
+        al.setContentsMargins(14, 10, 14, 12)
+        al.setSpacing(0)
+        al.addWidget(auth_card, 1)
+
+        # 与 HTTP 请求页同款 underline 页签：只有「通讯 / 认证」两页。
+        self.tabs = SegmentedTabs([("chat", "通讯"), ("auth", "认证")],
+                                  style="underline", height=32, pad_h=10, font_size=12.2)
+        self.tabs.changed.connect(self._on_tab)
+        self.stack = QStackedWidget()
+        self.stack.addWidget(chat_page)
+        self.stack.addWidget(auth_page)
+
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 8, 14, 10)
-        lay.setSpacing(8)
-        lay.addWidget(opts)
-        lay.addWidget(tools)
-        lay.addWidget(self.editor, 1)
-        lay.addWidget(self.saved_note)
-        lay.addWidget(self.saved_scroll)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self.tabs)
+        lay.addWidget(self.stack, 1)
         self._refresh_saved()
 
     # -------------------------------------------------- 数据
@@ -190,8 +223,11 @@ class SioComposer(QWidget):
             self.editor.blockSignals(True)
             self.editor.setPlainText(str(self._sio.get("draft") or ""))
             self.editor.blockSignals(False)
-            self.editor.set_language("json" if self._looks_json(self.editor.toPlainText())
-                                     else None)
+            kind = str(self._sio.get("kind") or "json")
+            self.kind.blockSignals(True)
+            self.kind.set_current(kind, emit=False)
+            self.kind.blockSignals(False)
+            self._apply_kind(kind)
             self._refresh_saved()
         finally:
             self._loading = False
@@ -204,6 +240,7 @@ class SioComposer(QWidget):
         sio["ack"] = self.ack_sw.isChecked()
         sio["auto_reconnect"] = self.reconnect_sw.isChecked()
         sio["clear_after_send"] = self.clear_sw.isChecked()
+        sio["kind"] = self.kind_key()
         sio["draft"] = self.editor.toPlainText()
 
     def _on_draft_changed(self) -> None:
@@ -218,6 +255,25 @@ class SioComposer(QWidget):
     def _on_option(self) -> None:
         if not self._loading:
             self.changed.emit()
+
+    def _on_tab(self, key: str) -> None:
+        """通讯 / 认证双页签：只有两页，直接按 key 切。"""
+        self.stack.setCurrentIndex(1 if key == "auth" else 0)
+
+    def _on_kind(self, key: str) -> None:
+        """切换载荷高亮模式；不在草稿 textChanged 里 set_language，避免死循环。"""
+        if self._loading:
+            return
+        self._apply_kind(key)
+        self.changed.emit()
+
+    def _apply_kind(self, key: str) -> None:
+        is_json = key == "json"
+        self.editor.set_language("json" if is_json else None)
+        self.fmt_btn.setVisible(is_json)
+
+    def kind_key(self) -> str:
+        return self.kind.current() or "json"
 
     @staticmethod
     def _looks_json(text: str) -> bool:
