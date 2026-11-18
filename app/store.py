@@ -19,9 +19,19 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.45"
+VERSION = "1.0.46"
 
 CHANGELOG = [
+    {
+        "version": "1.0.46",
+        "date": "2026-11-19",
+        "items": [
+            "统一 WebSocket 与 Socket.IO 两页的排版骨架：选项行 / 主体行 / 编辑器 / 常用胶囊，观感与 HTTP 请求一致且只保留实用功能",
+            "地址栏方法标识在实时协议下收窄成小徽标，把空间让给地址输入框，消除方法名右侧空隙",
+            "子协议、命名空间、认证、事件名等输入框改为自适应填满整行，按钮紧凑靠右，视觉更清净",
+            "低频开关整理到独立一行并与握手头对齐，两个实时页面风格完全一致；中英文均无裁切",
+        ],
+    },
     {
         "version": "1.0.45",
         "date": "2026-11-18",

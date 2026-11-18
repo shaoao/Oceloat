@@ -153,16 +153,16 @@ class WsComposer(QWidget):
         self._chips: List[MsgChip] = []
 
         # --- 连接选项（子协议 / 心跳 / 重连）
+        t = theme()
         self.proto = QLineEdit()
         self.proto.setObjectName("Field")
         self.proto.setFixedHeight(26)
-        self.proto.setFixedWidth(132)
         i18n.placeholder(self.proto, "可留空")
         self.proto.textChanged.connect(self._on_option)
         self.ping = QLineEdit()
         self.ping.setObjectName("Field")
         self.ping.setFixedHeight(26)
-        self.ping.setFixedWidth(52)
+        self.ping.setFixedWidth(56)
         i18n.placeholder(self.ping, "0")
         self.ping.setToolTip(i18n.tr("心跳间隔（秒），0 表示不发"))
         self.ping.textChanged.connect(self._on_option)
@@ -170,30 +170,41 @@ class WsComposer(QWidget):
         self.reconnect_sw.toggled.connect(lambda _v: self._on_option())
         self.clear_sw = Switch(False)
         self.clear_sw.toggled.connect(lambda _v: self._on_option())
+
+        # 选项统一排版：第一行协议输入（stretch 填满），第二行低频开关 + 握手头。
+        # 与 Socket.IO 页共用同一套骨架，视觉一致、输入框不再留半截空白。
         opts = Card(radius=9)
-        ol = QHBoxLayout(opts)
-        ol.setContentsMargins(12, 6, 12, 6)
-        ol.setSpacing(10)
-        ol.addWidget(Label("子协议", 10.6, theme().text_faint))
-        ol.addWidget(self.proto)
-        ol.addSpacing(4)
-        ol.addWidget(Label("心跳", 10.6, theme().text_faint))
-        ol.addWidget(self.ping)
-        ol.addWidget(Label("秒", 10.4, theme().text_faint))
-        ol.addStretch(1)
-        ol.addWidget(Label("自动重连", 10.9, theme().text_dim))
-        ol.addWidget(self.reconnect_sw)
-        ol.addSpacing(6)
-        ol.addWidget(Label("发送后清空", 10.9, theme().text_dim))
-        ol.addWidget(self.clear_sw)
+        ov = QVBoxLayout(opts)
+        ov.setContentsMargins(12, 6, 12, 6)
+        ov.setSpacing(6)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+        row1.addWidget(Label("子协议", 10.6, t.text_faint))
+        row1.addWidget(self.proto, 1)
+        row1.addSpacing(8)
+        row1.addWidget(Label("心跳", 10.6, t.text_faint))
+        row1.addWidget(self.ping)
+        row1.addWidget(Label("秒", 10.4, t.text_faint))
+        ov.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
+        row2.addWidget(Label("自动重连", 10.9, t.text_dim))
+        row2.addWidget(self.reconnect_sw)
+        row2.addSpacing(6)
+        row2.addWidget(Label("发送后清空", 10.9, t.text_dim))
+        row2.addWidget(self.clear_sw)
+        row2.addStretch(1)
         od = Divider(vertical=True)
         od.setFixedHeight(14)
-        ol.addWidget(od)
+        row2.addWidget(od)
         self.headers_btn = Button("握手头", "list", kind="ghost", height=24,
                                   padding=8, font_size=10.8, icon_size=11)
         self.headers_btn.setToolTip(i18n.tr("连接时一起发送的请求头，例如 Authorization"))
         self.headers_btn.clicked.connect(self.headersToggled.emit)
-        ol.addWidget(self.headers_btn)
+        row2.addWidget(self.headers_btn)
+        ov.addLayout(row2)
 
         # --- 消息编辑
         self.kind = SegmentedTabs([(k, label) for k, label in KINDS],
@@ -210,7 +221,7 @@ class WsComposer(QWidget):
         self.send_btn = Button("发送", "send", kind="primary", height=26, padding=12,
                                font_size=11.6, icon_size=12)
         self.send_btn.clicked.connect(self._send)
-        tools = HBox(self.kind, 0, self.fmt_btn, 1, self.save_btn, self.send_btn,
+        tools = HBox(self.kind, 1, self.fmt_btn, self.save_btn, self.send_btn,
                      spacing=8, margins=(0, 0, 0, 0))
 
         self.editor = CodeView(read_only=False, highlight=True, show_gutter=False)

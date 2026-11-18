@@ -1,5 +1,13 @@
 # What's Changed
 
+## v1.0.46 — 2026-11-19
+
+**Changed**
+- Unified the layout of the WebSocket and Socket.IO pages into one skeleton: options row / composer row / editor / frequent chips — matching the HTTP request view while keeping only useful controls.
+- The method badge on realtime pages now shrinks to a compact label, giving the room back to the URL field and removing the empty gap after the method name.
+- Protocol fields (subprotocol, namespace, auth, event name) now stretch to fill the row and action buttons sit flush right for a cleaner look.
+- Low-frequency switches are grouped on their own row and aligned with the handshake-headers button; both realtime pages now look identical, with no clipping in English or Chinese.
+
 ## v1.0.45 — 2026-11-18
 
 **Added**

@@ -62,7 +62,6 @@ class SioComposer(QWidget):
         self.namespace = QLineEdit()
         self.namespace.setObjectName("Field")
         self.namespace.setFixedHeight(26)
-        self.namespace.setFixedWidth(104)
         i18n.placeholder(self.namespace, "/")
         self.namespace.setToolTip(i18n.tr("默认命名空间填 /，自定义填 /admin"))
         self.namespace.textChanged.connect(self._on_option)
@@ -82,8 +81,8 @@ class SioComposer(QWidget):
         self.reconnect_sw = Switch(True)
         self.reconnect_sw.toggled.connect(lambda _v: self._on_option())
 
-        # 两行：第一行命名空间 + 认证（认证框自适应占满余宽），第二行开关 + 握手头。
-        # 英文文案比中文长，挤一行会把认证框和「Clear after send」压在一起。
+        # 与 WebSocket 页共用同一套骨架：第一行协议输入按比例填满，
+        # 第二行低频开关 + 握手头，label / 间距 / 配色完全一致。
         opts = Card(radius=9)
         ov = QVBoxLayout(opts)
         ov.setContentsMargins(12, 6, 12, 6)
@@ -92,10 +91,10 @@ class SioComposer(QWidget):
         row1 = QHBoxLayout()
         row1.setSpacing(8)
         row1.addWidget(Label("命名空间", 10.6, t.text_faint))
-        row1.addWidget(self.namespace)
+        row1.addWidget(self.namespace, 1)
         row1.addSpacing(8)
         row1.addWidget(Label("认证 JSON", 10.6, t.text_faint))
-        row1.addWidget(self.auth, 1)
+        row1.addWidget(self.auth, 3)
         ov.addLayout(row1)
 
         row2 = QHBoxLayout()
@@ -119,7 +118,7 @@ class SioComposer(QWidget):
         row2.addWidget(self.headers_btn)
         ov.addLayout(row2)
 
-        # 事件名单独一行，载荷用代码编辑器就地编辑；不乱塞 HTTP 的参数 / 认证页签
+        # 事件名 stretch 填满整行，按钮紧凑靠右；和 WebSocket 的工具行观感一致。
         self.event_name = QLineEdit()
         self.event_name.setObjectName("Field")
         self.event_name.setFixedHeight(26)
@@ -137,7 +136,7 @@ class SioComposer(QWidget):
         self.send_btn = Button("发送事件", "send", kind="primary", height=26, padding=12,
                                font_size=11.6, icon_size=12)
         self.send_btn.clicked.connect(self._send)
-        tools = HBox(self.event_name, 1, self.fmt_btn, 1, self.save_btn, self.send_btn,
+        tools = HBox((self.event_name, 1), self.fmt_btn, self.save_btn, self.send_btn,
                      spacing=8, margins=(0, 0, 0, 0))
 
         self.editor = CodeView(read_only=False, highlight=True, show_gutter=False)

@@ -219,8 +219,10 @@ class MethodSelector(QWidget):
         self.update()
 
     def set_locked(self, locked: bool) -> None:
-        """WebSocket 请求的方法是固定的：不弹下拉、不画箭头，看起来就是个标识。"""
+        """WebSocket / Socket.IO 的方法固定：不弹下拉、不画箭头，收窄成协议徽标，
+        把腾出的横向空间让给地址输入框（实时页地址通常很长）。"""
         self._locked = bool(locked)
+        self.setFixedSize(52 if locked else 92, 30)
         self.setCursor(Qt.CursorShape.ArrowCursor if locked
                        else Qt.CursorShape.PointingHandCursor)
         self.setToolTip("" if locked else "选择请求方法")
