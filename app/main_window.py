@@ -1712,6 +1712,9 @@ class MainWindow(QWidget):
             tab["request"] = _copy.deepcopy(node)
             self.sidebar.refresh()
             self._sync_open_ids()
+            # 保存后左侧集合树立刻定位到新条目：用户不用自己去树里找，
+            # 保存动作和「看到结果」连贯起来。
+            self.sidebar.reveal(node["id"])
         self.store.save()
         tab["dirty"] = False
         self.tabstrip.update_tab(tab["id"], dirty=False)
@@ -2018,12 +2021,23 @@ class MainWindow(QWidget):
         dlg.exec()
 
     def open_trash(self) -> None:
-        """回收站：恢复误删的集合 / 请求，查看操作记录。"""
+        """回收站：恢复误删的集合 / 请求，恢复后立即回到原位置。"""
         from .trash_dialog import TrashDialog
 
         dlg = TrashDialog(self.store, self)
         dlg.changed.connect(self._on_store_changed)
+        # 恢复完把左侧集合树刷出来，并滚动定位到恢复的条目——之前 changed
+        # 只同步标签元数据、不刷新树，用户会觉得「恢复了但左边没出现」。
+        dlg.restored.connect(self._on_trash_restored)
         dlg.exec()
+
+    def _on_trash_restored(self, node_ids: list) -> None:
+        """回收站恢复后：刷新集合树并定位到恢复出来的条目。"""
+        self.sidebar.refresh()
+        self._on_store_changed()
+        for nid in node_ids or []:
+            self.sidebar.reveal(nid)
+        self._sync_open_ids()
 
     def _on_imported(self, count: int) -> None:
         self.sidebar.refresh()

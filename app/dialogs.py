@@ -1191,6 +1191,18 @@ class SettingsDialog(GlassDialog):
         self.limit_seg.set_current(str(limit) if str(limit) in ("100", "240", "500") else "240",
                                    emit=False)
         self.limit_seg.changed.connect(self._on_history_limit)
+
+        # 回收站自动清理：默认开启，保留天数可切（7 / 30 / 90）。
+        # 保存设置时（_save）立即按新配置清一次过期条目，不必等下次启动。
+        self.trash_enabled = Switch(bool(self.store.settings.get("trash_enabled", True)))
+        self.trash_enabled.toggled.connect(lambda _v: self._save())
+        days = int(self.store.settings.get("trash_days", 30))
+        self.trash_days_seg = SegmentedTabs(
+            [("7", "7 天"), ("30", "30 天"), ("90", "90 天")],
+            style="pill", height=26, font_size=11.5, pad_h=12)
+        self.trash_days_seg.set_current(str(days) if str(days) in ("7", "30", "90") else "30",
+                                        emit=False)
+        self.trash_days_seg.changed.connect(self._on_trash_days)
         block = self._card(
             self._row("本地数据", path, open_dir, mono_desc=True),
             self._row("历史记录上限",
@@ -1198,8 +1210,20 @@ class SettingsDialog(GlassDialog):
                       n=len(self.store.history or [])),
                       self.limit_seg),
             self._row("清空历史", "只删历史记录，集合与环境变量不受影响。", clear_hist),
+            self._row("回收站自动清理",
+                      "开启后按保留天数清除过期条目，默认开、保留 30 天。",
+                      self.trash_enabled),
+            self._row("回收站保留天数", "超过天数的条目在保存设置与启动时自动彻底删除。",
+                      self.trash_days_seg),
         )
         return self._page_shell("数据", "所有数据都是本地纯 JSON，可直接备份或版本管理。", block)
+
+    def _on_trash_days(self, value: str) -> None:
+        try:
+            self.store.settings["trash_days"] = int(value)
+        except (TypeError, ValueError):
+            self.store.settings["trash_days"] = 30
+        self._save()
 
     def _page_about_app(self) -> QWidget:
         """关于页：品牌区 + 运行环境 + 常用入口，做得像一张「应用名片」。"""
@@ -1558,10 +1582,13 @@ class SettingsDialog(GlassDialog):
                 pass
         for attr, key in (("redirect", "follow_redirects"), ("verify", "verify_ssl"),
                           ("auto_name", "auto_name"), ("restore_session", "restore_session"),
-                          ("glass_switch", "glass_all")):
+                          ("glass_switch", "glass_all"), ("trash_enabled", "trash_enabled")):
             wdg = getattr(self, attr, None)
             if wdg is not None:
                 s[key] = wdg.isChecked()
+        # 「默认开启，点击保存时清掉过期内容」——设置落盘前先按新配置清一次，
+        # 这样改完保留天数立刻生效，不用等下次启动。
+        self.store.purge_expired_trash()
         self.store.save()
         self.settingsChanged.emit()
 

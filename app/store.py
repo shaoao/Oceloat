@@ -19,9 +19,21 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.39"
+VERSION = "1.0.40"
 
 CHANGELOG = [
+    {
+        "version": "1.0.40",
+        "date": "2026-11-18",
+        "items": [
+            "回收站重排版：搜索移到顶部统计条右侧、去掉多余的操作记录、详情更丰富（方法 / URL / 正文 / 请求头 / 原位置）",
+            "自定义日期选择改为跟随主题的纯黑日历，周末 / 选中态不再用系统默认的红字紫底",
+            "刷新按钮真正重新读盘：其它窗口或外部改动能立刻反映到回收站，并给出提示",
+            "设置 · 数据新增「回收站自动清理」开关（默认开）与保留天数（7 / 30 / 90 天），保存时清掉过期条目",
+            "修复：保存请求后左侧集合树立即定位到新条目；恢复请求后侧边栏立即刷新并回原位置",
+            "恢复文件夹时自动连带勾选其子项并提示将一并恢复；请求含 {{变量}} 时给出环境变量提示（中英双语）",
+        ],
+    },
     {
         "version": "1.0.39",
         "date": "2026-11-18",
@@ -911,6 +923,9 @@ def _sample_state() -> Dict[str, Any]:
             "code_font_size": 11.8,
             "history_limit": 240,
             "history_collapsed": [],
+            # 回收站自动清理：默认开，保留 30 天，应用启动与保存设置时执行
+            "trash_enabled": True,
+            "trash_days": 30,
             "auto_name": True,
             "restore_session": True,
             "animations": True,
@@ -960,6 +975,10 @@ class Store:
         for k, v in base["settings"].items():
             data["settings"].setdefault(k, v)
         store = cls(data, path)
+        # 启动时按设置清理过期回收站条目（默认开、保留 30 天）。有清理才落盘，
+        # 免得每次启动都重写一次 state.json。
+        if store.purge_expired_trash():
+            store.save()
         # 只有还没有活跃 Store 时才占位：别的地方为了校验落盘而 Store.load() 一份快照，
         # 不该把正在用的那份挤掉（否则弹窗读到的设置会「不生效」）。
         if cls._active is None:
@@ -1181,6 +1200,65 @@ class Store:
             self.trash.clear()
             self._trash_log("clear", "", f"清空回收站，{n} 项被彻底删除")
         return n
+
+    def trash_keep_days(self) -> int:
+        """回收站保留天数（1~365，缺省 / 非法回落到 30）。"""
+        try:
+            days = int(self.settings.get("trash_days", 30))
+        except (TypeError, ValueError):
+            days = 30
+        return max(1, min(365, days))
+
+    def purge_expired_trash(self) -> int:
+        """自动清理：删掉超过保留天数的条目，返回清理数量。
+
+        受 trash_enabled 开关控制（默认开）。删除按「移入回收站的时间」算，
+        到点的条目连同其快照一起彻底删除，不可恢复。清理本身不写操作记录，
+        免得每次启动都往时间线里塞一条噪音。
+        """
+        if not self.settings.get("trash_enabled", True):
+            return 0
+        cutoff = time.time() - self.trash_keep_days() * 86400
+        expired = [r for r in self.trash if float(r.get("deleted_at", 0)) < cutoff]
+        if not expired:
+            return 0
+        for rec in expired:
+            try:
+                self.trash.remove(rec)
+            except ValueError:
+                pass
+        return len(expired)
+
+    @staticmethod
+    def trash_request_count(node: Dict[str, Any]) -> int:
+        """递归统计节点快照里的请求数（文件夹恢复提示用）。"""
+        stack = [node]
+        count = 0
+        while stack:
+            cur = stack.pop()
+            if cur.get("type") == "request":
+                count += 1
+            stack.extend(cur.get("children") or [])
+        return count
+
+    def env_refs(self, node: Dict[str, Any]) -> List[str]:
+        """找出节点里引用到的环境变量名 {{name}}（URL / 参数 / 头 / 正文）。
+
+        恢复时用来提示「这条请求依赖环境变量」；只做静态扫描，不求值。
+        """
+        import re
+        blob = json.dumps(node, ensure_ascii=False, default=str)
+        names = re.findall(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}", blob)
+        seen: List[str] = []
+        for name in names:
+            if name not in seen:
+                seen.append(name)
+        return seen
+
+    def missing_env_refs(self, node: Dict[str, Any]) -> List[str]:
+        """引用了但当前环境里不存在的变量名（恢复时给「小提示」用）。"""
+        defined = set(self.env_vars().keys())
+        return [name for name in self.env_refs(node) if name not in defined]
 
     def move_node(self, node_id: str, parent_id: Optional[str], index: int) -> None:
         node, siblings = self.find_with_parent(node_id)

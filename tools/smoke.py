@@ -3223,6 +3223,76 @@ def main() -> int:
         check("回收站按 URL 搜索", len(dlg.list.items) == 1)
         dlg._on_search("不存在的关键词")
         check("回收站搜索无结果", len(dlg.list.items) == 0)
+        # v1.0.40：搜索内嵌顶部统计条、去掉操作记录、详情更丰富
+        check("搜索框内嵌统计条", dlg.search.parent() is not None)
+        check("不再有操作记录面板", not hasattr(dlg, "ops"))
+        check("详情带滚动区", dlg.detail_scroll.widget() is dlg.detail)
+        dlg._on_search("")
+        check("自定义日期控件已主题化",
+              "QCalendarWidget" in dlg.date_from.calendarWidget().styleSheet())
+        # 自动清理：设置开关 + 保留天数，保存后立即清过期
+        check("自动清理默认开启", st.settings.get("trash_enabled") is True)
+        check("保留天数默认 30", st.trash_keep_days() == 30)
+        import time as _time
+        before = len(st.trash)
+        old = _nr("过期条目", "GET", "https://old.test")
+        st.collections.append(old)
+        st.move_to_trash(old["id"])
+        st.trash[0]["deleted_at"] = _time.time() - 40 * 86400
+        check("清掉 40 天前条目",
+              st.purge_expired_trash() == 1 and len(st.trash) == before)
+        st.settings["trash_enabled"] = False
+        st.collections.append(old)
+        st.move_to_trash(old["id"])
+        st.trash[0]["deleted_at"] = _time.time() - 40 * 86400
+        check("关闭时不清理",
+              st.purge_expired_trash() == 0 and len(st.trash) == before + 1)
+        st.settings["trash_enabled"] = True
+        st.clear_trash()
+        # 级联 / 环境变量检测
+        env_folder = _nf("依赖环境")
+        dep = _nr("带变量", "GET", "{{base_url}}/x?t={{token}}")
+        env_folder["children"] = [dep]
+        check("统计文件夹子请求数", st.trash_request_count(env_folder) == 1)
+        refs = st.env_refs(dep)
+        check("识别 {{变量}}", "base_url" in refs and "token" in refs)
+        missing = set(st.missing_env_refs(dep))
+        check("找出未定义变量", "token" not in missing or "base_url" not in missing)
+        # 恢复提示文本生成（确认弹窗不真的弹出，只测文本拼装）
+        notes = dlg._restore_notes([{"node": env_folder, "deleted_at": _time.time()}])
+        check("恢复提示含级联与变量", any("请求" in n for n in notes))
+        # 勾选文件夹连带勾选其独立子项
+        cascade_folder = _nf("级联父")
+        kid = _nr("独立子", "GET", "https://kid.test")
+        kid["id"] = "kid_independent_001"
+        import copy as _copy
+        cascade_folder["children"] = [_copy.deepcopy(kid)]
+        st.collections.append(cascade_folder)
+        st.move_to_trash(cascade_folder["id"])
+        st.collections.append(kid)
+        st.move_to_trash(kid["id"])
+        dlg.reload()
+        folder_row = next(r for r in dlg.list.items
+                          if r["node"].get("name") == "级联父")
+        dlg.list.selected = {folder_row["id"]}
+        dlg.list._cascade(folder_row["id"], dlg.list.selected)
+        check("勾选文件夹连带子项",
+              any(r["node"].get("id") == "kid_independent_001" and r["id"] in dlg.list.selected
+                  for r in dlg.list.items))
+        st.clear_trash()
+
+        # restored 信号：恢复普通请求（无级联 / 无缺失变量，不会弹确认窗）
+        plain = _nr("恢复定位测试", "GET", "https://plain.test")
+        st.collections.append(plain)
+        st.move_to_trash(plain["id"])
+        got_ids = []
+        dlg.restored.connect(lambda ids: got_ids.extend(ids))
+        dlg.reload()
+        target = next(r["id"] for r in dlg.list.items
+                      if r["node"].get("id") == plain["id"])
+        dlg.list.selected = {target}
+        dlg._restore()
+        check("恢复发出 node_id 信号", plain["id"] in got_ids, str(got_ids))
         dlg.deleteLater()
         return 0
 

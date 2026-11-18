@@ -1,9 +1,9 @@
 """回收站：删除的集合 / 文件夹 / 请求先落到这里，可原样恢复。
 
-一个带背景模糊的独立窗口（继承 GlassDialog + BLUR_FIXED），布局刻意做成
-「左侧控制 + 右侧列表 + 底部详情」的三段式，和数据编辑区分开：左边管筛选
-与时间、右边是条目、底部看详情，操作记录单独一列时间线。全部沿用纯黑简约
-主题——靠明暗层次和语义色区分，不用渐变和彩色描边。
+带背景模糊的独立窗口（GlassDialog + BLUR_FIXED）。布局刻意做成
+「顶部统计条（搜索内嵌右上）+ 左侧筛选 + 右侧列表 / 详情」三段式——
+和数据编辑区分开：顶部一眼看全貌、左边管筛选与时间、右边是条目与完整详情。
+全部沿用纯黑简约主题：靠明暗层次和语义色区分，不用渐变和彩色描边。
 """
 from __future__ import annotations
 
@@ -11,9 +11,10 @@ import datetime as _dt
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QPoint, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QDate, QPoint, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
+    QCalendarWidget,
     QDateEdit,
     QHBoxLayout,
     QLineEdit,
@@ -64,6 +65,55 @@ def _method_color(method: str) -> str:
     }.get((method or "").upper(), t.text_dim)
 
 
+# ---------------------------------------------------------------- 日期控件
+def _style_date_edit(w: QDateEdit) -> None:
+    """把 QDateEdit + 弹出的日历统一成当前纯黑主题。
+
+    Qt 原生日历是白底、红周末、紫选中，扔进深色窗口里非常突兀。这里同时
+    给行编辑器和 calendarWidget 挂 QSS，并显式覆盖周末文字格式——周末的
+    红色来自星期格式而非 palette，只写 QSS 是盖不掉的。
+    """
+    t = theme()
+    w.setFixedHeight(30)
+    w.setStyleSheet(f"""
+        QDateEdit {{ background: {t.card}; color: {t.text};
+            border: 1px solid {S(t.border)}; border-radius: 6px; padding: 2px 8px; }}
+        QDateEdit:focus {{ border: 1px solid {S(t.border_strong)}; }}
+        QDateEdit::drop-down {{ width: 20px; border: none; background: transparent; }}
+        QDateEdit QAbstractItemView {{ background: {t.panel}; color: {t.text}; }}
+    """)
+    cal = w.calendarWidget()
+    if cal is None:
+        return
+    cal.setStyleSheet(f"""
+        QCalendarWidget {{ background: {t.panel}; border: 1px solid {S(t.border_strong)};
+            border-radius: 8px; }}
+        QWidget#qt_calendar_navigationbar {{ background: {t.panel_alt};
+            border: none; border-top-left-radius: 8px; border-top-right-radius: 8px; }}
+        QToolButton {{ color: {t.text_dim}; background: transparent; border: none;
+            padding: 5px 7px; }}
+        QToolButton:hover {{ background: {S(t.hover)}; border-radius: 5px; }}
+        QSpinBox {{ background: {t.card}; color: {t.text}; border: 1px solid {S(t.border)};
+            border-radius: 5px; padding: 2px 6px; }}
+        QTableView {{ background: {t.panel}; gridline-color: transparent;
+            selection-background-color: {S(t.selected)}; }}
+        QAbstractItemView {{ color: {t.text}; selection-color: {t.text};
+            selection-background-color: {S(t.selected)}; }}
+        QAbstractItemView::item:hover {{ background: {S(t.hover)}; }}
+    """)
+    # 周末 / 表头文字：默认红字，显式改成主题前景
+    fmt = QColor(t.text)
+    from PyQt6.QtGui import QTextCharFormat
+    normal = QTextCharFormat()
+    normal.setForeground(fmt)
+    header = QTextCharFormat()
+    header.setForeground(QColor(t.text_dim))
+    header.setFont(font(10.5, weight=QFont.Weight.DemiBold))
+    for dow in (Qt.DayOfWeek.Saturday, Qt.DayOfWeek.Sunday):
+        cal.setWeekdayTextFormat(dow, normal)
+    cal.setHeaderTextFormat(header)
+
+
 # ---------------------------------------------------------------- 回收站条目列表
 class TrashList(QWidget):
     """自绘条目列表：卡片式行、支持 Ctrl / Shift 多选与 hover。"""
@@ -95,6 +145,28 @@ class TrashList(QWidget):
         i = int(y // self.ROW_H)
         return i if 0 <= i < len(self.items) else -1
 
+    @staticmethod
+    def _descendant_node_ids(node: Dict[str, Any]) -> set:
+        """文件夹快照里所有子项的 node id（级联勾选 / 去重恢复用）。"""
+        out: set = set()
+        stack = list(node.get("children") or [])
+        while stack:
+            cur = stack.pop()
+            if cur.get("id"):
+                out.add(cur.get("id"))
+            stack.extend(cur.get("children") or [])
+        return out
+
+    def _cascade(self, tid: str, selected: set) -> None:
+        """勾选文件夹时连带勾选它在回收站里独立的子项（若有）。"""
+        rec = next((r for r in self.items if r.get("id") == tid), None)
+        if not rec or rec.get("node", {}).get("type") != "folder":
+            return
+        child_ids = self._descendant_node_ids(rec.get("node", {}))
+        for r in self.items:
+            if r.get("node", {}).get("id") in child_ids:
+                selected.add(r.get("id"))
+
     def mouseMoveEvent(self, e):  # noqa: N802
         i = self._row_at(e.position().y())
         if i != self._hover:
@@ -122,9 +194,11 @@ class TrashList(QWidget):
                 else:
                     self.selected.add(tid)
                 self._anchor = i
+            self._cascade(tid, self.selected)
         else:
             self.selected = {tid}
             self._anchor = i
+            self._cascade(tid, self.selected)
         self.update()
         self.picked.emit()
 
@@ -195,13 +269,14 @@ class TrashList(QWidget):
 
 # ---------------------------------------------------------------- 详情面板
 class TrashDetail(QWidget):
-    """选中条目的详情：名称 / 类型 / 方法 / URL / 删除时间 / 子项清单。"""
+    """选中条目的完整详情：身份 / 请求配置 / 环境变量 / 原位置 / 时间。"""
 
-    def __init__(self, parent=None):
+    def __init__(self, store: Optional[Store] = None, parent=None):
         super().__init__(parent)
+        self.store = store
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(14, 12, 14, 12)
-        self._lay.setSpacing(7)
+        self._lay.setSpacing(6)
         self.show_empty()
 
     def show_empty(self) -> None:
@@ -238,33 +313,84 @@ class TrashDetail(QWidget):
         hl.addWidget(val, 1)
         self._lay.addWidget(row)
 
+    def _pill_row(self, pills: List) -> None:
+        row = HBox(*pills, 1, spacing=6)
+        row.layout().setContentsMargins(0, 1, 0, 1)
+        self._lay.addWidget(row)
+
+    def _parent_name(self, rec: Dict[str, Any]) -> str:
+        pid = rec.get("parent_id")
+        if not pid:
+            return i18n.tr("顶层")
+        if self.store is not None:
+            parent = self.store.find(str(pid))
+            if parent is not None:
+                return str(parent.get("name") or pid)
+            # 父文件夹也一起被删了：从回收站快照里找名字
+            for other in self.store.trash:
+                node = other.get("node", {})
+                for cid in TrashList._descendant_node_ids(node) | {node.get("id")}:
+                    if cid == pid:
+                        return f"{node.get('name') or pid}（{i18n.tr('已删除')}）"
+        return i18n.trf("原文件夹 {id}", id=str(pid)[:6])
+
     def show_record(self, rec: Dict[str, Any]) -> None:
         self._clear()
         t = theme()
         node = rec.get("node", {})
         is_folder = node.get("type") == "folder"
+        method = str(node.get("method") or "GET")
+
+        # 标题 + 类型 / 方法胶囊
         title = Label(node.get("name") or i18n.tr("未命名"), 13, t.text,
                       weight=QFont.Weight.DemiBold)
         title.setWordWrap(True)
         self._lay.addWidget(title)
+        from .widgets import Pill
+        self._pill_row([
+            Pill(i18n.tr("文件夹") if is_folder else i18n.tr("请求"),
+                 t.warning if is_folder else t.info, font_size=9.6, height=18),
+        ] if is_folder else [
+            Pill(method, _method_color(method), font_size=9.6, height=18),
+            Pill(i18n.tr("请求"), t.text_dim, font_size=9.6, height=18),
+        ])
         self._lay.addWidget(Divider())
 
         self._row(i18n.tr("类型"), i18n.tr("文件夹") if is_folder else i18n.tr("请求"))
         if not is_folder:
-            method = str(node.get("method") or "GET")
             self._row(i18n.tr("方法"), method, _method_color(method), mono_value=True)
             url = str(node.get("url") or "-")
             self._row("URL", url, t.info, mono_value=True)
+            # 请求配置：参数 / 请求头 / 正文
+            n_params = len(node.get("params") or [])
+            n_headers = len(node.get("headers") or [])
+            body = node.get("body") or {}
+            mode = str(body.get("mode") or "-") if isinstance(body, dict) else "-"
+            self._row(i18n.tr("参数"), i18n.trf("{n} 项", n=n_params), t.text_dim)
+            self._row(i18n.tr("请求头"), i18n.trf("{n} 项", n=n_headers), t.text_dim)
+            self._row(i18n.tr("正文"), mode, t.text_dim)
+            # 环境变量：列出引用到的变量名，缺失的用警告色
+            if self.store is not None:
+                refs = self.store.env_refs(node)
+                if refs:
+                    missing = set(self.store.missing_env_refs(node))
+                    txt = ", ".join("{{" + r + "}}" + (i18n.tr("（未定义）") if r in missing else "")
+                                    for r in refs)
+                    self._row(i18n.tr("环境变量"), txt,
+                              t.warning if missing else t.text_dim, mono_value=True)
         else:
             kids = self._collect_requests(node.get("children") or [])
             self._row(i18n.tr("包含"), i18n.trf("{n} 个请求", n=len(kids)))
+            if kids:
+                names = "、".join(str(k.get("name") or "?") for k in kids[:5])
+                if len(kids) > 5:
+                    names += i18n.trf(" 等 {n} 项", n=len(kids))
+                self._row(i18n.tr("子请求"), names, t.text_dim)
         self._row(i18n.tr("删除时间"), _fmt_full(rec.get("deleted_at", 0)),
                   t.text_dim, mono_value=True)
-        where = i18n.tr("顶层") if not rec.get("parent_id") else \
-            i18n.trf("原文件夹 {id}", id=str(rec.get("parent_id"))[:6])
+        where = self._parent_name(rec)
         self._row(i18n.tr("原位置"), f"{where} · #{int(rec.get('index', 0)) + 1}",
                   t.text_dim)
-        self._lay.addStretch(1)
 
     @staticmethod
     def _collect_requests(children: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -276,74 +402,13 @@ class TrashDetail(QWidget):
         return out
 
 
-# ---------------------------------------------------------------- 操作记录时间线
-class TrashOps(QWidget):
-    """回收站操作记录：一条一条时间线，带动作色点与具体时间。"""
-
-    OP_TEXT = {
-        "delete": ("移入回收站", "warning"),
-        "restore": ("已恢复", "success"),
-        "purge": ("彻底删除", "danger"),
-        "clear": ("清空回收站", "danger"),
-    }
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._lay = QVBoxLayout(self)
-        self._lay.setContentsMargins(0, 0, 0, 0)
-        self._lay.setSpacing(0)
-        self.setOps([])
-
-    def setOps(self, ops: List[Dict[str, Any]]) -> None:  # noqa: N802
-        while self._lay.count():
-            item = self._lay.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.setParent(None)
-                w.deleteLater()
-        t = theme()
-        if not ops:
-            hint = Label(i18n.tr("暂无操作记录"), 10.5, t.text_faint)
-            hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._lay.addWidget(hint)
-            return
-        for op in ops[:60]:
-            kind = op.get("op", "delete")
-            text, color_key = self.OP_TEXT.get(kind, (kind, "text_dim"))
-            color = getattr(t, color_key, t.text_dim)
-            row = QWidget()
-            rl = QHBoxLayout(row)
-            rl.setContentsMargins(2, 5, 2, 5)
-            rl.setSpacing(8)
-            dot = Label("●", 9, color)
-            dot.setFixedWidth(12)
-            dot.setAlignment(Qt.AlignmentFlag.AlignTop)
-            rl.addWidget(dot, 0, Qt.AlignmentFlag.AlignTop)
-            body = QWidget()
-            bl = QVBoxLayout(body)
-            bl.setContentsMargins(0, 0, 0, 0)
-            bl.setSpacing(1)
-            name = op.get("name") or (op.get("detail") or text)
-            head = Label(f"{text} · {name}", 10.5, t.text_dim)
-            head.setWordWrap(True)
-            bl.addWidget(head)
-            detail_bits = [x for x in (op.get("detail", ""), _fmt_deleted(op.get("at", 0)))
-                           if x and x != name]
-            if detail_bits:
-                sub = Label("  ·  ".join(detail_bits), 9.5, t.text_faint, mono_font=True)
-                sub.setWordWrap(True)
-                bl.addWidget(sub)
-            rl.addWidget(body, 1)
-            self._lay.addWidget(row)
-        self._lay.addStretch(1)
-
-
 # ---------------------------------------------------------------- 主窗口
 class TrashDialog(GlassDialog):
-    """回收站窗口：恢复 / 彻底删除 / 详情 / 搜索 / 日期范围 / 操作记录。"""
+    """回收站窗口：恢复 / 彻底删除 / 详情 / 搜索 / 日期范围 / 自动清理。"""
 
     BLUR_FIXED = True
     changed = pyqtSignal()               # 数据变动，主窗口刷新集合树
+    restored = pyqtSignal(list)          # 恢复完成，携带 node_id 列表（侧边栏定位）
 
     def __init__(self, store: Store, parent=None):
         super().__init__(parent, 940, 620, i18n.tr("回收站"))
@@ -360,17 +425,10 @@ class TrashDialog(GlassDialog):
         body.setContentsMargins(16, 10, 16, 14)
         body.setSpacing(10)
 
-        # 顶部统计条
-        self.stat_total = Label("0", 19, t.text, mono_font=True,
-                                weight=QFont.Weight.DemiBold)
-        self.stat_req = Label("0", 19, t.info, mono_font=True,
-                              weight=QFont.Weight.DemiBold)
-        self.stat_folder = Label("0", 19, t.warning, mono_font=True,
-                                 weight=QFont.Weight.DemiBold)
-        self.stat_oldest = Label("-", 12, t.text_dim, mono_font=True)
+        # 顶部统计条：左侧数字 + 右侧搜索框（搜索内嵌在这里，不占左栏位置）
         body.addWidget(self._stat_bar())
 
-        # 主体：左控制 / 右列表+详情
+        # 主体：左筛选 / 右列表+详情
         main = QWidget()
         ml = QHBoxLayout(main)
         ml.setContentsMargins(0, 0, 0, 0)
@@ -390,7 +448,7 @@ class TrashDialog(GlassDialog):
         bar = QWidget()
         hl = QHBoxLayout(bar)
         hl.setContentsMargins(2, 0, 2, 0)
-        hl.setSpacing(10)
+        hl.setSpacing(8)
 
         def cell(num: Label, caption: str, color: Optional[str] = None) -> QWidget:
             w = QWidget()
@@ -402,32 +460,36 @@ class TrashDialog(GlassDialog):
             vl.addWidget(cap)
             return w
 
+        self.stat_total = Label("0", 19, t.text, mono_font=True,
+                                weight=QFont.Weight.DemiBold)
+        self.stat_req = Label("0", 19, t.info, mono_font=True,
+                              weight=QFont.Weight.DemiBold)
+        self.stat_folder = Label("0", 19, t.warning, mono_font=True,
+                                 weight=QFont.Weight.DemiBold)
+        self.stat_oldest = Label("-", 12, t.text_dim, mono_font=True)
         hl.addWidget(cell(self.stat_total, i18n.tr("全部条目")))
         hl.addWidget(cell(self.stat_req, i18n.tr("请求")))
         hl.addWidget(cell(self.stat_folder, i18n.tr("文件夹")))
-        oldest = QWidget()
-        ol = QVBoxLayout(oldest)
-        ol.setContentsMargins(14, 8, 14, 8)
-        ol.setSpacing(2)
-        ol.addWidget(self.stat_oldest)
-        ol.addWidget(Label(i18n.tr("最早删除"), 10, t.text_faint))
-        hl.addWidget(oldest, 1)
+        hl.addWidget(cell(self.stat_oldest, i18n.tr("最早删除")))
+
+        # 搜索框移到右上角，和统计条同一行
+        self.search = QLineEdit()
+        self.search.setPlaceholderText(i18n.tr("搜索名称 / URL / 方法"))
+        self.search.setFixedSize(228, 30)
+        self.search.textChanged.connect(self._on_search)
+        hl.addWidget(self.search, 0, Qt.AlignmentFlag.AlignRight |
+                     Qt.AlignmentFlag.AlignVCenter)
         return bar
 
     def _left_panel(self) -> QWidget:
         t = theme()
         panel = QWidget()
-        panel.setFixedWidth(238)
+        panel.setFixedWidth(210)
         vl = QVBoxLayout(panel)
         vl.setContentsMargins(0, 0, 0, 0)
         vl.setSpacing(9)
 
-        self.search = QLineEdit()
-        self.search.setPlaceholderText(i18n.tr("搜索名称 / URL / 方法"))
-        self.search.setFixedHeight(30)
-        self.search.textChanged.connect(self._on_search)
-        vl.addWidget(self.search)
-
+        vl.addWidget(Label(i18n.tr("类型"), 10, t.text_faint))
         self.type_seg = SegmentedTabs(
             [("all", i18n.tr("全部")), ("request", i18n.tr("请求")),
              ("folder", i18n.tr("文件夹"))],
@@ -447,14 +509,15 @@ class TrashDialog(GlassDialog):
         self.date_row = QWidget()
         dr = QHBoxLayout(self.date_row)
         dr.setContentsMargins(0, 0, 0, 0)
-        dr.setSpacing(6)
+        dr.setSpacing(5)
         self.date_from = QDateEdit()
         self.date_to = QDateEdit()
         for w in (self.date_from, self.date_to):
             w.setCalendarPopup(True)
             w.setDisplayFormat("yyyy-MM-dd")
-            w.setDate(_dt.date.today())
-        self.date_from.setDate(_dt.date.today() - _dt.timedelta(days=30))
+            w.setDate(QDate.currentDate())
+            _style_date_edit(w)
+        self.date_from.setDate(QDate.currentDate().addDays(-30))
         self.date_from.dateChanged.connect(self._on_dates)
         self.date_to.dateChanged.connect(self._on_dates)
         dr.addWidget(self.date_from, 1)
@@ -463,16 +526,16 @@ class TrashDialog(GlassDialog):
         self.date_row.setVisible(False)
         vl.addWidget(self.date_row)
 
-        vl.addWidget(Label(i18n.tr("操作记录"), 10, t.text_faint))
-        self.ops_scroll = QScrollArea()
-        self.ops_scroll.setWidgetResizable(True)
-        self.ops_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        self.ops_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.ops = TrashOps()
-        self.ops_scroll.setWidget(self.ops)
-        self.ops_scroll.viewport().setStyleSheet(
-            f"QWidget {{ background: {theme().panel}; }}")
-        vl.addWidget(self.ops_scroll, 1)
+        # 自动清理提示：设置里开关，这里只说明当前策略
+        days = self.store.trash_keep_days()
+        on = bool(self.store.settings.get("trash_enabled", True))
+        tip = (i18n.trf("自动清理已开启：超过 {n} 天的条目在启动时清除。", n=days)
+               if on else i18n.tr("自动清理已关闭"))
+        hint = Label(tip, 10, t.text_faint)
+        hint.setWordWrap(True)
+        vl.addSpacing(4)
+        vl.addWidget(hint)
+        vl.addStretch(1)
         return panel
 
     def _right_panel(self) -> QWidget:
@@ -493,10 +556,26 @@ class TrashDialog(GlassDialog):
         self.list.activated.connect(self._on_activate)
         vl.addWidget(self.list_scroll, 1)
 
-        self.detail = TrashDetail()
-        self.detail.setMinimumHeight(140)
-        self.detail.setMaximumHeight(176)
-        vl.addWidget(self.detail, 0)
+        # 详情区更丰富：加高并可滚动，长 URL / 多行参数不会被裁掉
+        t = theme()
+        detail_box = QWidget()
+        db = QVBoxLayout(detail_box)
+        db.setContentsMargins(0, 0, 0, 0)
+        db.setSpacing(4)
+        db.addWidget(Label(i18n.tr("详情"), 10, t.text_faint))
+        self.detail_scroll = QScrollArea()
+        self.detail_scroll.setWidgetResizable(True)
+        self.detail_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.detail_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.detail = TrashDetail(self.store)
+        self.detail.setMinimumHeight(132)
+        self.detail_scroll.setWidget(self.detail)
+        self.detail_scroll.viewport().setStyleSheet(
+            f"QWidget {{ background: {t.panel}; }}")
+        self.detail_scroll.setFixedHeight(196)
+        db.addWidget(self.detail_scroll)
+        vl.addWidget(detail_box, 0)
         return wrap
 
     def _footer(self) -> QWidget:
@@ -518,14 +597,14 @@ class TrashDialog(GlassDialog):
                                 height=30, padding=12, font_size=11.5)
         self.clear_btn.clicked.connect(self._clear_all)
         self.refresh_btn = icon_button("refresh", i18n.tr("刷新"), 30, 15)
-        self.refresh_btn.clicked.connect(self.reload)
+        self.refresh_btn.clicked.connect(self._refresh)
         for w in (self.refresh_btn, self.clear_btn, self.purge_btn, self.restore_btn):
             hl.addWidget(w, 0)
         return bar
 
     # -------------------------------------------------- 数据
     def reload(self) -> None:
-        """从 store 重新读回收站 + 操作记录，应用当前筛选后刷新视图。"""
+        """从 store 重新读回收站，应用当前筛选后刷新视图。"""
         recs = list(self.store.trash)
         n_req = sum(1 for r in recs if r.get("node", {}).get("type") != "folder")
         n_folder = len(recs) - n_req
@@ -541,9 +620,9 @@ class TrashDialog(GlassDialog):
         view = [dict(r, _detail=self.store._trash_detail(r.get("node", {})))
                 for r in shown]
         self.list.set_items(view)
-        self.ops.setOps(list(self.store.trash_ops))
         self.count_label.setText(i18n.trf("显示 {shown} / {total} 项",
                                           shown=len(shown), total=len(recs)))
+        self._on_picked()
 
     def _match(self, rec: Dict[str, Any]) -> bool:
         node = rec.get("node", {})
@@ -574,7 +653,7 @@ class TrashDialog(GlassDialog):
         if self._query:
             hay = " ".join(str(x) for x in (
                 node.get("name", ""), node.get("method", ""), node.get("url", ""),
-                rec.get("_detail", ""))).lower()
+                self.store._trash_detail(node))).lower()
             if self._query not in hay:
                 return False
         return True
@@ -631,13 +710,66 @@ class TrashDialog(GlassDialog):
         self.changed.emit()
         self.reload()
 
+    def _refresh(self) -> None:
+        """刷新按钮：重新读盘，让其它窗口 / 外部改动的删除能立即反映出来。"""
+        try:
+            from .store import Store as _Store
+            disk = _Store.load(self.store.path)
+            self.store.data.clear()
+            self.store.data.update(disk.data)
+        except Exception:
+            pass
+        self.reload()
+        self.notify(i18n.tr("回收站已刷新"))
+
+    def _restore_notes(self, recs: List[Dict[str, Any]]) -> List[str]:
+        """恢复前的级联 / 环境变量提示（文件夹含几个请求、变量是否缺失）。"""
+        notes: List[str] = []
+        for rec in recs:
+            node = rec.get("node", {})
+            name = node.get("name") or i18n.tr("未命名")
+            if node.get("type") == "folder":
+                n = self.store.trash_request_count(node)
+                if n:
+                    notes.append(i18n.trf("{name} 里还有 {n} 个请求，会一起恢复。",
+                                          name=f"「{name}」", n=n))
+            if self.store is not None:
+                missing = self.store.missing_env_refs(node)
+                if missing:
+                    vars_txt = "、".join("{{" + m + "}}" for m in missing)
+                    notes.append(i18n.trf("{name} 引用了环境变量 {vars}，当前环境未定义，"
+                                          "恢复后请检查。", name=f"「{name}」", vars=vars_txt))
+        return notes
+
     def _restore(self) -> None:
         ids = self._selected_ids()
         if not ids:
             return
-        done = sum(1 for tid in ids if self.store.restore_from_trash(tid) is not None)
+        recs = [r for r in self.list.items if r.get("id") in ids]
+        # 级联提示：文件夹连带子请求 + 环境变量缺失
+        notes = self._restore_notes(recs)
+        if notes:
+            from .dialogs import ConfirmDialog
+            msg = "\n".join(notes) + "\n\n" + i18n.tr("确认恢复吗？")
+            if not ConfirmDialog.ask(self, i18n.tr("恢复前请确认"), msg,
+                                     i18n.tr("继续恢复")):
+                return
+        # 去重：文件夹已含某请求快照时，不再单独恢复那条独立记录
+        nested: set = set()
+        for rec in recs:
+            if rec.get("node", {}).get("type") == "folder":
+                nested |= TrashList._descendant_node_ids(rec.get("node", {}))
+        restorable = [tid for tid in ids
+                      if next((r.get("node", {}).get("id") for r in recs
+                               if r.get("id") == tid), None) not in nested]
+        done_ids: List[str] = []
+        for tid in restorable:
+            node = self.store.restore_from_trash(tid)
+            if node is not None and node.get("id"):
+                done_ids.append(node["id"])
         self._persist()
-        self.notify(i18n.trf("已恢复 {n} 项", n=done))
+        self.restored.emit(done_ids)
+        self.notify(i18n.trf("已恢复 {n} 项", n=len(done_ids)))
 
     def _purge(self) -> None:
         ids = self._selected_ids()
@@ -666,11 +798,18 @@ class TrashDialog(GlassDialog):
         self.notify(i18n.trf("已清空回收站（{n} 项）", n=n))
 
     def notify(self, text: str) -> None:
-        """借用主窗口的 toast 提示；找不到时静默。"""
-        win = self.window()
-        toast = getattr(win, "toast", None)
-        if toast is not None and hasattr(toast, "show_message"):
-            toast.show_message(text, "success")
+        """借用主窗口的 toast 提示；找不到时静默。
+
+        对话框本身是顶层窗口，self.window() 拿到的就是它、没有 toast；
+        所以显式沿 parent 链找主窗口，刷新 / 恢复的反馈用户才看得见。
+        """
+        node = self.parentWidget()
+        while node is not None:
+            toast = getattr(node, "toast", None)
+            if toast is not None and hasattr(toast, "show_message"):
+                toast.show_message(text, "success")
+                return
+            node = node.parentWidget()
 
 
 # ---------------------------------------------------------------- 打开入口

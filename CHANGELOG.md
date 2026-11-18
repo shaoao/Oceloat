@@ -1,5 +1,30 @@
 # What's Changed
 
+## v1.0.40 — 2026-11-18
+
+**Changed**
+- Trash window re-laid out: search moved into the top-right stats bar, the
+  redundant activity timeline removed, and the detail panel made richer and
+  scrollable (type / method / URL / params / headers / body / env vars /
+  original location / exact delete time).
+- Custom date range picker restyled to follow the pure-black theme — the
+  system calendar's white background, red weekends and purple selection are
+  gone.
+
+**Added**
+- "Trash auto-clean" switch (on by default) and retention period (7 / 30 / 90
+  days) in Settings · Data. Expired items are permanently removed when saving
+  settings and on launch.
+- Cascade restore hints: selecting a folder also selects its independent child
+  entries in the trash, and restoring prompts how many requests come back with
+  it. Requests referencing `{{variables}}` get an undefined-variable warning.
+- Saving a request now scrolls the left collection tree to the saved item;
+  restoring from the trash refreshes the sidebar and reveals items at their
+  original position. The Refresh button now re-reads state from disk.
+
+**Verified**
+- Self-test suite: 593 checks, 0 failures. Real launch with Trash window OK.
+
 ## v1.0.39 — 2026-11-18
 
 **Added**

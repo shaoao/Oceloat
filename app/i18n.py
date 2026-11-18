@@ -1351,4 +1351,39 @@ _EN.update({
     "原文件夹 {id}": "Original folder {id}",
     "今天 {t}": "Today {t}",
     "昨天 {t}": "Yesterday {t}",
+    # 回收站 v1.0.40：重排版 / 自动清理 / 级联恢复提示
+    "类型": "Type",
+    "详情": "Details",
+    "请求": "Request",
+    "文件夹": "Folder",
+    "未命名": "Untitled",
+    "参数": "Params",
+    "请求头": "Headers",
+    "正文": "Body",
+    "子请求": "Child requests",
+    "环境变量": "Variables",
+    "已删除": "deleted",
+    "（未定义）": " (undefined)",
+    "{n} 项": "{n} item(s)",
+    " 等 {n} 项": " and {n} more",
+    "回收站已刷新": "Trash refreshed",
+    "自动清理已开启：超过 {n} 天的条目在启动时清除。":
+        "Auto-clean on: items older than {n} days are removed at launch.",
+    "自动清理已关闭": "Auto-clean off",
+    "{name} 里还有 {n} 个请求，会一起恢复。":
+        "{name} contains {n} request(s) — they will be restored together.",
+    "{name} 引用了环境变量 {vars}，当前环境未定义，恢复后请检查。":
+        "{name} references variables {vars} undefined in the current environment — check after restore.",
+    "确认恢复吗？": "Restore anyway?",
+    "恢复前请确认": "Confirm before restore",
+    "继续恢复": "Continue restore",
+    "回收站自动清理": "Trash auto-clean",
+    "回收站保留天数": "Trash retention",
+    "开启后按保留天数清除过期条目，默认开、保留 30 天。":
+        "Remove expired items by retention period when enabled — on by default, 30 days.",
+    "超过天数的条目在保存设置与启动时自动彻底删除。":
+        "Items older than the limit are permanently deleted on save and at launch.",
+    "7 天": "7 days",
+    "30 天": "30 days",
+    "90 天": "90 days",
 })
