@@ -297,11 +297,36 @@ def mono_families() -> list[str]:
     return picked or ["Menlo", "monospace"]
 
 
+# ------------------------------------------------------------------ 界面字号
+# 全局文字缩放：所有 font() / mono() 都会乘上这个系数。控件在构造时把字体
+# 定死，所以改缩放需要重建界面（主窗口 reload_ui 负责），启动时在 main.py 里
+# 先读设置再建窗口，两边用的是同一个系数，不会出现「一半大一半小」。
+_UI_SCALE = 1.0
+
+
+def set_ui_scale(scale: float) -> None:
+    global _UI_SCALE
+    try:
+        value = float(scale)
+    except (TypeError, ValueError):
+        value = 1.0
+    _UI_SCALE = max(0.85, min(1.6, value))
+
+
+def ui_scale() -> float:
+    return _UI_SCALE
+
+
+def px(value: float) -> int:
+    """像素尺寸跟着文字一起放大（固定高度的胶囊、图标框用）。"""
+    return int(round(value * _UI_SCALE))
+
+
 def font(size: float = 13, weight: QFont.Weight = QFont.Weight.Normal,
          mono: bool = False, spacing: float = 0.0) -> QFont:
     f = QFont()
     f.setFamilies(mono_families() if mono else body_families())
-    f.setPointSizeF(size)
+    f.setPointSizeF(max(6.0, size * _UI_SCALE))
     f.setWeight(weight)
     if spacing:
         f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
@@ -315,6 +340,8 @@ def mono(size: float = 12, weight: QFont.Weight = QFont.Weight.Normal, spacing: 
 # 与参考图对齐：GET 绿 / POST 橙 / PUT·HEAD·OPTIONS 蓝 / DELETE 红 /
 # PATCH 粉 / TRACE 紫。深色主题用高亮版，浅色主题用同色相的暗版。
 METHOD_COLORS_DARK = {
+    "WS": "#3E9E9C",
+    "SSE": "#7C8CD8",
     "GET": "#49A665",
     "POST": "#DA6530",
     "PUT": "#4283F0",
@@ -326,6 +353,8 @@ METHOD_COLORS_DARK = {
     "TRACE": "#5966E8",
 }
 METHOD_COLORS_LIGHT = {
+    "WS": "#2A6E6C",
+    "SSE": "#4A57A8",
     "GET": "#2E7A48",
     "POST": "#A64A1C",
     "PUT": "#2C63B4",

@@ -182,6 +182,10 @@ def _postman_item(req: Dict[str, Any]) -> Dict[str, Any]:
         extra["cookies"] = req["cookies"]
     if req.get("note"):
         item["request"]["description"] = req["note"]
+    # WebSocket：方法本身是 WS，常用消息 / 子协议 / 心跳存在 x-ocelot 里，
+    # 导回来还是原来的连接配置（别的工具会当成一个自定义方法的请求，不会报错）
+    if (req.get("method") or "").upper() == "WS" or req.get("ws"):
+        extra["ws"] = req.get("ws") or {}
     if carry:
         extra.update(carry)
     if extra:
@@ -203,10 +207,18 @@ def _postman_node(node: Dict[str, Any]) -> Dict[str, Any]:
     return _postman_item(node)
 
 
-def to_postman(store, name: str = "Ocelot Collection", extra: bool = False) -> Dict[str, Any]:
+def _export_nodes(store, nodes=None) -> List[Dict[str, Any]]:
+    """导出范围：默认整个集合树；从文件夹右键导出时只传这个文件夹。"""
+    if nodes is None:
+        return list(store.collections)
+    return list(nodes)
+
+
+def to_postman(store, name: str = "Ocelot Collection", extra: bool = False,
+               nodes: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     data: Dict[str, Any] = {
         "info": {"name": name, "_postman_id": uid(), "schema": POSTMAN_SCHEMA},
-        "item": [_postman_node(n) for n in store.collections],
+        "item": [_postman_node(n) for n in _export_nodes(store, nodes)],
     }
     if extra:
         data["x-ocelot"] = {
@@ -218,13 +230,14 @@ def to_postman(store, name: str = "Ocelot Collection", extra: bool = False) -> D
     return data
 
 
-def to_ocelot(store, name: str = "Ocelot Collection") -> Dict[str, Any]:
+def to_ocelot(store, name: str = "Ocelot Collection",
+              nodes: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Ocelot JSON = Postman v2.1 + x-ocelot 元数据。
 
     刻意不用私有结构：Postman / Apifox / Insomnia 都能直接导入这份文件，
     我们自己导回来也不丢脚本、认证、Cookie。
     """
-    return to_postman(store, name, extra=True)
+    return to_postman(store, name, extra=True, nodes=nodes)
 
 
 # ---------------------------------------------------------------- 导出：OpenAPI
@@ -242,7 +255,8 @@ def _split_server(url: str) -> Tuple[str, str]:
     return "https://example.com", "/" + (url or "").lstrip("/")
 
 
-def to_openapi(store, name: str = "Ocelot API") -> Dict[str, Any]:
+def to_openapi(store, name: str = "Ocelot API",
+               nodes: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     servers: List[str] = []
     paths: Dict[str, Dict[str, Any]] = {}
 
@@ -289,7 +303,7 @@ def to_openapi(store, name: str = "Ocelot API") -> Dict[str, Any]:
             op["x-ocelot-auth"] = (node.get("auth") or {}).get("type") or "none"
             paths.setdefault(path, {})[method] = op
 
-    walk(store.collections)
+    walk(_export_nodes(store, nodes))
     return {
         "openapi": "3.1.0",
         "info": {"title": name, "version": "1.0.0",
@@ -301,7 +315,8 @@ def to_openapi(store, name: str = "Ocelot API") -> Dict[str, Any]:
 
 # ---------------------------------------------------------------- 导出：HAR
 
-def to_har(store, name: str = "Ocelot session") -> Dict[str, Any]:
+def to_har(store, name: str = "Ocelot session",
+           nodes: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     import datetime
 
     entries = []
@@ -344,7 +359,7 @@ def to_har(store, name: str = "Ocelot session") -> Dict[str, Any]:
                 "x-ocelot": {"scripts": node.get("scripts") or {}, "auth": node.get("auth") or {}},
             })
 
-    walk(store.collections)
+    walk(_export_nodes(store, nodes))
     return {"log": {"version": "1.2", "creator": {"name": "Ocelot", "version": "1.0"},
                     "pages": [{"startedDateTime": entries[0]["startedDateTime"] if entries else "",
                                "id": _slug(name), "title": name, "pageTimings": {}}],
@@ -508,9 +523,16 @@ def _from_postman_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         auth = extra["auth"]
     cookies = extra.get("cookies") or []
     note = _text_of(r.get("description")) or _text_of(item.get("description"))
-    return _mk_request(str(item.get("name") or "Request"), r.get("method") or "GET",
-                       base or raw_url, params=params, headers=headers, body=body,
-                       auth=auth, cookies=cookies, scripts=scripts, note=note)
+    req = _mk_request(str(item.get("name") or "Request"), r.get("method") or "GET",
+                      base or raw_url, params=params, headers=headers, body=body,
+                      auth=auth, cookies=cookies, scripts=scripts, note=note)
+    if (req.get("method") or "").upper() == "WS" or extra.get("ws"):
+        from .ws_panel import ensure_ws
+
+        req["method"] = "WS"
+        req["ws"] = extra.get("ws") if isinstance(extra.get("ws"), dict) else {}
+        ensure_ws(req)
+    return req
 
 
 def _import_postman_body(body: Dict[str, Any]) -> Dict[str, Any]:

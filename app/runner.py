@@ -32,7 +32,9 @@ def flatten_requests(node: Dict[str, Any]) -> List[Dict[str, Any]]:
     while stack:
         cur = stack.pop()
         if cur.get("type") == "request":
-            out.append(cur)
+            # WebSocket 请求不是一次性的请求 / 响应，批量跑集合时跳过
+            if (cur.get("method") or "").upper() != "WS":
+                out.append(cur)
         else:
             kids = cur.get("children") or []
             stack.extend(reversed(kids))

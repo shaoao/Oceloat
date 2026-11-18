@@ -39,7 +39,7 @@ from . import i18n, icons
 from .code_editor import human_elapsed
 from .store import Store, new_folder, new_request
 from .anim import stop as _anim_stop
-from .theme import C, method_color, status_color, font, mono, theme
+from .theme import C, method_color, px, status_color, font, mono, theme
 from .widgets import Button, HBox, Label, Menu, icon_button
 
 ROLE_ID = Qt.ItemDataRole.UserRole
@@ -120,7 +120,8 @@ class TreeDelegate(QStyledItemDelegate):
         self.tree = tree
 
     def sizeHint(self, option, index) -> QSize:  # noqa: N802
-        return QSize(0, 29)
+        # 行高跟着文字大小走：150% 时 29px 会把两行字挤在一起
+        return QSize(0, px(29))
 
     def paint(self, p: QPainter, option, index: QModelIndex) -> None:
         t = theme()
@@ -170,7 +171,7 @@ class TreeDelegate(QStyledItemDelegate):
             count = len(node.get("children") or [])
             count_text = str(count) if count else ""
             p.setFont(font(12.5, QFont.Weight.DemiBold))
-            avail = rect.width() - (x - rect.left()) - (18 if count_text else 6)
+            avail = rect.width() - (x - rect.left()) - (px(18) if count_text else 6)
             name = QFontMetricsF(p.font()).elidedText(node.get("name", ""), Qt.TextElideMode.ElideRight, avail)
             p.setPen(text_color)
             p.drawText(QRectF(x, rect.top(), avail, rect.height()),
@@ -178,7 +179,7 @@ class TreeDelegate(QStyledItemDelegate):
             if count_text:
                 p.setFont(mono(9.5))
                 p.setPen(C(t.text_faint))
-                p.drawText(QRectF(rect.right() - 18, rect.top(), 14, rect.height()),
+                p.drawText(QRectF(rect.right() - px(18), rect.top(), px(14), rect.height()),
                            int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), count_text)
         else:
             method = (node.get("method") or "GET").upper()
@@ -188,9 +189,11 @@ class TreeDelegate(QStyledItemDelegate):
                 mcol.setAlpha(200)
             p.setFont(mono(9, QFont.Weight.DemiBold))
             p.setPen(mcol)
-            p.drawText(QRectF(x, rect.top(), 36, rect.height()),
+            # 方法列宽按字号一起放大，否则 150% 下 POST 会被裁成 POS
+            mw = px(36)
+            p.drawText(QRectF(x, rect.top(), mw, rect.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), method)
-            x += 38
+            x += mw + 2
             is_open = node.get("id") in self.tree.open_ids
             avail = rect.right() - x - (12 if is_open else 4)
             p.setFont(font(12.5))
@@ -631,7 +634,7 @@ class Sidebar(QWidget):
         # 底部操作条
         self.new_btn = Button("新建请求", "plus", kind="subtle", height=28, padding=10,
                               radius=7, font_size=12, parent=self)
-        self.new_btn.clicked.connect(self._new_request)
+        self.new_btn.clicked.connect(self._new_menu)
         self.folder_btn = icon_button("folder", "新建文件夹", 28, 14)
         self.folder_btn.clicked.connect(self._new_folder)
         # 历史模式下 new_btn 本身就是「清空历史」，不再额外放一颗图标按钮（会重复）
@@ -797,6 +800,27 @@ class Sidebar(QWidget):
             item.setExpanded(True)
 
     # -------------------------------------------------- 增删改
+    def _new_menu(self) -> None:
+        """「新建请求」：先选类型（HTTP / WebSocket）再建，不再只能建 HTTP。"""
+        if self._mode == "history":
+            self._clear_history()
+            return
+        t = theme()
+        menu = Menu(self)
+        a_http = menu.addAction(icons.icon("send", t.text, 14), i18n.tr("HTTP 请求"))
+        a_ws = menu.addAction(icons.icon("link", t.text, 14), i18n.tr("WebSocket 请求"))
+        menu.addSeparator()
+        a_folder = menu.addAction(icons.icon("folder", t.text, 14), i18n.tr("新建文件夹"))
+        pos = self.new_btn.mapToGlobal(QPoint(0, 0))
+        pos.setY(pos.y() - menu.sizeHint().height() - 4)
+        chosen = menu.exec(pos)
+        if chosen is a_http:
+            self._new_request()
+        elif chosen is a_ws:
+            self.create_request_in(self._selected_folder(), "WS")
+        elif chosen is a_folder:
+            self._new_folder()
+
     def _new_request(self) -> None:
         if self._mode == "history":
             self._clear_history()
@@ -819,6 +843,11 @@ class Sidebar(QWidget):
 
     def create_request_in(self, parent_id: Optional[str], method: str = "GET", url: str = "") -> Dict:
         node = new_request("Untitled Request", method, url)
+        if (method or "").upper() == "WS":
+            from .ws_panel import default_ws
+
+            node["name"] = "WebSocket Request"
+            node["ws"] = default_ws()
         self.store.add_node(parent_id, node)
         self.store.save()
         self.refresh()
@@ -925,6 +954,9 @@ class Sidebar(QWidget):
             menu.addSeparator()
         act_auth = (menu.addAction(icons.icon("lock", t.text, 14), i18n.tr("设置认证…"))
                     if is_folder else None)
+        act_export = (menu.addAction(icons.icon("download", t.text, 14),
+                                     i18n.tr("导出这个文件夹"))
+                      if is_folder else None)
         act_rename = menu.addAction(icons.icon("pencil", t.text, 14), i18n.tr("重命名…"))
         act_dup = menu.addAction(icons.icon("copy", t.text, 14), i18n.tr("创建副本"))
         if not is_folder:
@@ -949,6 +981,12 @@ class Sidebar(QWidget):
             self.runFolder.emit(node_id)
         elif act_auth is not None and chosen is act_auth:
             self._auth_dialog(node)
+        elif act_export is not None and chosen is act_export:
+            from .dialogs import export_folder
+
+            path = export_folder(self.store, node, self.window(), global_pos)
+            if path:
+                self.notify.emit(i18n.trf("已导出到 {name}", name=path.rsplit("/", 1)[-1]))
         elif chosen is act_rename:
             self._rename_dialog(node)
         elif chosen is act_dup:

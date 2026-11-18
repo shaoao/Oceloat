@@ -42,7 +42,17 @@ from .widgets import (
 )
 
 # 与参考图一致：GET / POST / PUT / DELETE / OPTIONS / HEAD / PATCH / TRACE
-METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"]
+# WS 是 WebSocket 握手请求，单独一套发送/接收流程，但共用地址栏与请求头。
+METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE", "WS"]
+WS_METHOD = "WS"
+
+# 两种模式下「请求区」的标签集合：WebSocket 没有请求体，改成「消息」
+HTTP_TABS = [("params", "参数"), ("body", "请求体"), ("headers", "请求头"),
+             ("cookies", "Cookies"), ("auth", "认证"),
+             ("pre", "前置脚本"), ("post", "后置脚本")]
+WS_TABS = [("params", "参数"), ("headers", "请求头"), ("cookies", "Cookies"),
+           ("auth", "认证"), ("messages", "消息"),
+           ("pre", "前置脚本")]
 
 # 与 Postman / Hoppscotch 对齐的 body 类型；显示英文名，i18n 会保留原词。
 # 存储层仍用短 key（form = form-data，urlencoded = x-www-form-urlencoded），
@@ -274,8 +284,11 @@ class UrlBar(QWidget):
         super().__init__(parent)
         self.store = store
         self._busy = False
+        self._ws_mode = False
+        self._ws_state = "idle"
         self.method = MethodSelector("GET")
         self.method.changed.connect(self.methodChanged.emit)
+        self.method.changed.connect(self._on_method_mode)
 
         self.url = QLineEdit()
         self.url.setObjectName("Url")
@@ -429,6 +442,10 @@ class UrlBar(QWidget):
             self.sendRequested.emit()
 
     def _on_send(self):
+        # WebSocket 已连接（或正在连）时，同一颗按钮是「断开 / 取消」
+        if self._ws_mode and self._ws_state in ("open", "connecting", "closing"):
+            self.cancelRequested.emit()
+            return
         if self._busy:
             self.cancelRequested.emit()
         else:
@@ -436,6 +453,9 @@ class UrlBar(QWidget):
 
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
+        if self._ws_mode:
+            self.set_ws_state("connecting" if busy else "idle")
+            return
         if busy:
             self.send_btn.setText("取消")
             self.send_btn.set_icon("stop")
@@ -446,6 +466,40 @@ class UrlBar(QWidget):
             self.send_btn.setText("发送")
             self.send_btn.set_icon("send")
             self.send_btn.set_kind("primary")
+
+    def _on_method_mode(self, method: str) -> None:
+        """切到 WS 时地址栏、按钮、提示全换成连接语义。"""
+        ws = (method or "").upper() == WS_METHOD
+        self._ws_mode = ws
+        i18n.placeholder(self.url, "ws:// 或 wss:// 地址，例如 wss://echo.websocket.org"
+                         if ws else "输入请求地址，例如 https://httpbin.org/get")
+        self.url.setToolTip("" if not ws else i18n.tr(
+            "支持 ws:// wss://；直接粘 http(s) 地址会自动改写"))
+        if ws:
+            self.set_ws_state(self._ws_state if self._busy else "idle")
+        else:
+            self.set_busy(False)
+            self.send_btn.setToolTip("发送请求  ⌘↵")
+
+    def set_ws_state(self, state: str) -> None:
+        """连接状态 → 按钮文案。连接中可取消，已连接则是「断开」。"""
+        self._ws_state = state
+        self.send_btn.set_busy(False)
+        if state == "open":
+            self.send_btn.setText("断开")
+            self.send_btn.set_icon("stop")
+            self.send_btn.set_kind("subtle")
+            self.send_btn.setToolTip("断开连接  ⌘↵")
+        elif state in ("connecting", "closing"):
+            self.send_btn.setText("取消")
+            self.send_btn.set_icon("stop")
+            self.send_btn.set_kind("subtle")
+            self.send_btn.setToolTip("取消连接")
+        else:
+            self.send_btn.setText("连接")
+            self.send_btn.set_icon("link")
+            self.send_btn.set_kind("primary")
+            self.send_btn.setToolTip("建立连接  ⌘↵")
 
     def set_method(self, method: str):
         self.method.set_method(method)
@@ -1224,6 +1278,7 @@ class RequestEditor(QWidget):
     scriptsChanged = pyqtSignal()
     sendRequested = pyqtSignal()
     cancelRequested = pyqtSignal()
+    wsSendRequested = pyqtSignal(str, bool)      # WebSocket 消息（内容, 是否二进制）
     saveRequested = pyqtSignal()
     codeRequested = pyqtSignal()
     copyCurlRequested = pyqtSignal()
@@ -1251,10 +1306,7 @@ class RequestEditor(QWidget):
         self.node_btn = self.urlbar.node_btn
 
         self.tabs = SegmentedTabs(
-            [("params", "参数"), ("body", "请求体"), ("headers", "请求头"),
-             ("cookies", "Cookies"), ("auth", "认证"),
-             ("pre", "前置脚本"), ("post", "后置脚本")],
-            style="underline", height=32, pad_h=10, font_size=12.2)
+            HTTP_TABS, style="underline", height=32, pad_h=10, font_size=12.2)
         self.tabs.changed.connect(self._on_tab)
         self.count_label = Label("", 10.5, theme().text_faint, mono_font=True)
         tools = HBox(self.tabs, 1, spacing=8)
@@ -1289,6 +1341,12 @@ class RequestEditor(QWidget):
         self.scripts_pre.changed.connect(self._on_scripts)
         self.scripts_post = ScriptPage(store=self.store, kind="post")
         self.scripts_post.changed.connect(self._on_scripts)
+        from .ws_panel import WsComposer
+
+        self.ws = WsComposer()
+        self.ws.changed.connect(self._on_ws_changed)
+        self.ws.sendRequested.connect(self.wsSendRequested.emit)
+        self._mode = "http"
 
         # Cookie 单独一栏：发送时拼成 Cookie 头，也能一键把响应里的 Set-Cookie 收进来
         self.cookies = KVEditor("Cookie 名", "值", empty_hint="添加 Cookie")
@@ -1312,6 +1370,7 @@ class RequestEditor(QWidget):
         self.pages.add("cookies", self._scroll_page(
             self._wrap(self.cookies, self.cookies_tools)))
         self.pages.add("auth", self._scroll_page(self.auth))
+        self.pages.add("messages", self._scroll_page(self.ws))
         self.pages.add("pre", self.scripts_pre)
         self.pages.add("post", self.scripts_post)
         self.pages.set_current("params", animate=False)
@@ -1365,12 +1424,14 @@ class RequestEditor(QWidget):
         self.request = request
         try:
             self.urlbar.set_method(request.get("method", "GET"))
+            self._set_mode(request.get("method", "GET"), animate=False)
             self.urlbar.set_url(request.get("url", ""))
             self.params.set_rows(request.get("params", []))
             self.headers.set_rows(request.get("headers", []))
             self.cookies.set_rows(request.get("cookies", []))
             self.body.load(request.get("body", {}))
             self.auth.load(request.get("auth", {}), request.get("id", ""))
+            self.ws.load(request)
             scripts = request.get("scripts", {}) or {}
             self.scripts_pre.load({"pre": scripts.get("pre", "")})
             self.scripts_post.load({"post": scripts.get("post", "")})
@@ -1378,6 +1439,31 @@ class RequestEditor(QWidget):
             self._loading = False
         self._refresh_counts()
         self.pages.set_current(self.tabs.current(), animate=False)
+
+    def _set_mode(self, method: str, animate: bool = True) -> None:
+        """HTTP ↔ WebSocket：换一套页签，隐藏用不上的页。"""
+        # 地址栏要跟着换语义（连接 / 断开、ws 地址占位），即便模式没变，
+        # 每次 load 也重算一次，否则新开的 WS 标签还显示「发送」。
+        self.urlbar._on_method_mode(method)
+        mode = "ws" if (method or "").upper() == WS_METHOD else "http"
+        if mode == self._mode:
+            return
+        self._mode = mode
+        if mode == "ws":
+            self.tabs.set_items(WS_TABS, current="messages")
+            self.pages.set_current("messages", animate=animate)
+        else:
+            self.tabs.set_items(HTTP_TABS, current="params")
+            self.pages.set_current("params", animate=animate)
+        if not self._loading:
+            self._refresh_counts()
+
+    def is_ws(self) -> bool:
+        return self._mode == "ws"
+
+    def set_ws_state(self, state: str) -> None:
+        self.urlbar.set_ws_state(state)
+        self.ws.set_connected(state == "open")
 
     def _sync_request(self, *, script_only: bool = False) -> None:
         if self._loading or self._syncing or not self.request:
@@ -1389,6 +1475,7 @@ class RequestEditor(QWidget):
         self.request["cookies"] = self.cookies.rows()
         self.request["body"] = self.body.dump()
         self.request["auth"] = self.auth.dump()
+        self.ws.dump(self.request)
         self.request["scripts"] = {
             "pre": self.scripts_pre.dump().get("pre", ""),
             "post": self.scripts_post.dump().get("post", ""),
@@ -1432,17 +1519,27 @@ class RequestEditor(QWidget):
             self.request["name"] = name[:40]
 
     def _refresh_counts(self) -> None:
+        ws_mode = self._mode == "ws"
+        for key in ("body", "cookies", "post", "messages", "auth", "pre"):
+            if self.tabs.has(key):
+                self.tabs.set_badge(key, 0)
         self.tabs.set_badge("params", len(self.params.rows()))
         self.tabs.set_badge("headers", len(self.headers.rows()))
         cookies = len(self.cookies.rows())
-        self.tabs.set_badge("cookies", cookies)
-        # 不再 dump 整段请求体：只问「有没有内容」，避免每次按键复制一遍大正文
-        self.tabs.set_badge("body", 1 if self.body.has_content() else 0)
+        if self.tabs.has("cookies"):
+            self.tabs.set_badge("cookies", cookies)
+        if ws_mode:
+            messages = len((self.request.get("ws") or {}).get("messages") or [])
+            self.tabs.set_badge("messages", messages)
+        else:
+            # 不再 dump 整段请求体：只问「有没有内容」，避免每次按键复制一遍大正文
+            self.tabs.set_badge("body", 1 if self.body.has_content() else 0)
         self.tabs.set_badge("auth", 1 if self.auth.dump().get("type") != "none" else 0)
         pre_script = self.scripts_pre.dump().get("pre", "").strip() if hasattr(self, "scripts_pre") else ""
         post_script = self.scripts_post.dump().get("post", "").strip() if hasattr(self, "scripts_post") else ""
         self.tabs.set_badge("pre", 1 if pre_script else 0)
-        self.tabs.set_badge("post", 1 if post_script else 0)
+        if self.tabs.has("post"):
+            self.tabs.set_badge("post", 1 if post_script else 0)
         p = len(self.params.rows())
         h = len(self.headers.rows())
         self.count_label.setText(i18n.trf("{p} 参数 · {h} 请求头", p=p, h=h) if (p or h) else "")
@@ -1488,6 +1585,13 @@ class RequestEditor(QWidget):
 
     # -------------------------------------------------- 事件
     def _on_method(self, method: str) -> None:
+        if self._loading:
+            return
+        self._set_mode(method)
+        self._sync_request()
+
+    def _on_ws_changed(self) -> None:
+        self._refresh_counts()
         if not self._loading:
             self._sync_request()
 
@@ -1566,7 +1670,9 @@ class RequestEditor(QWidget):
             self._sync_request(script_only=True)
 
     def _on_tab(self, key: str) -> None:
-        self.pages.set_current(key)
+        # 模式切换后旧页签可能已经不在当前集合里：只切确实存在的页
+        if key in getattr(self.pages, "_pages", {}):
+            self.pages.set_current(key)
 
     def _toggle_bulk(self) -> None:
         self.headers.set_bulk(not self.headers.is_bulk())

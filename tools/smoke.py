@@ -145,7 +145,7 @@ def main() -> int:
         r = state["resp"]
         check("收到响应", r is not None)
         if r is None:
-            return next_step()
+            return 0
         check("状态码 200", r.status == 200, f"got {r.status}")
         check("响应体非空", len(r.body) > 20, f"{len(r.body)}B")
         check("耗时记录", r.elapsed >= 0, f"{r.elapsed}ms")
@@ -2742,6 +2742,229 @@ def main() -> int:
         app.processEvents()
         return 0
 
+    def step36():
+        """胶囊尺寸 / 失败态指标 / 文字大小 / 文件夹导出 / 命令面板懒绘制 / WebSocket。"""
+        from PyQt6.QtGui import QFontMetricsF
+        from PyQt6.QtNetwork import QHostAddress
+        from PyQt6.QtWebSockets import QWebSocketServer
+
+        from app import i18n as _i18n
+        from app.dialogs import SettingsDialog
+        from app.store import new_folder
+        from app.theme import font as _font
+        from app.theme import set_ui_scale
+        from app.transfer import to_ocelot
+        from app.widgets import Pill
+
+        # 1) 英文「failed」胶囊：背景必须比文字宽，不能挤出圆角
+        old_lang = _i18n.current()
+        _i18n.set_language("en", notify=False)
+        pill = Pill("失败", "#D9483A")
+        fm = QFontMetricsF(pill._font)
+        need = fm.horizontalAdvance("failed") + pill._pad * 2
+        check("英文失败胶囊给足背景宽度", pill.width() >= need,
+              f"{pill.width()} vs {int(need)}")
+        _i18n.set_language(old_lang, notify=False)
+        pill.deleteLater()
+
+        # 2) 请求失败：不显示耗时 / 大小，也没有悬浮详情卡
+        from app.http_client import Response as _Resp
+
+        w.response.set_response(_Resp(error="连接被拒绝", url="https://example.com"))
+        app.processEvents()
+        check("失败时不显示响应时间", not w.response.time_label.isVisible())
+        check("失败时不显示响应大小", not w.response.size_label.isVisible())
+        check("失败时不给耗时 / 大小详情卡",
+              w.response._timing_card() is None and w.response._size_card() is None)
+
+        # 3) 文字大小：四档、写进设置、字体按比例放大
+        set_ui_scale(1.25)
+        check("文字缩放作用于字体", abs(_font(10).pointSizeF() - 12.5) < 0.01,
+              f"{_font(10).pointSizeF()}")
+        set_ui_scale(1.0)
+        dlg = SettingsDialog(w.store, w, page="appearance")
+        check("设置里有四档文字大小", len(dlg.scale_seg._items) == 4,
+              str([i["label"] for i in dlg.scale_seg._items]))
+        dlg._on_ui_scale("1.25")
+        check("选完文字大小会持久化", abs(float(w.store.settings["ui_scale"]) - 1.25) < 0.001,
+              str(w.store.settings.get("ui_scale")))
+        w.store.settings["ui_scale"] = 1.0
+        dlg.close()
+
+        # 4) 文件夹右键导出：只导出这个文件夹，结构不散
+        folder = new_folder("Payments")
+        folder["children"] = [new_request("Pay", "GET", "https://api.test/pay")]
+        data = to_ocelot(w.store, "Payments", nodes=[folder])
+        item = (data.get("item") or [{}])[0]
+        check("文件夹导出保留目录名", item.get("name") == "Payments", str(item.get("name")))
+        check("文件夹导出只含该目录下的请求",
+              len(item.get("item") or []) == 1 and not any(
+                  c.get("name") == "Untitled Request" for c in (data.get("item") or [])))
+
+        # 走一遍真的导出流程：把菜单选择与保存对话框换成确定值
+        import os as _os
+
+        from PyQt6.QtWidgets import QFileDialog as _QFD
+        from app import dialogs as _dlg
+        from app.widgets import Menu as _Menu
+
+        target = "/tmp/ocelot_folder_export.json"
+        if _os.path.exists(target):
+            _os.unlink(target)
+        orig_exec = _Menu.exec
+        orig_save = _QFD.getSaveFileName
+
+        def _fake_exec(self, *a, **k):
+            for act in self.actions():
+                if act.text().startswith("导出为 Ocelot"):
+                    return act
+            return None
+
+        _Menu.exec = _fake_exec                                   # type: ignore[assignment]
+        _QFD.getSaveFileName = staticmethod(lambda *a, **k: (target, ""))  # type: ignore[assignment]
+        try:
+            path = _dlg.export_folder(w.store, folder, w, w.mapToGlobal(w.rect().center()))
+            check("文件夹导出真的写出文件",
+                  bool(path) and _os.path.exists(target) and _os.path.getsize(target) > 40,
+                  str(path))
+            payload = _json.loads(open(target, encoding="utf-8").read())
+            check("导出文件里是同一个文件夹",
+                  (payload.get("item") or [{}])[0].get("name") == "Payments")
+        finally:
+            _Menu.exec = orig_exec                                # type: ignore[assignment]
+            _QFD.getSaveFileName = orig_save                      # type: ignore[assignment]
+
+        # 5) 命令面板：只画可视行，但搜索覆盖全部
+        w.palette.open()
+        app.processEvents()
+        first, last = w.palette.list.visible_range()
+        check("命令面板只绘制可视行", 0 < last - first <= 40, f"{first}-{last}")
+        w.palette._filter("设置")
+        check("命令面板搜索仍然全量匹配",
+              any("设置" in i.get("title", "") for i in w.palette._results),
+              str(len(w.palette._results)))
+
+        # 塞 300 条请求：滚动后只画新的可视段，但深层条目照样搜得到
+        folder = w.store.collections[0] if w.store.collections else None
+        added = []
+        if isinstance(folder, dict):
+            folder.setdefault("children", [])
+            for i in range(300):
+                node = new_request(f"Bulk {i:03d}", "GET", f"https://bulk.test/{i}")
+                folder["children"].append(node)
+                added.append(node)
+            w.sidebar.refresh()
+            w.palette.open()
+            w.palette.edit.clear()
+            app.processEvents()
+            w.palette.scroll.verticalScrollBar().setValue(2400)
+            app.processEvents()
+            first2, last2 = w.palette.list.visible_range()
+            check("滚动后只绘制新的可视段", first2 > 0 and last2 - first2 <= 40,
+                  f"{first2}-{last2}")
+            w.palette._filter("Bulk 299")
+            check("深层条目仍然能搜到",
+                  any(i.get("title") == "Bulk 299" for i in w.palette._results),
+                  str(len(w.palette._results)))
+            folder["children"] = [c for c in folder["children"] if c not in added]
+            w.sidebar.refresh()
+        w.palette.close()
+
+        # 6) WebSocket：连上、收推送、回声、心跳、过滤、常用消息、断开、连不上
+        srv = QWebSocketServer("smoke-ws", QWebSocketServer.SslMode.NonSecureMode)
+        check("本地 WebSocket 服务监听成功",
+              srv.listen(QHostAddress.SpecialAddress.LocalHost, 0), srv.errorString())
+        port = srv.serverPort()
+        peers = []
+
+        def on_new():
+            sock = srv.nextPendingConnection()
+            peers.append(sock)
+            sock.textMessageReceived.connect(
+                lambda t, s=sock: s.sendTextMessage("echo:" + t))
+            sock.sendTextMessage("hello")
+
+        srv.newConnection.connect(on_new)
+
+        w.new_websocket()
+        check("新建的是 WebSocket 请求",
+              w.current_tab()["request"].get("method") == "WS")
+        check("WebSocket 标签页是「消息」而不是请求体",
+              w.editor.is_ws() and w.editor.tabs.has("messages")
+              and not w.editor.tabs.has("body"))
+
+        w.editor.urlbar.set_url(f"ws://127.0.0.1:{port}/echo")
+        w.editor._on_url("x")
+        w.send_current()
+        check("WebSocket 能建立连接", wait_until(lambda: w.ws.is_open, 8000), w.ws.state)
+        tab = w.current_tab()
+        check("连接状态同步到会话", tab["ws_session"]["state"] == "open")
+        check("状态胶囊显示已连接", w.response.pill._title() == "已连接",
+              w.response.pill._title())
+        check("响应区切到 WebSocket 日志页",
+              w.response.center.currentWidget() is w.response.ws_view)
+        check("能收到服务端推送",
+              wait_until(lambda: any(getattr(f, "preview", lambda: "")() == "hello"
+                                     for f in tab["ws_session"]["log"]), 4000))
+        w._ws_send("ping-me", False)
+        check("发出的消息进日志",
+              wait_until(lambda: any(f.dir == "out" and f.preview() == "ping-me"
+                                     for f in tab["ws_session"]["log"]), 3000))
+        check("能收到服务端回声",
+              wait_until(lambda: any(f.dir == "in" and f.preview() == "echo:ping-me"
+                                     for f in tab["ws_session"]["log"]), 4000))
+        w.ws._ping()
+        check("心跳能测出真实延迟", wait_until(lambda: w.ws.latency > 0, 4000),
+              f"{w.ws.latency} ms")
+        w.response.ws_view.filter.set_current("out", emit=True)
+        check("按「发送」过滤只剩发送帧",
+              bool(w.response.ws_view.list.frames)
+              and all(f.dir == "out" for f in w.response.ws_view.list.frames))
+        w.response.ws_view.filter.set_current("all", emit=True)
+
+        # 常用消息：存下来、能重发
+        w.editor.ws.editor.setPlainText('{"hello": "ws"}')
+        w.editor.ws._save_current()
+        msgs = tab["request"]["ws"].get("messages") or []
+        check("能把消息存成常用", len(msgs) == 1, str(len(msgs)))
+        check("常用消息能在消息页看到", len(w.editor.ws._chips) == 1)
+
+        # 特色功能：双击收到的消息，直接填回编辑器改一改再发
+        view = w.response.ws_view
+        idx = -1
+        for k, f in enumerate(view.list.frames):
+            if f.dir == "in" and "hello" in f.preview(999):
+                idx = k
+                break
+        check("日志里能定位到收到的文本帧", idx >= 0, str(idx))
+        if idx >= 0:
+            view.list.activated.emit(idx)
+            app.processEvents()
+            check("双击收到的消息会填回编辑器",
+                  "hello" in w.editor.ws.editor.toPlainText(),
+                  w.editor.ws.editor.toPlainText()[:40])
+            check("重放后自动切到「消息」页",
+                  w.editor.tabs.current() == "messages", str(w.editor.tabs.current()))
+
+        w.ws.disconnect_ws()
+        check("能主动断开连接", wait_until(lambda: not w.ws.busy, 5000), w.ws.state)
+        check("断开后日志里有 close 帧",
+              any(f.kind == "close" for f in tab["ws_session"]["log"]))
+        srv.close()
+
+        # 连不上：地址端口没有服务，应该失败而不是永远转圈
+        w.current_tab()["request"]["ws"]["auto_reconnect"] = False
+        w.editor.urlbar.set_url(f"ws://127.0.0.1:{port}/nope")
+        w.editor._on_url("x")
+        w.send_current()
+        check("连不上时不会卡在连接中",
+              wait_until(lambda: w.ws.state in ("closed", "idle"), 6000), w.ws.state)
+        check("连不上时顶部显示未连接 / 已断开",
+              w.response.pill._title() in ("未连接", "已断开"),
+              w.response.pill._title())
+        check("失败后同样不显示耗时 / 大小", not w.response.time_label.isVisible())
+        return 0
+
     def finish():
         try:
             _SERVER.shutdown()
@@ -2755,7 +2978,7 @@ def main() -> int:
 
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

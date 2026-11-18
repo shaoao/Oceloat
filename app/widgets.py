@@ -290,6 +290,22 @@ def VBox(*items, spacing: int = 8, margins=(0, 0, 0, 0), parent=None) -> QWidget
     return w
 
 
+
+def _scroll_host(widget) -> object:
+    """找到承载自己的滚动区。
+
+    setWidget 之后 QWidget 的 parent 是 viewport，不是滚动区本身，
+    所以要往上找几层；找不到就当作没有滚动（整块可见）。
+    """
+    w = widget.parentWidget() if widget is not None else None
+    for _ in range(4):
+        if w is None:
+            return None
+        if hasattr(w, "verticalScrollBar"):
+            return w
+        w = w.parentWidget()
+    return None
+
 # ---------------------------------------------------------------- 动画助手
 
 
@@ -835,6 +851,29 @@ class SegmentedTabs(QWidget):
                     self.update()
                 return
 
+    def set_items(self, items: Sequence[Tuple[str, str]], current: Optional[str] = None) -> None:
+        """整组换标签：HTTP 请求与 WebSocket 请求用的是两套页签。"""
+        keys = [k for k, _l in items]
+        if keys == [i["key"] for i in self._items] and current is None:
+            return
+        self._items = [{"key": k, "label": label, "badge": 0} for k, label in items]
+        if current not in keys:
+            current = keys[0] if keys else ""
+        self._current = current or ""
+        self._hover = -1
+        self._prev_key = ""
+        self._anim_stop_all()
+        self.sync_size()
+        self._snap_indicator()
+        self.update()
+
+    def _anim_stop_all(self) -> None:
+        _anim_stop(self._anim)
+        _anim_stop(self._fade_anim)
+
+    def has(self, key: str) -> bool:
+        return any(i["key"] == key for i in self._items)
+
     def current(self) -> str:
         return self._current
 
@@ -1278,10 +1317,28 @@ class Pill(QWidget):
         self._pad = pad
         self._radius = radius
         self._alpha = 34
+        self._min_height = height
         self.setFixedHeight(height)
+        self._sync_size()
+
+    def _sync_size(self) -> None:
+        """按真实字形量宽度并钉死尺寸。
+
+        英文译文比中文长（「失败」→ failed），而 QWidget 的 minimumSizeHint
+        近乎为 0，水平布局在空间紧张时会把它压到比文字还窄，文字直接溢出胶囊底
+        —— 所以这里自己算死宽高，布局再也压不动它。
+        """
+        fm = QFontMetricsF(self._font)
+        text = self._title()
+        w = int(fm.horizontalAdvance(text) + self._pad * 2 + 6)
+        self.setFixedWidth(max(w, self._pad * 2 + 12))
+        h = max(self._min_height, int(fm.height() + 7))
+        if self.height() != h:
+            self.setFixedHeight(h)
 
     def set_text(self, text: str) -> None:
         self._text = text
+        self._sync_size()
         self.updateGeometry()
         self.update()
 
@@ -1293,6 +1350,8 @@ class Pill(QWidget):
     def refresh_theme(self) -> None:
         if self._token:
             self._color = getattr(theme(), self._token)
+        # 语言切换后 self._title() 变了，尺寸也要跟着重量一遍
+        self._sync_size()
         self.update()
 
     def sizeHint(self) -> QSize:  # noqa: N802

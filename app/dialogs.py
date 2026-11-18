@@ -44,6 +44,7 @@ from .widgets import (
     HBox,
     KeyCap,
     Label,
+    Menu,
     Pill,
     SegmentedTabs,
     Switch,
@@ -63,6 +64,16 @@ def _glass_everywhere() -> bool:
 
     store = Store.active()
     return bool(store is not None and store.settings.get("glass_all", False))
+
+
+def _scale_key(value) -> str:
+    """把存下来的缩放系数对回四个档位（老数据 / 手改的奇怪值也能落到最近的档）。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "1.0"
+    best = min(("1.0", "1.1", "1.25", "1.5"), key=lambda k: abs(float(k) - v))
+    return best
 
 
 class GlassDialog(QDialog):
@@ -692,6 +703,7 @@ class SettingsDialog(GlassDialog):
     settingsChanged = pyqtSignal()
     shortcutsChanged = pyqtSignal()
     dataReloaded = pyqtSignal()
+    uiScaleChanged = pyqtSignal(float)
 
     NAV = [
         ("general", "通用", "sliders"),
@@ -849,9 +861,17 @@ class SettingsDialog(GlassDialog):
         self.font_seg.set_current(cur_size if cur_size in ("10.5", "11.8", "13") else "11.8",
                                   emit=False)
         self.font_seg.changed.connect(self._on_font_size)
+        # 界面文字大小：整页（含自绘控件、代码区）按比例缩放，选完立刻重建界面
+        self.scale_seg = SegmentedTabs([("1.0", "100%"), ("1.1", "110%"),
+                                        ("1.25", "125%"), ("1.5", "150%")],
+                                       style="pill", height=26, font_size=11.5, pad_h=12)
+        cur_scale = _scale_key(s.get("ui_scale", 1.0))
+        self.scale_seg.set_current(cur_scale, emit=False)
+        self.scale_seg.changed.connect(self._on_ui_scale)
         options = self._card(
             self._row("界面动效", "关闭后页面切换、悬停与响应到达不再播放动画。", self.anim_switch),
             self._row("所有弹窗都模糊", "开启后所有弹窗都是模糊的。", self.glass_switch),
+            self._row("文字大小", "调整界面文字的整体大小，所有页面即时生效。", self.scale_seg),
             self._row("代码字号", "响应体、请求体与代码片段的等宽字体大小。", self.font_seg),
         )
 
@@ -1470,6 +1490,21 @@ class SettingsDialog(GlassDialog):
         self.store.save()
         self.settingsChanged.emit()
 
+    def _on_ui_scale(self, value: str) -> None:
+        """界面文字大小：存下来并交给主窗口重建界面。
+
+        控件字体是在构造时量死的，改系数后只能重建才能「所有页面即时生效」。
+        先关掉设置窗口，主窗口会在重建后把设置重新打开到同一页。
+        """
+        try:
+            scale = float(value)
+        except (TypeError, ValueError):
+            return
+        self.store.settings["ui_scale"] = scale
+        self.store.save()
+        self.uiScaleChanged.emit(scale)
+        self.accept()
+
     def _on_font_size(self, value: str) -> None:
         from .code_editor import CodeView
 
@@ -2017,6 +2052,32 @@ class PaletteList(QWidget):
         self.setFixedHeight(max(1, int(y + 4)))
         self.update()
 
+    def visible_range(self) -> Tuple[int, int]:
+        """当前视口内的行区间 [start, end)。
+
+        上千条请求时整表重绘是命令面板「越用越卡」的主因：文字、图标的
+        pixmap 每次都从头画一遍。这里只算可见的那几十行，滚动时再补下一屏，
+        列表本身（数据、总高度、搜索）完全不变。
+        """
+        from .widgets import _scroll_host
+
+        view = _scroll_host(self)
+        offset = 0
+        height = self.height()
+        if view is not None:
+            try:
+                offset = view.verticalScrollBar().value()
+                height = view.viewport().height()
+            except RuntimeError:
+                pass
+        if not self._tops:
+            return 0, 0
+        import bisect
+
+        start = max(0, bisect.bisect_right(self._tops, offset) - 1)
+        end = min(len(self._tops), bisect.bisect_left(self._tops, offset + height) + 1)
+        return start, end
+
     def first_index(self) -> int:
         for i, item in enumerate(self.items):
             if item.get("kind") != "header":
@@ -2036,9 +2097,13 @@ class PaletteList(QWidget):
         return self.index
 
     def _row_at(self, y: int) -> int:
-        for i, top in enumerate(self._tops):
-            if top <= y < top + self.row_height(self.items[i]):
-                return i
+        import bisect
+
+        if not self._tops:
+            return -1
+        i = bisect.bisect_right(self._tops, y) - 1
+        if 0 <= i < len(self.items) and self._tops[i] <= y < self._tops[i] + self.row_height(self.items[i]):
+            return i
         return -1
 
     def mouseMoveEvent(self, e):
@@ -2082,7 +2147,12 @@ class PaletteList(QWidget):
                        i18n.tr("没有匹配的结果"))
             p.end()
             return
-        for i, item in enumerate(self.items):
+        # 只画视口内的行（上下各多留一行，滚动时不会看到半截空白）
+        first, last = self.visible_range()
+        first = max(0, first - 1)
+        last = min(len(self.items), last + 1)
+        for i in range(first, last):
+            item = self.items[i]
             top = self._tops[i] if i < len(self._tops) else 4 + i * self.row_h
             h = self.row_height(item)
             if item.get("kind") == "header":
@@ -2144,6 +2214,7 @@ class CommandPalette(QWidget):
 
     ACTIONS = [
         ("new_request", "新建请求", "plus", "⌘N"),
+        ("new_ws", "新建 WebSocket 请求", "link", ""),
         ("new_folder", "新建文件夹", "folder", ""),
         ("send", "发送当前请求", "send", "⌘↵"),
         ("save", "保存到集合", "download", "⌘S"),
@@ -2225,8 +2296,13 @@ class CommandPalette(QWidget):
         area = self._area()
         self.setGeometry(area.toRect())
         self.card.setFixedWidth(min(620, int(area.width()) - 80))
-        # 每次打开只收集一次（集合树可能有几百条），之后按键只做过滤
-        self._cache = {True: self._collect(True), False: self._collect(False)}
+        # 每次打开只收集一次（集合树可能有几百条），之后按键只做过滤。
+        # 只留一份（带分组标题），过滤时不再另建一份带重复 dict 的列表。
+        self._cache = self._collect(True)
+        self._hay = [
+            (str(i.get("title") or "") + "\u0001" + str(i.get("subtitle") or "")).lower()
+            for i in self._cache
+        ]
         self.edit.clear()
         # 关键：所有排版（列表高度、卡片高度、居中位置）都先算完再 show。
         # 之前是先 show 再改高度 —— 打开的那一帧卡片会先矮后高，看起来「上下卡一下」。
@@ -2266,14 +2342,17 @@ class CommandPalette(QWidget):
         # 卡片永远摆在正中间（上下左右都居中）：以前压在 16% 高度，
         # 大屏上看着像是「贴在顶上下不来」。
         max_h = max(180, self.height() - 160)
-        # 卡片高度落在整行上：差几个像素就会把最后一行切掉半截
-        acc = 8.0
-        for item in self.list.items:
-            step = self.list.row_height(item)
-            if acc + step > max_h:
-                break
-            acc += step
-        self.scroll.setFixedHeight(min(self.list.height(), int(acc)))
+        # 卡片高度落在整行上：差几个像素就会把最后一行切掉半截。
+        # 用二分查最后一整行（几千条请求时别每次按键都从头累加一遍）。
+        import bisect
+
+        tops = self.list._tops
+        content_h = self.list.height()
+        if tops:
+            i = max(0, bisect.bisect_right(tops, max_h) - 1)
+            row = self.list.row_height(self.list.items[i])
+            content_h = int(tops[i] + row + 4)
+        self.scroll.setFixedHeight(min(self.list.height(), max(60, content_h)))
         self.card.setFixedHeight(self.card.sizeHint().height())
         self.card.move((self.width() - self.card.width()) // 2, self._card_y())
         self._scroll_to(self.list.index)
@@ -2384,15 +2463,19 @@ class CommandPalette(QWidget):
     def _filter(self, text: str) -> None:
         query = (text or "").strip().lower()
         cache = getattr(self, "_cache", None)
-        if cache:
-            all_items = cache[not query]
-        else:
-            all_items = self._collect(with_headers=not query)
+        if cache is None:
+            cache = self._collect(True)
+            self._cache = cache
+            self._hay = [
+                (str(i.get("title") or "") + "\u0001" + str(i.get("subtitle") or "")).lower()
+                for i in cache
+            ]
         if query:
-            self._results = [i for i in all_items
-                             if query in i["title"].lower() or query in i["subtitle"].lower()]
+            hay = self._hay
+            self._results = [cache[i] for i, h in enumerate(hay) if query in h
+                             and cache[i].get("kind") != "header"]
         else:
-            self._results = all_items      # 不再截到 11 条：装不下就滚动
+            self._results = cache
         self.list.set_items(self._results)
         self._layout_card()
         self.update()
@@ -3335,3 +3418,71 @@ class TransferDialog(GlassDialog):
         if note is not None:
             note.setStyleSheet(
                 f"#NoteBox {{ border: 1px solid {theme().warning}; border-radius: 9px; }}")
+
+
+def export_folder(store: Store, node: Dict[str, Any], parent=None,
+                  pos=None) -> str:
+    """文件夹右键 → 导出这一个文件夹（含子文件夹），返回写出的路径。
+
+    和「导出全部集合」共用同一套格式与命名规则，只是把导出范围收窄到这一个
+    节点 —— 导出的文件里仍然是一个同名文件夹，导回来结构不会散。
+    """
+    import json
+    import re
+    from pathlib import Path
+
+    from .transfer import EXT, count_requests, to_har, to_ocelot, to_openapi, to_postman, to_yaml
+
+    if not isinstance(node, dict):
+        return ""
+    total = count_requests([node])
+    title = i18n.tr("导出这个文件夹")
+    targets = [
+        ("ocelot", i18n.tr("导出为 Ocelot JSON"), "grid"),
+        ("postman", i18n.tr("导出为 Postman v2.1"), "send"),
+        ("openapi-json", i18n.tr("导出为 OpenAPI 3.1 (JSON)"), "code"),
+        ("openapi-yaml", i18n.tr("导出为 OpenAPI 3.1 (YAML)"), "code"),
+        ("har", i18n.tr("导出为 HAR"), "download"),
+    ]
+    menu = Menu(parent)
+    head = menu.addAction(icons.icon("folder", theme().text_faint, 13),
+                          i18n.trf("{name} · {n} 个请求", name=node.get("name") or "", n=total))
+    head.setEnabled(False)
+    menu.addSeparator()
+    acts = {}
+    for key, label, icon_name in targets:
+        acts[menu.addAction(icons.icon(icon_name, theme().text, 13), label)] = key
+    anchor = pos if pos is not None else None
+    chosen = menu.exec(anchor) if anchor is not None else menu.exec()
+    key = acts.get(chosen)
+    if not key:
+        return ""
+    stem = re.sub(r'[\\/:*?"<>|\n\r\t]+', "-", (node.get("name") or "").strip()).strip(" .-")
+    default = (stem[:60] or "folder") + EXT.get(key, ".json")
+    suffix = "YAML (*.yaml)" if key == "openapi-yaml" else (
+        "HAR (*.har)" if key == "har" else "JSON (*.json)")
+    path, _ = QFileDialog.getSaveFileName(parent, title, default, suffix)
+    if not path:
+        return ""
+    if key == "openapi-yaml" and not path.lower().endswith((".yaml", ".yml")):
+        path += ".yaml"
+    try:
+        if key == "ocelot":
+            text = json.dumps(to_ocelot(store, stem or "folder", nodes=[node]),
+                              ensure_ascii=False, indent=2)
+        elif key == "postman":
+            text = json.dumps(to_postman(store, stem or "folder", nodes=[node]),
+                              ensure_ascii=False, indent=2)
+        elif key == "openapi-json":
+            text = json.dumps(to_openapi(store, stem or "folder", nodes=[node]),
+                              ensure_ascii=False, indent=2)
+        elif key == "openapi-yaml":
+            text = to_yaml(to_openapi(store, stem or "folder", nodes=[node]))
+        else:
+            text = json.dumps(to_har(store, stem or "folder", nodes=[node]),
+                              ensure_ascii=False, indent=2)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    except Exception:  # noqa: BLE001
+        return ""
+    return str(Path(path))

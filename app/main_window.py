@@ -1,6 +1,7 @@
 """主窗口：无边框圆角窗口、交通灯、侧栏、标签、面板分割与全局快捷键。"""
 from __future__ import annotations
 
+import base64
 import copy as _copy
 import json
 import os
@@ -48,13 +49,15 @@ from . import i18n, icons
 from .code_editor import CodeView, human_elapsed
 from .dialogs import CodeDialog, CommandPalette, EnvDialog, ImportCurlDialog, SettingsDialog
 from .http_client import ApiClient, Response
+from .ws_client import WsClient
 from .request_panel import RequestEditor
 from .response_panel import ResponsePanel
 from .sidebar import Sidebar
-from .store import Store, kv, new_request, uid
+from .store import Store, kv, new_request, resolve_vars, uid
 from .tabs import TabStrip
 from .anim import running as _anim_running, set_animations, stop as _anim_stop
-from .theme import C, S, apply_theme, font, mono, set_accent, theme, theme_by_name
+from .theme import (C, S, apply_theme, font, mono, set_accent, set_ui_scale,
+                    theme, theme_by_name)
 from .widgets import (Button, Divider, HBox, Label, Menu, VBox, animate, fade_in,
                       fade_window, icon_button)
 
@@ -567,6 +570,8 @@ class MainWindow(QWidget):
     def __init__(self, store: Store):
         super().__init__()
         self.store = store
+        # 字号缩放必须在建控件之前定下来：所有 font()/mono() 都读这个系数
+        set_ui_scale(store.settings.get("ui_scale", 1.0))
         # 运行期「当前 Store」以主窗口为准：别的地方临时 Store.load() 读一份快照做校验时，
         # 不会把弹窗读取设置用的引用换掉（否则设置项在弹窗里不生效）。
         Store._active = store
@@ -574,6 +579,20 @@ class MainWindow(QWidget):
         self.client.set_store(store)
         self.client.started.connect(lambda: None)
         self.client.finished.connect(self._on_response)
+        # WebSocket：全局一条连接，日志按标签各存各的（切回来还在）
+        self.ws = WsClient(self)
+        self.ws.stateChanged.connect(self._on_ws_state)
+        self.ws.frame.connect(self._on_ws_frame)
+        self.ws.opened.connect(self._on_ws_opened)
+        self.ws.closed.connect(self._on_ws_closed)
+        self.ws.failed.connect(self._on_ws_failed)
+        self.ws.ponged.connect(self._on_ws_pong)
+        self._ws_tab: Optional[str] = None
+        self._ws_replay_hook = None
+        # 连接时长每秒走一格：不然「已连接 42.60s」会一直停在连上那一刻
+        self._ws_tick = QTimer(self)
+        self._ws_tick.setInterval(1000)
+        self._ws_tick.timeout.connect(self._ws_tick_update)
 
         self.tabs_data: List[Dict[str, Any]] = []
         self._inflight_tab: Optional[str] = None
@@ -612,6 +631,7 @@ class MainWindow(QWidget):
         self._build()
         self._install_shortcuts()
         self._restore_session()
+        self._restore_reload_drafts()
         QTimer.singleShot(400, self._auto_start_mock)
         i18n.set_language(store.settings.get("language", "zh"), notify=False)
         i18n.bus().languageChanged.connect(self._retranslate)
@@ -703,6 +723,7 @@ class MainWindow(QWidget):
         self.editor.changed.connect(self._on_editor_changed)
         self.editor.scriptsChanged.connect(self._on_scripts_changed)
         self.editor.sendRequested.connect(self.send_current)
+        self.editor.wsSendRequested.connect(self._ws_send)
         self.editor.cancelRequested.connect(self._abort)
         self.editor.saveRequested.connect(self.save_current)
         self.editor.codeRequested.connect(self.show_code)
@@ -711,6 +732,7 @@ class MainWindow(QWidget):
         self.editor.mockRequested.connect(self.open_mock)
         self.editor.duplicateRequested.connect(self._duplicate_request)
         self.response = ResponsePanel()
+        self.response.ws_view.replay.connect(self._ws_replay)
         self.response.setMinimumHeight(180)
         self.response.requestSaveBody.connect(lambda body, note: self.toast.show_message(
             {"copied": "响应已复制", "redacted": "已脱敏复制（token / Cookie 已打码）"}.get(note, "响应已保存"),
@@ -1018,6 +1040,15 @@ class MainWindow(QWidget):
         self._open_request_obj(req, node_id=None)
         self.editor.focus_url()
 
+    def new_websocket(self) -> None:
+        """新建 WebSocket 请求：默认停在「消息」页，直接能连。"""
+        from .ws_panel import default_ws
+
+        req = new_request("WebSocket Request", "WS", "")
+        req["ws"] = default_ws()
+        self._open_request_obj(req, node_id=None)
+        self.editor.focus_url()
+
     def _preview_from_sidebar(self, request: Dict[str, Any]) -> None:
         """单击集合项：VSCode 式预览——复用同一个预览标签，标题斜体。"""
         node_id = request.get("id")
@@ -1085,6 +1116,11 @@ class MainWindow(QWidget):
             return
         if self._inflight_tab == tab_id:
             self._abort()
+        if self._ws_tab == tab_id:
+            # 关掉正在连的 WebSocket 标签：连接不能留成孤儿
+            if self.ws.busy:
+                self.ws.disconnect_ws()
+            self._ws_tab = None
         self.tabs_data = [t for t in self.tabs_data if t["id"] != tab_id]
         if self._active_tab_id == tab_id:
             self._active_tab_id = None
@@ -1252,7 +1288,10 @@ class MainWindow(QWidget):
         self.sidebar.reveal(tab.get("node_id"))
         try:
             self.editor.load(tab["request"])
-            if tab.get("response") is not None:
+            if (tab["request"].get("method") or "").upper() == "WS":
+                # WebSocket 标签：连接可能还活着，把日志和状态原样铺回去
+                self._ws_show(tab)
+            elif tab.get("response") is not None:
                 self.response.set_response(tab["response"])
                 self._refresh_timeline(tab["request"])
                 self.response.restore_state(tab.get("view"))
@@ -1268,6 +1307,23 @@ class MainWindow(QWidget):
             self.editor.set_busy(self._inflight_tab == tab_id)
             self._update_stack()
             self._autosave.start()      # 切标签不再同步写磁盘
+
+    def _restore_reload_drafts(self) -> None:
+        """重建界面（改字号）后，把没保存的临时标签原样接回来。"""
+        drafts = getattr(self.store, "_reload_drafts", None) or []
+        self.store._reload_drafts = None
+        if not drafts:
+            return
+        for req in drafts:
+            try:
+                self._open_request_obj(req, node_id=None, activate=False)
+            except Exception:              # noqa: BLE001
+                continue
+        ids = [t["id"] for t in self.tabs_data]
+        if ids:
+            self.tabstrip.set_current(ids[-1], animate=False)
+            self._on_tab_changed(ids[-1])
+            self._update_stack()
 
     def _recover_tab(self, tab_id: str) -> None:
         """把标签栏与 tabs_data 的错位修好，修不好就摘掉幽灵标签。"""
@@ -1317,7 +1373,12 @@ class MainWindow(QWidget):
             self.sidebar.set_node_method(tab["node_id"], tab["method"])
         # 请求改了不销毁上一次的响应：很多人只是把 POST 改成 GET 想对照结果，
         # 一改结果就全没了。保留内容 + 顶部一条「上一次的结果」提示，明确不误导。
-        if tab.get("response") is not None or self.response.response is not None:
+        # WebSocket 标签不参与这套：连接还在，日志不该被一条 stale 提示盖掉。
+        if (req.get("method") or "").upper() != "WS" and self.response.is_ws_view():
+            # 从 WS 改回 HTTP：WebSocket 的日志页不再成立，回到空态等新响应
+            self.response.show_empty()
+        if (req.get("method") or "").upper() != "WS" and (
+                tab.get("response") is not None or self.response.response is not None):
             tab["stale"] = True
             self.response.mark_stale()
         # 用户一旦编辑预览标签就把它固定下来（VSCode 行为）
@@ -1374,10 +1435,17 @@ class MainWindow(QWidget):
 
     # -------------------------------------------------- 发送
     def send_current(self) -> None:
+        tab = self.current_tab()
+        if tab is not None and (tab["request"].get("method") or "").upper() == "WS":
+            # 已连上时 ⌘↵ 就是「发这条消息」；还没连上就是「建立连接」
+            if self.ws.is_open and self._ws_tab == tab["id"]:
+                self._ws_send_from_composer()
+            else:
+                self.ws_toggle(tab)
+            return
         if self.client.busy:
             self._abort()
             return
-        tab = self.current_tab()
         if tab is None:
             return
         req = tab["request"]
@@ -1403,7 +1471,200 @@ class MainWindow(QWidget):
         self.client.send(req, settings, self.store.env_vars())
 
     def _abort(self) -> None:
+        if self.ws.busy:
+            self.ws.disconnect_ws()
+            return
         self.client.abort()
+
+    # -------------------------------------------------- WebSocket
+    @staticmethod
+    def _ws_session(tab: Dict[str, Any]) -> Dict[str, Any]:
+        sess = tab.get("ws_session")
+        if not isinstance(sess, dict):
+            sess = {"log": [], "state": "idle", "protocol": "", "latency": 0,
+                    "uptime": 0.0, "url": ""}
+            tab["ws_session"] = sess
+        return sess
+
+    def _ws_headers(self, req: Dict[str, Any]) -> List[tuple]:
+        """握手头：请求头 + Cookie + 认证，全部按当前环境变量解析。"""
+        env = self.store.env_vars()
+        out: List[tuple] = []
+        seen = set()
+        for row in req.get("headers") or []:
+            if not row.get("enabled", True) or not str(row.get("key") or "").strip():
+                continue
+            key = resolve_vars(str(row["key"]), env)
+            out.append((key, resolve_vars(str(row.get("value") or ""), env)))
+            seen.add(key.lower())
+        cookies = [f"{resolve_vars(str(c['key']), env)}={resolve_vars(str(c.get('value') or ''), env)}"
+                   for c in req.get("cookies") or []
+                   if c.get("enabled", True) and str(c.get("key") or "").strip()]
+        if cookies and "cookie" not in seen:
+            out.append(("Cookie", "; ".join(cookies)))
+        auth = self.client._effective_auth(req, env)
+        kind = (auth or {}).get("type") or "none"
+        if kind == "bearer" and auth.get("token"):
+            out.append(("Authorization", f"Bearer {resolve_vars(auth['token'], env)}"))
+        elif kind == "basic":
+            raw = f"{auth.get('username', '')}:{auth.get('password', '')}".encode("utf-8")
+            out.append(("Authorization", "Basic " + base64.b64encode(raw).decode("ascii")))
+        elif kind == "apikey" and auth.get("key"):
+            name = str(auth.get("key"))
+            value = resolve_vars(str(auth.get("value") or ""), env)
+            if (auth.get("add_to") or "header") == "header":
+                out.append((name, value))
+        if "user-agent" not in seen:
+            out.append(("User-Agent", self.store.settings.get("user_agent") or "Ocelot/1.0"))
+        return out
+
+    def _ws_show(self, tab: Dict[str, Any]) -> None:
+        sess = self._ws_session(tab)
+        if self._ws_tab == tab["id"]:
+            sess["state"] = self.ws.state
+            sess["uptime"] = self.ws.stats().get("uptime", 0.0)
+        # 切回一个还连着（或已断开）的标签时，按钮要保持「断开 / 连接」的正确语义
+        self.editor.set_ws_state(sess["state"] if self._ws_tab == tab["id"] else "idle")
+        self.response.show_ws(sess, sess.get("url") or tab["request"].get("url", ""))
+
+    def ws_toggle(self, tab: Dict[str, Any]) -> None:
+        """连接 / 断开。切换标签时连接跟着走，但日志各存各的。"""
+        tid = tab["id"]
+        if self._ws_tab == tid and self.ws.busy:
+            self.ws.disconnect_ws()
+            return
+        req = tab["request"]
+        url = self.editor._final_url()
+        if not url.strip():
+            self.toast.show_message("请先填写 WebSocket 地址", "error")
+            self.editor.focus_url()
+            return
+        if self.ws.busy:
+            self.ws.disconnect_ws()
+        # 前置脚本：先把环境变量 / 认证算好再握手，和 HTTP 一致
+        try:
+            self.client._run_pre_script(req, self.store.env_vars())
+        except Exception:                      # noqa: BLE001
+            pass
+        self._ws_tab = tid
+        sess = self._ws_session(tab)
+        sess.update({"log": [], "state": "connecting", "protocol": "", "latency": 0,
+                     "uptime": 0.0, "url": url})
+        self.editor.set_ws_state("connecting")
+        if self.tabstrip.current() == tid:
+            self.response.show_ws(sess, url)
+        option = (req.get("ws") or {})
+        ok = self.ws.connect_to(url, self._ws_headers(req),
+                                str(option.get("subprotocol") or ""),
+                                auto_reconnect=bool(option.get("auto_reconnect", True)),
+                                ping_secs=int(option.get("ping") or 0),
+                                verify_ssl=bool(self.store.settings.get("verify_ssl", True)))
+        if not ok:
+            self.editor.set_ws_state("idle")
+
+    def _ws_send_from_composer(self) -> None:
+        tab = self.current_tab()
+        if tab is None:
+            return
+        text = self.editor.ws.payload()
+        if not text.strip():
+            self.toast.show_message("先输入要发送的内容", "info")
+            return
+        self._ws_send(text, self.editor.ws.kind_key() == "binary")
+
+    def _ws_replay(self, text: str) -> None:
+        """双击日志里的一条消息：填回编辑器，改一改就能重发。"""
+        if not text:
+            return
+        self.editor.tabs.set_current("messages", emit=True)
+        self.editor.ws.editor.setPlainText(text)
+        self.toast.show_message("已填入编辑器，⌘↵ 发送", "success")
+
+    def _ws_send(self, text: str, binary: bool) -> None:
+        if not self.ws.is_open:
+            self.toast.show_message("还没连接：先点「连接」再发消息", "error")
+            return
+        if binary:
+            raw = b""
+            try:
+                raw = base64.b64decode(text.strip(), validate=False)
+            except Exception:                  # noqa: BLE001
+                raw = text.encode("utf-8")
+            self.ws.send_binary(raw)
+        else:
+            self.ws.send_text(text)
+
+    def _ws_tick_update(self) -> None:
+        tab = self._tab(self._ws_tab) if self._ws_tab else None
+        if tab is None or not self.ws.is_open:
+            self._ws_tick.stop()
+            return
+        stats = self.ws.stats()
+        self._ws_session(tab)["uptime"] = stats.get("uptime", 0.0)
+        if self.tabstrip.current() == tab["id"]:
+            self.response.ws_set_state("open", stats)
+
+    def _on_ws_state(self, state: str) -> None:
+        tab = self._tab(self._ws_tab) if self._ws_tab else None
+        if tab is not None:
+            self._ws_session(tab)["state"] = state
+        if tab is not None and self.tabstrip.current() == tab["id"]:
+            self.editor.set_ws_state(state)
+            self.response.ws_set_state(state, self.ws.stats())
+
+    def _on_ws_opened(self, protocol: str) -> None:
+        tab = self._tab(self._ws_tab) if self._ws_tab else None
+        if tab is not None:
+            sess = self._ws_session(tab)
+            sess["protocol"] = protocol or ""
+            sess["uptime"] = 0.0
+        self.editor.set_ws_state("open")
+        self._ws_tick.start()
+        if tab is not None and self.tabstrip.current() == tab["id"]:
+            self.response.ws_set_state("open", self.ws.stats())
+        self.toast.show_message(
+            i18n.trf("已连接 · 子协议 {p}", p=protocol) if protocol
+            else i18n.tr("WebSocket 已连接"), "success")
+
+    def _on_ws_closed(self, code: int, reason: str) -> None:
+        tab = self._tab(self._ws_tab) if self._ws_tab else None
+        if tab is not None:
+            self._ws_session(tab)["uptime"] = 0.0
+        self.editor.set_ws_state("idle")
+        self._ws_tick.stop()
+        if tab is not None and self.tabstrip.current() == tab["id"]:
+            self.response.ws_set_state("closed", self.ws.stats())
+        if code not in (1000, 1005, 1006):
+            self.toast.show_message(i18n.trf("连接已关闭（{code}）{reason}",
+                                             code=code, reason=reason), "info")
+
+    def _on_ws_failed(self, message: str) -> None:
+        self.editor.set_ws_state("idle")
+        # 自动重连会一次次失败：只在第一次弹提示，后面让日志里的系统消息说话
+        if getattr(self.ws, "_attempt", 0) <= 1:
+            self.toast.show_message(message, "error")
+
+    def _on_ws_pong(self, ms: int) -> None:
+        tab = self._tab(self._ws_tab) if self._ws_tab else None
+        if tab is not None:
+            self._ws_session(tab)["latency"] = int(ms)
+            if self.tabstrip.current() == tab["id"]:
+                self.response.pill.setToolTip(i18n.trf("连接往返延迟 {ms} ms", ms=int(ms)))
+
+    def _on_ws_frame(self, frame) -> None:
+        tab = self._tab(self._ws_tab) if self._ws_tab else None
+        if tab is None:
+            return
+        sess = self._ws_session(tab)
+        log = sess["log"]
+        log.append(frame)
+        # 日志有上限：长时间订阅的行情类连接不该把内存吃光
+        if len(log) > 4000:
+            del log[:len(log) - 4000]
+        sess["uptime"] = self.ws.stats().get("uptime", 0.0)
+        if self.tabstrip.current() == tab["id"]:
+            self.response.ws_add_frame(frame)
+            self.response.ws_set_state(self.ws.state, self.ws.stats())
 
     def _on_response(self, resp: Response) -> None:
         tab_id = self._inflight_tab
@@ -1706,7 +1967,49 @@ class MainWindow(QWidget):
         dlg.accentChanged.connect(self._on_accent_changed)
         dlg.dataReloaded.connect(self._reload_data)
         dlg.shortcutsChanged.connect(self._install_shortcuts)
+        # 字号要重建界面：等设置窗口自己关掉（exec 返回）之后再动手，
+        # 否则会在模态循环里再开第二个模态窗口。
+        pending = {"scale": None}
+        dlg.uiScaleChanged.connect(lambda s: pending.__setitem__("scale", s))
         dlg.exec()
+        if pending["scale"]:
+            self.reload_ui(pending["scale"])
+
+    def reload_ui(self, scale: float) -> None:
+        """按新的文字大小重建整个界面，再回到设置的外观页。
+
+        控件字体在构造时定死，就地改字号会留下无数高低不一的半新半旧控件；
+        这里干脆重建一个主窗口，把「当前打开的标签」交给 store 的 open_tabs 带过去。
+        """
+        try:
+            scale = float(scale)
+        except (TypeError, ValueError):
+            return
+        if abs(scale - float(self.store.settings.get("ui_scale", 1.0))) < 0.001:
+            return
+        self.store.settings["ui_scale"] = scale
+        self.store.save()
+        set_ui_scale(scale)
+        # 先把当前标签 / 分栏存下来，新窗口启动时会照单恢复。
+        # 没保存进集合的临时标签没有 node_id，open_tabs 带不过去，单独留一份内存快照。
+        self.store._reload_drafts = [
+            _copy.deepcopy(t["request"]) for t in self.tabs_data if not t.get("node_id")
+        ] if any(not t.get("node_id") for t in self.tabs_data) else []
+        self._persist()
+        geo = self.geometry()
+        was_max = self.isMaximized()
+        new = MainWindow(self.store)
+        new.safe_mode = getattr(self, "safe_mode", False)
+        new.setGeometry(geo)
+        if was_max:
+            new.showMaximized()
+        new.show()
+        new.raise_()
+        new.activateWindow()
+        QTimer.singleShot(160, lambda: new.show_settings("appearance"))
+        self._handing_off = True
+        self.close()
+        self.deleteLater()
 
     def _reload_data(self) -> None:
         """从云端恢复后整份数据都换了：标签全部关掉，侧栏与主题重新刷一遍。"""
@@ -1874,6 +2177,8 @@ class MainWindow(QWidget):
         key = payload
         if key == "new_request":
             self.new_request()
+        elif key == "new_ws":
+            self.new_websocket()
         elif key == "new_folder":
             self.sidebar._new_folder()
             self.toast.show_message("已新建文件夹", "success")
@@ -2057,6 +2362,10 @@ class MainWindow(QWidget):
             pass
         try:
             self.mock.stop()          # 本地 Mock 服务不留后台线程
+        except Exception:             # noqa: BLE001
+            pass
+        try:
+            self.ws.abort()           # WebSocket 连接不能留成孤儿
         except Exception:             # noqa: BLE001
             pass
         self._persist()

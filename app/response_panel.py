@@ -348,7 +348,7 @@ class ResponsePanel(QWidget):
         self._detail = None
 
         # ---------- 头部
-        self.pill = Pill("—", theme().text_faint, font_size=10.5)
+        self.pill = Pill("—", theme().text_faint, font_size=10.5, pad=10)
         self.time_label = Label("", 11, theme().text_dim, mono_font=True)
         self.size_label = Label("", 11, theme().text_faint, mono_font=True)
         self.type_label = Label("", 11, theme().text_faint, mono_font=True)
@@ -552,6 +552,11 @@ class ResponsePanel(QWidget):
         self.center.addWidget(self.loading)
         self.center.addWidget(self.error)
         self.center.addWidget(self.content)
+        from .ws_panel import WsLogView
+
+        self.ws_view = WsLogView()
+        self.center.addWidget(self.ws_view)
+        self._is_ws = False
 
         self.find_bar = FindBar()
         self.find_bar.hide()
@@ -865,7 +870,8 @@ class ResponsePanel(QWidget):
         from .response_detail import DetailCard
 
         resp = self.response
-        if resp is None:
+        # 请求失败时既没有真实耗时也没有响应体：任何「9 ms」都是假的，直接不给卡
+        if resp is None or resp.error or self._is_ws:
             return None
         tm = resp.timing or {}
         total = resp.elapsed
@@ -890,7 +896,7 @@ class ResponsePanel(QWidget):
         from .response_detail import DetailCard
 
         resp = self.response
-        if resp is None:
+        if resp is None or resp.error or self._is_ws:
             return None
         hs = resp.header_size or 0
         bs = max(0, resp.size - hs)
@@ -914,6 +920,60 @@ class ResponsePanel(QWidget):
                           note=i18n.tr("Header 含状态行 · Body 为正文"),
                           sections=sections)
 
+    # -------------------------------------------------- WebSocket 会话
+    WS_STATE_TEXT = {"idle": "未连接", "connecting": "连接中", "open": "已连接",
+                     "closing": "断开中", "closed": "已断开"}
+
+    def show_ws(self, session: Optional[dict], url: str = "") -> None:
+        """切到 WebSocket 视图：顶部状态胶囊 + 帧日志，不参与 HTTP 的响应逻辑。"""
+        self.stale_bar.hide()
+        self.shimmer.stop()
+        if getattr(self, "spinner", None) is not None:
+            self.spinner.stop()
+        self.response = None
+        self._is_ws = True
+        self.center.setCurrentWidget(self.ws_view)
+        self.tabs_row.hide()
+        self._set_head_visible(True)
+        self.meta.show()
+        self._set_actions_enabled(False)
+        self.url_label.setVisible(bool(url))
+        self.url_label.setText(url)
+        self.url_label.setToolTip(url)
+        session = session or {}
+        self.ws_view.set_frames(session.get("log") or [])
+        self.ws_set_state(session.get("state", "idle"),
+                          {"bytes_in": sum(f.size for f in (session.get("log") or [])
+                                           if getattr(f, "dir", "") == "in"),
+                           "uptime": session.get("uptime", 0)})
+
+    def ws_set_state(self, state: str, stats: Optional[dict] = None) -> None:
+        if not self._is_ws:
+            return
+        t = theme()
+        label = self.WS_STATE_TEXT.get(state, state)
+        self.pill.set_text(label)
+        self.pill.set_color({"open": t.success, "connecting": t.info,
+                             "closing": t.warning, "closed": t.text_faint}.get(state, t.text_faint))
+        stats = stats or {}
+        up = float(stats.get("uptime") or 0)
+        self.time_label.setText(human_elapsed(int(up * 1000)) if up >= 0.05 else "")
+        self.size_label.setText(human_size(int(stats.get("bytes_in") or 0)))
+        self.type_label.setText("WebSocket")
+        self._set_metrics_visible(bool(up >= 0.05))
+        self._set_dots(True)
+        self.dot3.hide()
+
+    def ws_add_frame(self, frame) -> None:
+        if self.center.currentWidget() is self.ws_view:
+            self.ws_view.add_frame(frame)
+
+    def ws_clear(self) -> None:
+        self.ws_view.clear()
+
+    def is_ws_view(self) -> bool:
+        return self._is_ws
+
     # -------------------------------------------------- 状态
     def _set_actions_enabled(self, on: bool) -> None:
         for b in (self.find_btn, self.copy_btn, self.save_btn):
@@ -930,6 +990,19 @@ class ResponsePanel(QWidget):
         self.dot2.setVisible(on)
         self.dot3.setVisible(on and bool(self.node_label.text()))
 
+    def _set_metrics_visible(self, on: bool) -> None:
+        """失败时连「响应时间 / 大小 / 类型」一起收起来。
+
+        以前只在失败时把文字清空，标签还占着位置：鼠标悬停会弹出「9 ms」的
+        详情卡，看着像请求成功过一样（用户截图反馈）。既然失败没有响应体和
+        耗时可看，就整组藏掉，只留状态胶囊说明原因。
+        """
+        for w in (self.time_label, self.size_label, self.type_label):
+            w.setVisible(on)
+        self.dot1.setVisible(on)
+        self.dot2.setVisible(on and bool(self.type_label.text()))
+
+
     def set_node(self, node: dict) -> None:
         """在指标条上标出这次请求走的是哪个节点（本地直连不显示，免得噪音）。"""
         name = (node or {}).get("name", "")
@@ -940,6 +1013,7 @@ class ResponsePanel(QWidget):
     def show_empty(self) -> None:
         self.stale_bar.hide()
         self.response = None
+        self._is_ws = False
         self._body_text = ""
         self.console_host.clear()
         self.error_console.clear()
@@ -957,6 +1031,8 @@ class ResponsePanel(QWidget):
         self.size_label.setText("")
         self.type_label.setText("")
         self.url_label.setText("")
+        self._set_metrics_visible(False)
+        self.dot3.hide()
         self._set_actions_enabled(False)
         self.find_bar.hide()
 
@@ -994,6 +1070,7 @@ class ResponsePanel(QWidget):
         self.type_label.setText("")
         self.url_label.setText("")
         self.url_label.hide()
+        self._set_metrics_visible(False)
         self._set_dots(False)
         self._set_actions_enabled(False)
 
@@ -1013,8 +1090,12 @@ class ResponsePanel(QWidget):
         self.size_label.setText("")
         self.type_label.setText("")
         self.url_label.hide()
+        self._set_metrics_visible(False)
         self._set_dots(False)
         self._set_actions_enabled(False)
+        detail = getattr(self, "_detail", None)
+        if detail is not None:
+            detail.hide()
 
     def set_response(self, resp: Response) -> None:
         self.stale_bar.hide()
@@ -1022,6 +1103,7 @@ class ResponsePanel(QWidget):
         if getattr(self, 'spinner', None) is not None:
             self.spinner.stop()
         self.response = resp
+        self._is_ws = False
         if resp.error:
             self.show_error(resp.error)
             return
@@ -1037,6 +1119,7 @@ class ResponsePanel(QWidget):
         self._set_actions_enabled(True)
         self._set_head_visible(True)
         self.meta.show()
+        self._set_metrics_visible(True)
         self._set_dots(True)
         self.url_label.show()
 

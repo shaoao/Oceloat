@@ -1206,4 +1206,86 @@ _EN.update({
         "Nothing to export yet — create or import a collection first",
     "还没有可导出的请求：先新建或导入一个集合。":
         "Nothing to export yet — create or import a collection first.",
+
+    # ---- 界面文字大小
+    "文字大小": "Text size",
+    "调整界面文字的整体大小，所有页面即时生效。":
+        "Scales text across the whole app. Applies to every page instantly.",
+
+    # ---- 文件夹导出
+    "导出这个文件夹": "Export this folder",
+    "{name} · {n} 个请求": "{name} · {n} requests",
+    "已导出到 {name}": "Exported to {name}",
+
+    # ---- WebSocket
+    "HTTP 请求": "HTTP request",
+    "WebSocket 请求": "WebSocket request",
+    "新建 WebSocket 请求": "New WebSocket request",
+    "消息": "Messages",
+    "文本": "Text",
+    "JSON": "JSON",
+    "二进制": "Binary",
+    "子协议": "Subprotocol",
+    "可留空": "optional",
+    "发出": "Sent",
+    "心跳": "Ping",
+    "心跳间隔（秒），0 表示不发": "Ping interval in seconds. 0 disables it",
+    "秒": "s",
+    "自动重连": "Auto-reconnect",
+    "发送后清空": "Clear after send",
+    "格式化": "Format",
+    "把 JSON 排版成易读的缩进格式": "Pretty-print the JSON",
+    "保存这条": "Save this",
+    "存进常用消息，下次一点就填": "Save to common messages for one-click reuse",
+    "发送这条": "Send this message",
+    "删除这条": "Delete this message",
+    "点击填入编辑器": "Click to load into the editor",
+    "常用消息 · {n}": "Common messages · {n}",
+    "常用消息：把要反复发的内容存下来，点击即填入":
+        "Common messages: save recurring payloads and load them with one click",
+    "{name}\n点击填入编辑器，点右侧 ✕ 删除":
+        "{name}\nClick to load into the editor; click ✕ to delete",
+    "未命名": "Untitled",
+    "未连接": "Not connected",
+    "连接中": "Connecting",
+    "已连接": "Connected",
+    "断开中": "Disconnecting",
+    "已断开": "Disconnected",
+    "连接": "Connect",
+    "断开": "Disconnect",
+    "接收": "Received",
+    "全部": "All",
+    "过滤消息内容": "Filter messages",
+    "导出日志…": "Export log…",
+    "导出消息日志": "Export message log",
+    "清空日志": "Clear log",
+    "复制这条消息": "Copy this message",
+    "单击看完整内容，双击把收到的消息填回编辑器":
+        "Click for the full payload; double-click to load a received message into the editor",
+    "已填入编辑器，⌘↵ 发送": "Loaded into the editor — ⌘↵ to send",
+    "自动滚动到最新一条": "Scroll to the newest message",
+    "接收 {i} · 发送 {o} · {size}": "In {i} · Out {o} · {size}",
+    "还没有消息。连接后收发的内容会实时出现在这里。":
+        "No messages yet. Everything sent and received shows up here live.",
+    "输入要发送的内容。连接成功后 ⌘↵ 直接发送；JSON 会自动识别高亮。":
+        "Type a message. ⌘↵ sends once connected; JSON is highlighted automatically.",
+    "输入要发送的内容。连接成功后 ⌘↵ 直接发送。":
+        "Type a message. ⌘↵ sends once connected.",
+    "还没连接：点左上角「连接」建立 WebSocket 连接。":
+        "Not connected yet — hit Connect in the top-left corner.",
+    "先连接再发送消息": "Connect before sending",
+    "ws:// 或 wss:// 地址，例如 wss://echo.websocket.org":
+        "ws:// or wss:// address, e.g. wss://echo.websocket.org",
+    "支持 ws:// wss://；直接粘 http(s) 地址会自动改写":
+        "ws:// and wss:// are supported; http(s) URLs are rewritten automatically",
+    "建立连接  ⌘↵": "Connect  ⌘↵",
+    "断开连接  ⌘↵": "Disconnect  ⌘↵",
+    "取消连接": "Cancel connection",
+    "请先填写 WebSocket 地址": "Enter a WebSocket URL first",
+    "先输入要发送的内容": "Type something to send first",
+    "还没连接：先点「连接」再发消息": "Not connected yet — hit Connect first",
+    "WebSocket 已连接": "WebSocket connected",
+    "已连接 · 子协议 {p}": "Connected · subprotocol {p}",
+    "连接已关闭（{code}）{reason}": "Connection closed ({code}) {reason}",
+    "连接往返延迟 {ms} ms": "Round-trip latency {ms} ms",
 })

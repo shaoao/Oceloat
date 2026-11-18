@@ -1,5 +1,40 @@
 # What's Changed
 
+## v1.0.32 — 2026-11-18
+
+**Added**
+- **WebSocket requests.** Create one from **New request**, or switch any request's method to
+  `WS`. Addresses accept `ws://` / `wss://`; pasted `http(s)` URLs are rewritten.
+- Full WS feature set: text / JSON / binary messages, handshake headers + cookies + auth,
+  subprotocols, ping heartbeat with real round-trip latency, exponential-backoff
+  auto-reconnect, and live connection stats (uptime, frames and bytes in/out).
+- A frame log with direction, type, time and size; filter by Received / Sent, search the
+  contents, click a row for the full payload, copy, export to JSON or text, clear. Capped at
+  4000 frames so long-running subscriptions stay light.
+- Common messages: save recurring payloads as chips, click to load them back. They travel with
+  the request in Ocelot / Postman export and come back intact.
+- Double-click any received frame in the log to **replay** it: the payload is loaded back into
+  the editor so you can tweak it and send again — no copy-paste.
+- Settings → Appearance → **Text size** (100% / 110% / 125% / 150%). Scales the whole UI and
+  the code area; applies instantly and returns you to the same settings page (unsaved tabs
+  are carried over).
+- Right-click a folder in the collection tree → **Export this folder** (Ocelot, Postman,
+  OpenAPI, HAR). The default file name is the folder name and the exported file keeps the
+  same folder structure.
+
+**Fixed**
+- Hovering "response time" after a failed request still showed a bogus `9 ms` card. Time,
+  size and type are now hidden on failure, and the hover cards are gone.
+- In English the `failed` pill was narrower than its label, so the text spilled out of the
+  rounded background. Pills now size themselves from real glyph metrics.
+
+**Improved**
+- The command palette only paints the rows that are on screen; the rest render as you
+  scroll, while search still matches every entry.
+- Batch-running a collection skips WebSocket requests.
+- Self-test suite extended to 519 checks, including a real local WebSocket server covering
+  connect, echo, heartbeat, replay, disconnect and refused connections.
+
 ## v1.0.31 — 2026-11-18
 
 **Fixed**
