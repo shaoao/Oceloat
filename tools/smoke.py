@@ -3256,12 +3256,15 @@ def main() -> int:
         dlg.list.mouseReleaseEvent(ev)
         check("hover 详情按钮弹出浮层", dlg._detail_popup.isVisible())
         detail_texts = [lb.text() for lb in dlg._detail_popup.detail.findChildren(QLabel)]
-        check("浮层详情精简且不重复参数请求头正文",
-              not any(x in detail_texts for x in ("参数", "请求头", "正文", "类型")),
+        # v1.0.43：详情浮层填满参数 / 请求头 / 正文等完整字段
+        check("浮层详情填充请求配置",
+              any(x in detail_texts for x in ("参数", "请求头", "正文")),
               str(detail_texts))
         check("浮层详情保留 URL 与原位置",
               any(x == "URL" for x in detail_texts) and
               any(x == "原位置" for x in detail_texts), str(detail_texts))
+        check("详情浮层带滚动区", hasattr(dlg._detail_popup, "detail_scroll") and
+              dlg._detail_popup.detail_scroll.widget() is dlg._detail_popup.detail)
         dlg._detail_popup.hide()
         check("有操作动画覆盖层", hasattr(dlg, "_flash"))
         dlg._flash_action("trash", "已清空", "danger")
@@ -3271,6 +3274,50 @@ def main() -> int:
               f"{dlg._flash._icon}/{dlg._flash._text}/{dlg._flash._p}")
         check("动画有 paintEvent 绘制",
               callable(getattr(dlg._flash, "paintEvent", None)))
+        # v1.0.43：时间分组 + 折叠 + 方法配色 + 菜单不透明
+        from app.theme import theme as _theme
+        from app import trash_dialog as _td
+        check("WS 用主题配色（非灰字）",
+              _td._method_color("WS") != _theme().text_dim)
+        check("各方法颜色互不相同",
+              len({_td._method_color(m) for m in
+                   ("GET", "POST", "PUT", "DELETE", "WS")}) >= 4)
+        # 造几条不同时间的记录，验证分组覆盖 1小时内 / 昨天 / 更早
+        import time as _t2
+        import datetime as _d2
+        now = _t2.time()
+        yesterday_noon = (_d2.datetime.combine(
+            _d2.date.today() - _d2.timedelta(days=1), _d2.time(12, 0))
+            .timestamp())
+        for nm, ts in (("组-1小时内", now - 600), ("组-昨天", yesterday_noon),
+                       ("组-更早", now - 60 * 86400)):
+            r = _nr(nm, "GET", f"https://g.test/{nm}")
+            st.collections.append(r)
+            st.move_to_trash(r["id"])
+            st.trash[0]["deleted_at"] = ts  # move_to_trash 插到头部
+        dlg.reload()
+        dlg._on_search("")
+        gkeys = [g["key"] for g in dlg.list.groups]
+        check("按时间分成多组", "hour" in gkeys and "yesterday" in gkeys and
+              "older" in gkeys, str(gkeys))
+        # 折叠动画：点组头切换 expanded，factor 起始值被设置
+        grp = dlg.list.groups[0]
+        before = grp["expanded"]
+        dlg.list._toggle_group(grp)
+        check("组头可折叠", grp["expanded"] != before)
+        check("折叠动画有驱动对象", grp.get("anim") is not None)
+        grp["factor"] = 1.0
+        grp["expanded"] = True
+        # 右键菜单自绘不透明底：paintEvent 存在且样式表设了透明交给自绘
+        from app.widgets import Menu as _Menu
+        m = _Menu(w)
+        check("菜单自绘不透明背景", callable(getattr(m, "paintEvent", None)) and
+              "transparent" in m.styleSheet())
+        m.deleteLater()
+        # 侧栏删除飞入动画对象存在
+        check("侧栏有删除飞入动画", hasattr(w.sidebar, "_trash_fly") and
+              callable(getattr(w.sidebar._trash_fly, "fly", None)))
+        st.clear_trash()
         # 自动清理：设置开关 + 保留天数，保存后立即清过期
         check("自动清理默认开启", st.settings.get("trash_enabled") is True)
         check("保留天数默认 30", st.trash_keep_days() == 30)

@@ -1,5 +1,15 @@
 # What's Changed
 
+## v1.0.43 — 2026-11-18
+
+**Changed**
+- Group trash items by deletion time (within 1 hour / today / yesterday / 7 days / 30 days / older), with collapsible headers and expand animations.
+- Detail popup now fills with params / headers / body / cookies / auth / variables / sub-requests and scrolls.
+- Unified method colors with the theme palette; WS / HEAD / OPTIONS are no longer grey.
+- Fixed the transparent context menu by drawing an opaque rounded background; full CN/EN strings.
+- Extended clear / restore / delete animations by ~0.5s for a calmer feel.
+- Added a lightweight arc-to-trash-button fly animation when deleting from the sidebar.
+
 ## v1.0.42 — 2026-11-18
 
 **Changed**

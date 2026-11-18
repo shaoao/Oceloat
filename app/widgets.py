@@ -72,6 +72,22 @@ class Menu(QMenu):
         self.setWindowFlags(self.windowFlags()
                             | Qt.WindowType.FramelessWindowHint
                             | Qt.WindowType.NoDropShadowWindowHint)
+        # WA_TranslucentBackground 下，macOS 常常不绘制样式表里的 QMenu 背景，
+        # 结果整个菜单透明、能看见后面的文字（用户截图）。这里把背景交给
+        # paintEvent 自绘：先铺不透明圆角底，菜单项仍由 Qt 正常绘制。
+        self.setStyleSheet(
+            "QMenu { background: transparent; border: none; }")
+
+    def paintEvent(self, e):  # noqa: N802
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(C(t.border_strong), 1))
+        p.setBrush(C(t.elevated))
+        p.drawRoundedRect(r, 10, 10)
+        p.end()
+        super().paintEvent(e)
 
     # -------------------------------------------------- 语言
     def localize(self) -> None:

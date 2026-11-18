@@ -19,9 +19,21 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.42"
+VERSION = "1.0.43"
 
 CHANGELOG = [
+    {
+        "version": "1.0.43",
+        "date": "2026-11-18",
+        "items": [
+            "回收站记录按「1小时内 / 今天 / 昨天 / 7天内 / 30天内 / 更早」分组，组头带折叠箭头和展开动画，检查更清晰",
+            "详情小框填充参数 / 请求头 / 正文 / Cookie / 认证 / 环境变量 / 子请求等完整信息，并可滚动查看",
+            "回收站方法颜色统一走主题配色，WS / HEAD / OPTIONS 等不再显示成灰色",
+            "右键菜单修复透明问题，改为自绘不透明圆角底，中英文文案完整适配",
+            "清空 / 恢复 / 彻底删除动画延长约 0.5 秒，更从容耐看",
+            "侧栏删除请求时，垃圾图标沿弧线飞入回收站按钮并淡出，轻量诗意、占用资源少",
+        ],
+    },
     {
         "version": "1.0.42",
         "date": "2026-11-18",

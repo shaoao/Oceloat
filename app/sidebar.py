@@ -40,11 +40,77 @@ from .code_editor import human_elapsed
 from .store import Store, new_folder, new_request
 from .anim import stop as _anim_stop
 from .theme import C, method_color, px, status_color, font, mono, theme
-from .widgets import Button, HBox, Label, Menu, icon_button
+from .widgets import Button, HBox, Label, Menu, animate, icon_button
 
 ROLE_ID = Qt.ItemDataRole.UserRole
 ROLE_TYPE = Qt.ItemDataRole.UserRole + 1
 ROLE_DATA = Qt.ItemDataRole.UserRole + 2
+
+
+# ---------------------------------------------------------------- 删除飞入动画
+class TrashFly(QWidget):
+    """删除时一个小垃圾图标沿抛物线飞向右上角回收站按钮并淡出。
+
+    单个 QVariantAnimation 驱动 paintEvent，不建窗口、不起线程、不驻留定时器，
+    动画结束即隐藏；关动效时 animate 直接跳终态。占用资源极少，也带一点诗意。
+    """
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self._p = 0.0
+        self._start = QPointF()
+        self._end = QPointF()
+        self.hide()
+
+    def fly(self, start: QPointF, end: QPointF) -> None:
+        host = self.parentWidget()
+        if host is None:
+            return
+        self._start, self._end = start, end
+        self.setGeometry(host.rect())
+        self.raise_()
+        self.show()
+
+        def _set(v):
+            self._p = float(v)
+            self.update()
+
+        def _done():
+            self.hide()
+            self._p = 0.0
+
+        _anim_stop(getattr(self, "_anim", None))
+        self._anim = animate(self, 0.0, 1.0, 520, _set,
+                             QEasingCurve.Type.InOutCubic, on_done=_done)
+
+    def paintEvent(self, _e):  # noqa: N802
+        if not (0.0 < self._p < 1.0):
+            return
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        # 二次贝塞尔：控制点在起终点上方，形成一条轻轻上抛再落下的弧线
+        s, e = self._start, self._end
+        ctrl = QPointF((s.x() + e.x()) / 2, min(s.y(), e.y()) - 56)
+        u = 1.0 - self._p
+        x = u * u * s.x() + 2 * u * self._p * ctrl.x() + self._p * self._p * e.x()
+        y = u * u * s.y() + 2 * u * self._p * ctrl.y() + self._p * self._p * e.y()
+        # 后段淡出 + 缩小：飞到按钮里时几乎消失
+        fade = 1.0 if self._p < 0.62 else max(0.0, (1.0 - self._p) / 0.38)
+        scale = 1.0 - 0.45 * self._p
+        size = 26 * scale
+        p.setOpacity(fade)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(t.panel_alt))
+        p.drawRoundedRect(QRectF(x - size / 2, y - size / 2, size, size), size / 3, size / 3)
+        pm = icons.pixmap("trash", QColor(t.danger).name(QColor.NameFormat.HexArgb),
+                          14 * scale, 1.7)
+        p.drawPixmap(QPointF(x - pm.width() / 2, y - pm.height() / 2), pm)
+        p.setOpacity(1.0)
+        p.end()
 
 
 # ---------------------------------------------------------------- 搜索框
@@ -580,7 +646,15 @@ class Sidebar(QWidget):
         self._mode = "collections"
         self.open_ids: Set[str] = set()
         self._build()
+        # 删除飞入动画：挂在最上层，鼠标事件穿透，不影响集合树交互
+        self._trash_fly = TrashFly(self)
         self.refresh()
+
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        fly = getattr(self, "_trash_fly", None)
+        if fly is not None and not fly.isHidden():
+            fly.setGeometry(self.rect())
 
     # -------------------------------------------------- 构建
     def _build(self) -> None:
@@ -915,10 +989,23 @@ class Sidebar(QWidget):
         if confirm and not self._confirm_delete(node):
             return
         name = node.get("name", "")
+        # 删除前先记住这条在树里的位置，作为飞行动画起点（相对 Sidebar）
+        start = None
+        item = self._find_item(node_id)
+        if item is not None:
+            rect = self.tree.visualItemRect(item)
+            if rect.isValid() and not rect.isEmpty():
+                local = self.tree.mapTo(self, rect.center())
+                start = QPointF(local.x(), local.y())
         # 删除改为移入回收站：误删可在回收站原样恢复，无需再吓唬用户「无法撤销」。
         self.store.move_to_trash(node_id)
         self.store.save()
         self.refresh()
+        # 小垃圾图标沿弧线飞向右上角回收站按钮
+        fly = getattr(self, "_trash_fly", None)
+        if fly is not None and start is not None:
+            c = self.trash_btn.mapTo(self, self.trash_btn.rect().center())
+            fly.fly(start, QPointF(c.x(), c.y()))
         self.requestDeleted.emit(node_id)
         self.notify.emit(i18n.trf("已把「{name}」移入回收站", name=name))
         self.changed.emit()

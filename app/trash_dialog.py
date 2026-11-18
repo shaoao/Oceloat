@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
 
 from . import i18n, icons
 from .store import Store
-from .theme import C, S, font, mono, theme
+from .theme import C, S, font, method_color, mono, theme
 from .widgets import (Button, Card, Divider, HBox, Label, SegmentedTabs, VBox,
                       animate, icon_button)
 
@@ -56,14 +56,12 @@ def _fmt_full(ts: float) -> str:
 
 
 def _method_color(method: str) -> str:
-    t = theme()
-    return {
-        "GET": t.success,
-        "POST": t.info,
-        "PUT": t.warning,
-        "PATCH": t.warning,
-        "DELETE": t.danger,
-    }.get((method or "").upper(), t.text_dim)
+    """和主界面共用一套方法配色：GET绿/POST橙/PUT·WS蓝/DELETE红…
+
+    之前这里单独维护一份字典，漏了 WS/HEAD/OPTIONS 等，导致回收站里
+    这些请求一律灰字，和侧栏对不上。现在直接走主题的统一映射。
+    """
+    return method_color(method or "")
 
 
 # ---------------------------------------------------------------- 日期控件
@@ -129,38 +127,127 @@ def _style_date_edit(w: QDateEdit) -> None:
 
 
 # ---------------------------------------------------------------- 回收站条目列表
+def _group_key(ts: float) -> str:
+    """按删除时间归入 1小时内 / 今天 / 昨天 / 7天内 / 30天内 / 更早。"""
+    try:
+        dt = _dt.datetime.fromtimestamp(ts)
+    except (ValueError, OSError, OverflowError):
+        return "older"
+    now = time.time()
+    age = now - ts
+    today = _dt.date.today()
+    if 0 <= age < 3600:
+        return "hour"
+    if dt.date() == today:
+        return "today"
+    if dt.date() == today - _dt.timedelta(days=1):
+        return "yesterday"
+    if age < 7 * 86400:
+        return "week"
+    if age < 30 * 86400:
+        return "month"
+    return "older"
+
+
+GROUP_DEFS = [
+    ("hour",      "1小时内"),
+    ("today",     "今天"),
+    ("yesterday", "昨天"),
+    ("week",      "7天内"),
+    ("month",     "30天内"),
+    ("older",     "更早"),
+]
+GROUP_LABELS = {k: lab for k, lab in GROUP_DEFS}
+
+
 class TrashList(QWidget):
-    """自绘条目列表：卡片式行、支持 Ctrl / Shift 多选与 hover。"""
+    """自绘条目列表：按删除时间分组、组头可折叠（带动画），支持多选与 hover。"""
 
     picked = pyqtSignal()                 # 选中变化（按钮态刷新）
     activated = pyqtSignal(str)           # 双击：查看该条详情
     detailRequested = pyqtSignal(str)     # hover 的「详情」小按钮：弹出详情浮层
     ROW_H = 62
+    HEADER_H = 32                         # 分组头高度
     DETAIL_W = 46                         # 详情小按钮宽度
     DETAIL_H = 20
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.items: List[Dict[str, Any]] = []
+        self.groups: List[Dict[str, Any]] = []   # {key,label,recs,expanded,factor,anim,top}
         self.selected: set = set()
         self._anchor = -1
         self._hover = -1
+        self._hover_group: Optional[str] = None
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
+    # -------------------------------------------------- 分组 / 布局
     def set_items(self, items: List[Dict[str, Any]]) -> None:
         self.items = list(items or [])
-        # 清掉已不在列表里的选中项
         ids = {r.get("id") for r in self.items}
         self.selected.intersection_update(ids)
-        self.setFixedHeight(max(2, len(self.items)) * self.ROW_H + 6)
-        self.update()
+        # 记住哪些组是折叠的，筛选/刷新后保持一致
+        collapsed = {g["key"] for g in self.groups if not g["expanded"]}
+        buckets: Dict[str, List[Dict[str, Any]]] = {k: [] for k, _ in GROUP_DEFS}
+        # 用对象 id 记录原始行号：内容相同的两条记录也不会串位
+        row_index = {id(rec): i for i, rec in enumerate(self.items)}
+        for rec in self.items:
+            buckets.setdefault(_group_key(rec.get("deleted_at", 0)), []).append(rec)
+        self.groups = []
+        for key, label in GROUP_DEFS:
+            recs = buckets.get(key) or []
+            if not recs:
+                continue
+            # 每条记录记住自己的行号，供命中/详情按钮定位（浅拷贝，不写回 store）
+            for rec in recs:
+                rec["_row_index"] = row_index.get(id(rec), 0)
+            self.groups.append({
+                # 存中文原文，绘制时再 tr()：切语言后重绘即更新标题
+                "key": key, "label": label, "recs": recs,
+                "expanded": key not in collapsed,
+                "factor": 0.0 if key in collapsed else 1.0, "anim": None, "top": 0.0,
+            })
+        self._relayout()
         self.picked.emit()
 
+    def _relayout(self) -> None:
+        """按各组展开因子重算总高度。折叠动画每帧调用，O(分组数)。"""
+        y = 0.0
+        for g in self.groups:
+            g["top"] = y
+            y += self.HEADER_H
+            y += len(g["recs"]) * self.ROW_H * g["factor"]
+        self.setFixedHeight(max(self.HEADER_H, int(y) + 6))
+        self.update()
+
+    def _row_y(self, i: int) -> float:
+        """第 i 条记录当前的 y 坐标；被折叠时返回 -1。"""
+        for g in self.groups:
+            for k, rec in enumerate(g["recs"]):
+                if rec.get("_row_index") == i:
+                    if g["factor"] < 0.999:
+                        return -1.0
+                    return g["top"] + self.HEADER_H + k * self.ROW_H
+        return -1.0
+
+    def _hit(self, y: float):
+        """返回 ('header', group) / ('item', rec) / (None, None)。"""
+        for g in self.groups:
+            top = g["top"]
+            if top <= y < top + self.HEADER_H:
+                return "header", g
+            body_h = len(g["recs"]) * self.ROW_H * g["factor"]
+            if top + self.HEADER_H <= y < top + self.HEADER_H + body_h:
+                k = int((y - top - self.HEADER_H) // self.ROW_H)
+                if 0 <= k < len(g["recs"]):
+                    return "item", g["recs"][k]
+        return None, None
+
     def _row_at(self, y: float) -> int:
-        i = int(y // self.ROW_H)
-        return i if 0 <= i < len(self.items) else -1
+        kind, val = self._hit(y)
+        return int(val.get("_row_index", -1)) if kind == "item" else -1
 
     @staticmethod
     def _descendant_node_ids(node: Dict[str, Any]) -> set:
@@ -185,23 +272,55 @@ class TrashList(QWidget):
                 selected.add(r.get("id"))
 
     def _detail_rect(self, i: int) -> QRectF:
-        """第 i 行「详情」小按钮的命中区域（贴在行右侧、删除时间左边）。"""
-        r = QRectF(3, i * self.ROW_H + 3, self.width() - 6, self.ROW_H - 6)
+        """第 i 条记录「详情」小按钮的命中区域（贴在行右侧、删除时间左边）。"""
+        y = self._row_y(i)
+        if y < 0:
+            return QRectF(-100, -100, 1, 1)
+        r = QRectF(3, y + 3, self.width() - 6, self.ROW_H - 6)
         return QRectF(r.right() - 96 - self.DETAIL_W, r.center().y() - self.DETAIL_H / 2,
                       self.DETAIL_W, self.DETAIL_H)
 
+    def _toggle_group(self, g: Dict[str, Any]) -> None:
+        """折叠 / 展开一组，factor 0↔1 用动画平滑过渡。"""
+        from .anim import stop as _stop
+        target = 0.0 if g["expanded"] else 1.0
+        g["expanded"] = not g["expanded"]
+        start = g["factor"]
+        _stop(g.get("anim"))
+
+        def _set(v):
+            g["factor"] = float(v)
+            self._relayout()
+
+        def _done():
+            g["factor"] = target
+            self._relayout()
+
+        g["anim"] = animate(self, start, target, 240, _set,
+                            QEasingCurve.Type.OutCubic, on_done=_done)
+
     def mouseMoveEvent(self, e):  # noqa: N802
-        i = self._row_at(e.position().y())
-        if i != self._hover:
+        kind, val = self._hit(e.position().y())
+        i = int(val.get("_row_index", -1)) if kind == "item" else -1
+        hg = val.get("key") if kind == "header" else None
+        if i != self._hover or hg != self._hover_group:
             self._hover = i
+            self._hover_group = hg
             self.update()
 
     def leaveEvent(self, e):  # noqa: N802
         self._hover = -1
+        self._hover_group = None
         self.update()
 
     def mouseReleaseEvent(self, e):  # noqa: N802
-        i = self._row_at(e.position().y())
+        kind, val = self._hit(e.position().y())
+        if kind == "header":
+            self._toggle_group(val)
+            return
+        if kind != "item":
+            return
+        i = int(val.get("_row_index", -1))
         if i < 0:
             return
         # hover 时右侧「详情」小按钮：只弹详情，不改变选中
@@ -230,76 +349,99 @@ class TrashList(QWidget):
         self.picked.emit()
 
     def mouseDoubleClickEvent(self, e):  # noqa: N802
-        i = self._row_at(e.position().y())
-        if i >= 0:
-            self.activated.emit(self.items[i].get("id"))
+        kind, val = self._hit(e.position().y())
+        if kind == "item":
+            self.activated.emit(val.get("id"))
 
     def paintEvent(self, _e):  # noqa: N802
         t = theme()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        # 自绘控件必须自己铺满底色：QScrollArea 的 viewport 默认拿 palette
-        # 的浅色 base，不铺就会出现「右边一块白」的割裂。
         p.fillRect(self.rect(), C(t.panel))
-        for i, rec in enumerate(self.items):
-            r = QRectF(3, i * self.ROW_H + 3, self.width() - 6, self.ROW_H - 6)
-            sel = rec.get("id") in self.selected
-            if sel:
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(C(t.selected))
-                p.drawRoundedRect(r, 8, 8)
-            elif i == self._hover:
+        for g in self.groups:
+            top = g["top"]
+            # ---- 分组头：chevron + 名称 + 数量（hover 时轻微底色）----
+            hr = QRectF(3, top + 2, self.width() - 6, self.HEADER_H - 4)
+            if g["key"] == self._hover_group:
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(C(t.hover))
-                p.drawRoundedRect(r, 8, 8)
+                p.drawRoundedRect(hr, 7, 7)
+            col = QColor(t.text_dim)
+            col.setAlphaF(0.55 + 0.45 * g["factor"])
+            p.setPen(col)
+            p.setFont(font(11, weight=QFont.Weight.DemiBold))
+            # chevron 用字符绘制，折叠态 ▸ / 展开态 ▾（随 factor 渐显）
+            cv = "▾" if g["factor"] >= 0.5 else "▸"
+            p.drawText(QRectF(hr.left() + 8, hr.top(), 16, hr.height()),
+                       int(Qt.AlignmentFlag.AlignVCenter), cv)
+            p.setPen(C(t.text_dim))
+            cap = f"{i18n.tr(g['label'])}  ·  {len(g['recs'])}"
+            p.drawText(QRectF(hr.left() + 28, hr.top(), hr.width() - 36, hr.height()),
+                       int(Qt.AlignmentFlag.AlignVCenter), cap)
 
-            node = rec.get("node", {})
-            is_folder = node.get("type") == "folder"
-            # 左侧图标底色块
-            bx = r.left() + 9
-            by = r.center().y() - 13
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(C(t.panel_alt))
-            p.drawRoundedRect(QRectF(bx, by, 26, 26), 7, 7)
-            p.setPen(C(t.warning if is_folder else _method_color(node.get("method", ""))))
-            p.setFont(font(12, weight=QFont.Weight.DemiBold))
-            glyph = "▣" if is_folder else str(node.get("method", "?") or "?")[:2]
-            p.drawText(QRectF(bx, by, 26, 26),
-                       int(Qt.AlignmentFlag.AlignCenter), glyph)
+            # ---- 组内记录：按 factor 裁剪高度，动画展开时逐行揭示 ----
+            body_h = len(g["recs"]) * self.ROW_H * g["factor"]
+            if body_h <= 0.5:
+                continue
+            p.save()
+            p.setClipRect(QRectF(0, top + self.HEADER_H, self.width(), body_h))
+            for k, rec in enumerate(g["recs"]):
+                y = top + self.HEADER_H + k * self.ROW_H
+                i = int(rec.get("_row_index", 0))
+                r = QRectF(3, y + 3, self.width() - 6, self.ROW_H - 6)
+                sel = rec.get("id") in self.selected
+                if sel:
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(C(t.selected))
+                    p.drawRoundedRect(r, 8, 8)
+                elif i == self._hover:
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(C(t.hover))
+                    p.drawRoundedRect(r, 8, 8)
 
-            tx = bx + 36
-            # 名称
-            p.setPen(C(t.text))
-            p.setFont(font(12.2, weight=QFont.Weight.DemiBold))
-            name = node.get("name") or i18n.tr("未命名")
-            p.drawText(QRectF(tx, r.top() + 9, r.right() - tx - 92, 18),
-                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                       p.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight,
-                                                  int(r.right() - tx - 92)))
-            # 副行：方法+URL / 子请求数
-            detail = rec.get("_detail", "")
-            p.setPen(C(t.text_faint))
-            p.setFont(mono(10.3))
-            p.drawText(QRectF(tx, r.top() + 28, r.right() - tx - 92, 16),
-                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                       p.fontMetrics().elidedText(detail, Qt.TextElideMode.ElideRight,
-                                                  int(r.right() - tx - 92)))
-            # 右侧：删除时间
-            p.setPen(C(t.text_faint))
-            p.setFont(mono(10))
-            p.drawText(QRectF(r.right() - 88, r.top() + 12, 80, 18),
-                       int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-                       _fmt_deleted(rec.get("deleted_at", 0)))
-            # hover 行：删除时间左侧浮出一个极轻的「详情」小按钮
-            if i == self._hover:
-                dr = self._detail_rect(i)
-                p.setPen(QPen(C(t.border_strong), 1))
-                p.setBrush(C(t.card))
-                p.drawRoundedRect(dr, dr.height() / 2, dr.height() / 2)
-                p.setPen(C(t.text_dim))
-                p.setFont(font(9.5))
-                p.drawText(dr, int(Qt.AlignmentFlag.AlignCenter), i18n.tr("详情"))
+                node = rec.get("node", {})
+                is_folder = node.get("type") == "folder"
+                bx = r.left() + 9
+                by = r.center().y() - 13
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(C(t.panel_alt))
+                p.drawRoundedRect(QRectF(bx, by, 26, 26), 7, 7)
+                p.setPen(C(t.warning if is_folder else _method_color(node.get("method", ""))))
+                p.setFont(font(12, weight=QFont.Weight.DemiBold))
+                glyph = "▣" if is_folder else str(node.get("method", "?") or "?")[:2]
+                p.drawText(QRectF(bx, by, 26, 26),
+                           int(Qt.AlignmentFlag.AlignCenter), glyph)
+
+                tx = bx + 36
+                p.setPen(C(t.text))
+                p.setFont(font(12.2, weight=QFont.Weight.DemiBold))
+                name = node.get("name") or i18n.tr("未命名")
+                p.drawText(QRectF(tx, r.top() + 9, r.right() - tx - 92, 18),
+                           int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                           p.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight,
+                                                      int(r.right() - tx - 92)))
+                detail = rec.get("_detail", "")
+                p.setPen(C(t.text_faint))
+                p.setFont(mono(10.3))
+                p.drawText(QRectF(tx, r.top() + 28, r.right() - tx - 92, 16),
+                           int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                           p.fontMetrics().elidedText(detail, Qt.TextElideMode.ElideRight,
+                                                      int(r.right() - tx - 92)))
+                p.setPen(C(t.text_faint))
+                p.setFont(mono(10))
+                p.drawText(QRectF(r.right() - 88, r.top() + 12, 80, 18),
+                           int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                           _fmt_deleted(rec.get("deleted_at", 0)))
+                if i == self._hover:
+                    dr = self._detail_rect(i)
+                    p.setPen(QPen(C(t.border_strong), 1))
+                    p.setBrush(C(t.card))
+                    p.drawRoundedRect(dr, dr.height() / 2, dr.height() / 2)
+                    p.setPen(C(t.text_dim))
+                    p.setFont(font(9.5))
+                    p.drawText(dr, int(Qt.AlignmentFlag.AlignCenter), i18n.tr("详情"))
+            p.restore()
         p.end()
 
 
@@ -398,15 +540,50 @@ class TrashDetail(QWidget):
 
         if not is_folder:
             self._row("URL", str(node.get("url") or "-"), t.info, mono_value=True)
+            # 请求配置：把参数 / 请求头 / 正文 / Cookie / 认证都列出来，填满浮层，
+            # 恢复前不用切回主界面就能看清这条请求到底带了什么。
+            n_params = len(node.get("params") or [])
+            n_headers = len(node.get("headers") or [])
+            n_cookies = len(node.get("cookies") or [])
+            body = node.get("body") or {}
+            if isinstance(body, dict):
+                mode = str(body.get("mode") or "-")
+                content = body.get("content")
+                if isinstance(content, str) and content.strip():
+                    mode += i18n.trf(" · {n} 字", n=len(content))
+            else:
+                mode = i18n.tr("有内容")
+            self._row(i18n.tr("参数"), i18n.trf("{n} 项", n=n_params), t.text_dim)
+            self._row(i18n.tr("请求头"), i18n.trf("{n} 项", n=n_headers), t.text_dim)
+            self._row(i18n.tr("正文"), mode, t.text_dim)
+            if n_cookies:
+                self._row("Cookie", i18n.trf("{n} 项", n=n_cookies), t.text_dim)
+            auth = node.get("auth") or {}
+            if isinstance(auth, dict) and auth.get("type") and auth.get("type") != "none":
+                self._row(i18n.tr("认证"), str(auth.get("type")), t.text_dim)
+            # 环境变量：列出引用到的变量名，缺失的用警告色提示
+            if self.store is not None:
+                refs = self.store.env_refs(node)
+                if refs:
+                    missing = set(self.store.missing_env_refs(node))
+                    txt = ", ".join("{{" + r + "}}" +
+                                    (i18n.tr("（未定义）") if r in missing else "")
+                                    for r in refs)
+                    self._row(i18n.tr("环境变量"), txt,
+                              t.warning if missing else t.text_dim, mono_value=True)
         else:
             kids = self._collect_requests(node.get("children") or [])
             self._row(i18n.tr("包含"), i18n.trf("{n} 个请求", n=len(kids)))
+            if kids:
+                names = "、".join(str(k.get("name") or "?") for k in kids[:6])
+                if len(kids) > 6:
+                    names += i18n.trf(" 等 {n} 项", n=len(kids))
+                self._row(i18n.tr("子请求"), names, t.text_dim)
         self._row(i18n.tr("删除时间"), _fmt_full(rec.get("deleted_at", 0)),
                   t.text_dim, mono_value=True)
         where = self._parent_name(rec)
         self._row(i18n.tr("原位置"), f"{where} · #{int(rec.get('index', 0)) + 1}",
                   t.text_dim)
-        self._lay.addStretch(1)
 
     @staticmethod
     def _collect_requests(children: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -429,15 +606,29 @@ class DetailPopup(QWidget):
         self._card = Card(radius=11, parent=self)
         lay = QVBoxLayout(self._card)
         lay.setContentsMargins(2, 2, 2, 2)
+        # 内容变多：加滚动区，最多显示到 MAX_H，超出的字段可滚，不再撑爆窗口
+        self.detail_scroll = QScrollArea()
+        self.detail_scroll.setWidgetResizable(True)
+        self.detail_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.detail_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.detail = TrashDetail(store, self._card)
-        lay.addWidget(self.detail)
+        self.detail_scroll.setWidget(self.detail)
+        self.detail_scroll.viewport().setStyleSheet(
+            f"QWidget {{ background: {theme().card}; }}")
+        lay.addWidget(self.detail_scroll)
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
         root.addWidget(self._card)
-        self.setFixedSize(460, 208)
+        self.MAX_H = 430
+        self.setFixedSize(500, 300)
 
     def show_record(self, rec: Dict[str, Any], anchor: QPoint) -> None:
         self.detail.show_record(rec)
+        # 按内容实际高度调整浮层：至少 220，最多 MAX_H，超出用滚动区
+        hint = self.detail.sizeHint().height()
+        h = max(220, min(self.MAX_H, hint + 20))
+        self.setFixedSize(500, h)
         # 贴在锚点下方，超出屏幕则翻到上方；水平居中于锚点
         pos = QPoint(anchor.x() - self.width() // 2, anchor.y() + 12)
         screen = self.screen()
@@ -493,7 +684,8 @@ class ActionFlash(QWidget):
 
         from .anim import stop as _stop
         _stop(self._anim)
-        self._anim = animate(self, 0.0, 1.0, 720, _set,
+        # 1220ms：比原来多约 0.5 秒，扩散环与图标上浮更从容、更耐看
+        self._anim = animate(self, 0.0, 1.0, 1220, _set,
                              QEasingCurve.Type.OutCubic, on_done=_done)
 
     def paintEvent(self, _e):  # noqa: N802
