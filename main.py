@@ -123,7 +123,37 @@ def main() -> int:
         session.unlink()
     except Exception:                                  # noqa: BLE001
         pass
+    _shutdown(app, window, code)
     return code
+
+
+def _shutdown(app, window, code: int) -> None:
+    """退出收尾：先拆干净，再直接结束进程。
+
+    退出时偶发的 `zsh: bus error`（crash.log 里是「<no Python frame>」）发生在
+    Qt / Cocoa 的析构顺序上，Python 层拦不到：窗口已经关了，但 Python 对象还在
+    释放过程中，PyQt 这时再去碰已经销毁的 C++ 对象就会 SIGBUS。所以先把动画、
+    图形特效、网络对象、窗口全部停掉、删掉，再 os._exit 直接走人 —— 磁盘上该写
+    的在 closeEvent 里已经写完了（状态、草稿），这里不需要 Python 再解释收尾。
+    """
+    try:
+        window.prepare_quit()
+    except Exception:                                  # noqa: BLE001
+        pass
+    try:
+        window.hide()
+        window.deleteLater()
+        app.processEvents()
+        app.processEvents()
+    except Exception:                                  # noqa: BLE001
+        pass
+    for stream in (sys.stdout, sys.stderr, _CRASH_FILE):
+        try:
+            if stream is not None:
+                stream.flush()
+        except Exception:                              # noqa: BLE001
+            pass
+    os._exit(int(code or 0))
 
 
 if __name__ == "__main__":

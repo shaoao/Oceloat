@@ -9,20 +9,21 @@ import datetime
 import json
 from typing import Any, Dict, List
 
-from PyQt6.QtCore import QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetricsF, QPainter, QPen
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLineEdit,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from . import i18n
 from .code_editor import CodeView, human_size
-from .theme import C, font, mono, theme
+from .theme import C, font, mono, px, theme
 from .widgets import (
     Button,
     Card,
@@ -137,6 +138,7 @@ class WsComposer(QWidget):
 
     sendRequested = pyqtSignal(str, bool)      # 内容, 是否二进制
     changed = pyqtSignal()
+    headersToggled = pyqtSignal()              # 展开 / 收起握手请求头
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -178,6 +180,14 @@ class WsComposer(QWidget):
         ol.addSpacing(6)
         ol.addWidget(Label("发送后清空", 10.9, theme().text_dim))
         ol.addWidget(self.clear_sw)
+        od = Divider(vertical=True)
+        od.setFixedHeight(14)
+        ol.addWidget(od)
+        self.headers_btn = Button("握手头", "list", kind="ghost", height=24,
+                                  padding=8, font_size=10.8, icon_size=11)
+        self.headers_btn.setToolTip(i18n.tr("连接时一起发送的请求头，例如 Authorization"))
+        self.headers_btn.clicked.connect(self.headersToggled.emit)
+        ol.addWidget(self.headers_btn)
 
         # --- 消息编辑
         self.kind = SegmentedTabs([(k, label) for k, label in KINDS],
@@ -198,7 +208,7 @@ class WsComposer(QWidget):
                      spacing=8, margins=(0, 0, 0, 0))
 
         self.editor = CodeView(read_only=False, highlight=True, show_gutter=False)
-        self.editor.setMinimumHeight(96)
+        self.editor.setMinimumHeight(68)
         self.editor.setPlaceholderText(i18n.tr(
             "输入要发送的内容。连接成功后 ⌘↵ 直接发送；JSON 会自动识别高亮。"))
 
@@ -250,6 +260,13 @@ class WsComposer(QWidget):
             ws["ping"] = 0
         ws["auto_reconnect"] = self.reconnect_sw.isChecked()
         ws["clear_after_send"] = self.clear_sw.isChecked()
+
+    def set_headers_count(self, n: int) -> None:
+        self.headers_btn.setText(i18n.trf("握手头 · {n}", n=n) if n
+                                 else i18n.tr("握手头"))
+
+    def set_messages_count(self, n: int) -> None:
+        self._messages_count = n
 
     def payload(self) -> str:
         return self.editor.toPlainText()
@@ -357,6 +374,56 @@ class WsComposer(QWidget):
         self.saved_scroll.setVisible(bool(n))
 
 
+class WsHeadersPopup(QWidget):
+    """握手请求头的编辑弹层。
+
+    为什么不常驻在请求区：WS 页要留给消息编辑器，握手头属于低频配置，展开
+    会把下面的输入挤没。做成贴按钮弹出的浮层，改完点空白处就收起。
+    """
+
+    changed = pyqtSignal(list)
+
+    def __init__(self, parent, rows: List[Dict[str, Any]]):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
+                            | Qt.WindowType.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+        from .kv_editor import COMMON_HEADERS, KVEditor
+
+        self.editor = KVEditor("Header", "值", suggestions=COMMON_HEADERS,
+                               empty_hint="添加握手请求头，例如 Authorization")
+        self.editor.set_rows(rows or [])
+        self.editor.changed.connect(lambda: self.changed.emit(self.editor.rows()))
+
+        card = Card(radius=12)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(12, 10, 12, 10)
+        cl.setSpacing(6)
+        cl.addWidget(Label("握手请求头", 11, theme().text, QFont.Weight.DemiBold))
+        cl.addWidget(Label("连接建立时一起发送，例如 Authorization、Origin。", 10.4,
+                           theme().text_faint))
+        cl.addWidget(self.editor, 1)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(card)
+        self.resize(px(520), px(320))
+
+    def popup_at(self, pos) -> None:
+        """贴着按钮弹：优先右对齐按钮、向下展开，超出窗口就往上翻。"""
+        host = self.parentWidget()
+        pos = QPoint(pos)
+        if host is not None:
+            limit = host.window().mapToGlobal(QPoint(host.window().width(), 0)).x()
+            if pos.x() + self.width() > limit - 8:
+                pos.setX(max(8, limit - 8 - self.width()))
+        self.move(pos)
+        self.show()
+        self.raise_()
+        self.editor.setFocus()
+
+
 # ---------------------------------------------------------------- 响应侧：帧日志
 
 
@@ -449,10 +516,7 @@ class FrameList(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         if not self.frames:
-            p.setFont(font(11.5))
-            p.setPen(C(t.text_faint))
-            p.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter),
-                       i18n.tr("还没有消息。连接后收发的内容会实时出现在这里。"))
+            # 空态由 WsLogView 单独那一页负责，这里不用再画一遍
             p.end()
             return
         start, end = self.visible_range()
@@ -560,12 +624,29 @@ class WsLogView(QWidget):
         self.detail.setFixedHeight(112)
         self.detail.hide()
 
+        # 空态单独一页：列表在没帧时高度只有 8px，把提示画在列表里会被压成一条线
+        self.empty = QWidget()
+        el = QVBoxLayout(self.empty)
+        el.setContentsMargins(24, 0, 24, 0)
+        el.setSpacing(0)
+        self.empty_label = Label("", 11.6, theme().text_faint)
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setWordWrap(True)
+        self.empty_label.setText(i18n.tr("还没有消息。连接后收发的内容会实时出现在这里。"))
+        el.addStretch(1)
+        el.addWidget(self.empty_label)
+        el.addStretch(1)
+
+        self.body = QStackedWidget()
+        self.body.addWidget(self.empty)
+        self.body.addWidget(self.scroll)
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(bar)
         lay.addWidget(Divider())
-        lay.addWidget(self.scroll, 1)
+        lay.addWidget(self.body, 1)
         lay.addWidget(self.detail)
 
     # -------------------------------------------------- 数据
@@ -578,12 +659,14 @@ class WsLogView(QWidget):
         if self._match(frame):
             self.list.append(frame)
             self._update_stats()
+            self._update_empty(True)
 
     def clear(self) -> None:
         self._frames = []
         self.list.clear()
         self.detail.hide()
         self._update_stats()
+        self._update_empty(False)
 
     def frames(self) -> List[Any]:
         return list(self._frames)
@@ -599,10 +682,23 @@ class WsLogView(QWidget):
         return True
 
     def _rebuild(self) -> None:
-        self.list.set_frames([f for f in self._frames if self._match(f)])
+        shown = [f for f in self._frames if self._match(f)]
+        self.list.set_frames(shown)
         self._update_stats()
+        self._update_empty(bool(shown))
         if self._auto_scroll:
             self._stick()
+
+    def _update_empty(self, has_rows: bool) -> None:
+        """有帧就显示列表，没帧才显示提示；筛选后一条不剩时换一句更准确的话。"""
+        self.body.setCurrentIndex(1 if has_rows else 0)
+        if has_rows:
+            return
+        if self._frames:
+            self.empty_label.setText(i18n.tr("没有符合条件的内容。清空搜索或换个筛选试试。"))
+        else:
+            self.empty_label.setText(
+                i18n.tr("还没有消息。连接后收发的内容会实时出现在这里。"))
 
     def _update_stats(self) -> None:
         n_in = sum(1 for f in self._frames if f.dir == "in")

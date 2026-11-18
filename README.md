@@ -9,8 +9,9 @@ Ocelot 是一个为 macOS 写的 API 调试工具，Python + PyQt6 实现，窗�
 ## 能干什么
 
 - 发请求：GET / POST / PUT / PATCH / DELETE / HEAD / OPTIONS，参数、请求头、Cookies、请求体、认证分开填
-- WebSocket：从「新建请求」直接建 WS 请求，文本 / JSON / 二进制收发、子协议、心跳与往返延迟、
-  断线自动重连、常用消息胶囊、帧日志（过滤 / 搜索 / 复制 / 导出），收发全程实时可见
+- WebSocket：一类独立的请求（从「新建请求」建，不出现在方法下拉里），自带整页界面 ——
+  文本 / JSON / 二进制收发、子协议、心跳与往返延迟、断线自动重连、可折叠的握手头、
+  常用消息胶囊、帧日志（过滤 / 搜索 / 复制 / 导出 / 双击重放）
 - 看响应：美化、树形、原始、响应头、Cookies、图片和音视频预览、跟上一次响应对比、按路径提取字段
 - 本地 Mock：在自己电脑上起一个 HTTP 服务，路由、状态码、延迟、返回内容都由你定，断网也能调
 - 出文档：把一次请求连同响应生成一份 Markdown，带代码示例，可以直接发给别人
@@ -123,7 +124,7 @@ app/store.py          数据和设置，存在一个 JSON 里
 跑测试和截图：
 
 ```bash
-python3 tools/smoke.py         # 519 项检查，会真的起本地 HTTP 与 WebSocket 服务
+python3 tools/smoke.py         # 529 项检查，会真的起本地 HTTP 与 WebSocket 服务
 python3 tools/readme_shots.py  # 重新生成 README 里的截图，输出到 docs/
 ```
 

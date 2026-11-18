@@ -56,7 +56,7 @@ from .sidebar import Sidebar
 from .store import Store, kv, new_request, resolve_vars, uid
 from .tabs import TabStrip
 from .anim import running as _anim_running, set_animations, stop as _anim_stop
-from .theme import (C, S, apply_theme, font, mono, set_accent, set_ui_scale,
+from .theme import (C, S, apply_theme, font, mono, px, set_accent, set_ui_scale,
                     theme, theme_by_name)
 from .widgets import (Button, Divider, HBox, Label, Menu, VBox, animate, fade_in,
                       fade_window, icon_button)
@@ -445,7 +445,7 @@ class ActionRow(QWidget):
         self._hint = hint
         self._hover = 0.0
         self._anim: Optional[QVariantAnimation] = None
-        self.setFixedHeight(50)
+        self.setFixedHeight(px(50))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
@@ -479,20 +479,20 @@ class ActionRow(QWidget):
         p.setPen(QPen(C(t.border), 1))
         p.setBrush(C(t.panel_alt) if self._hover < 0.5 else bg)
         p.drawRoundedRect(r, 10, 10)
-        pm = icons.pixmap(self._icon, t.text_dim, 15, 1.6)
-        p.drawPixmap(QPointF(16, r.center().y() - 7.5), pm)
+        pm = icons.pixmap(self._icon, t.text_dim, px(15), 1.6)
+        p.drawPixmap(QPointF(px(16), r.center().y() - px(15) / 2), pm)
         p.setFont(font(12.8, QFont.Weight.Medium))
-        p.setPen(C(t.text if self._hover > 0.3 else t.text))
-        p.drawText(QRectF(44, r.top() + 8, r.width() - 120, 18),
+        p.setPen(C(t.text))
+        p.drawText(QRectF(px(44), r.top() + px(7), r.width() - px(120), px(18)),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), i18n.tr(self._title))
         p.setFont(font(10.8))
         p.setPen(C(t.text_faint))
-        p.drawText(QRectF(44, r.top() + 26, r.width() - 120, 16),
+        p.drawText(QRectF(px(44), r.top() + px(25), r.width() - px(120), px(16)),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), i18n.tr(self._subtitle))
         if self._hint:
             fm = QFontMetricsF(mono(10))
-            w = fm.horizontalAdvance(self._hint) + 14
-            hr = QRectF(r.right() - w - 12, r.center().y() - 9, w, 18)
+            w = fm.horizontalAdvance(self._hint) + px(14)
+            hr = QRectF(r.right() - w - px(12), r.center().y() - px(9), w, px(18))
             p.setPen(QPen(C(t.border_strong), 1))
             p.setBrush(C(t.card))
             p.drawRoundedRect(hr, 4, 4)
@@ -631,7 +631,6 @@ class MainWindow(QWidget):
         self._build()
         self._install_shortcuts()
         self._restore_session()
-        self._restore_reload_drafts()
         QTimer.singleShot(400, self._auto_start_mock)
         i18n.set_language(store.settings.get("language", "zh"), notify=False)
         i18n.bus().languageChanged.connect(self._retranslate)
@@ -1308,23 +1307,6 @@ class MainWindow(QWidget):
             self._update_stack()
             self._autosave.start()      # 切标签不再同步写磁盘
 
-    def _restore_reload_drafts(self) -> None:
-        """重建界面（改字号）后，把没保存的临时标签原样接回来。"""
-        drafts = getattr(self.store, "_reload_drafts", None) or []
-        self.store._reload_drafts = None
-        if not drafts:
-            return
-        for req in drafts:
-            try:
-                self._open_request_obj(req, node_id=None, activate=False)
-            except Exception:              # noqa: BLE001
-                continue
-        ids = [t["id"] for t in self.tabs_data]
-        if ids:
-            self.tabstrip.set_current(ids[-1], animate=False)
-            self._on_tab_changed(ids[-1])
-            self._update_stack()
-
     def _recover_tab(self, tab_id: str) -> None:
         """把标签栏与 tabs_data 的错位修好，修不好就摘掉幽灵标签。"""
         meta = self.tabstrip.tab(tab_id) or {}
@@ -1576,8 +1558,8 @@ class MainWindow(QWidget):
         """双击日志里的一条消息：填回编辑器，改一改就能重发。"""
         if not text:
             return
-        self.editor.tabs.set_current("messages", emit=True)
         self.editor.ws.editor.setPlainText(text)
+        self.editor.ws.editor.setFocus()
         self.toast.show_message("已填入编辑器，⌘↵ 发送", "success")
 
     def _ws_send(self, text: str, binary: bool) -> None:
@@ -1967,49 +1949,20 @@ class MainWindow(QWidget):
         dlg.accentChanged.connect(self._on_accent_changed)
         dlg.dataReloaded.connect(self._reload_data)
         dlg.shortcutsChanged.connect(self._install_shortcuts)
-        # 字号要重建界面：等设置窗口自己关掉（exec 返回）之后再动手，
-        # 否则会在模态循环里再开第二个模态窗口。
-        pending = {"scale": None}
-        dlg.uiScaleChanged.connect(lambda s: pending.__setitem__("scale", s))
+        # 字号是就地缩放（settings 里已经处理完），这里只把主窗口重绘一遍，
+        # 让自绘部分（侧栏行高、标签条、状态胶囊）跟着新系数画。
+        dlg.uiScaleChanged.connect(self._on_scale_applied)
         dlg.exec()
-        if pending["scale"]:
-            self.reload_ui(pending["scale"])
 
-    def reload_ui(self, scale: float) -> None:
-        """按新的文字大小重建整个界面，再回到设置的外观页。
-
-        控件字体在构造时定死，就地改字号会留下无数高低不一的半新半旧控件；
-        这里干脆重建一个主窗口，把「当前打开的标签」交给 store 的 open_tabs 带过去。
-        """
-        try:
-            scale = float(scale)
-        except (TypeError, ValueError):
-            return
-        if abs(scale - float(self.store.settings.get("ui_scale", 1.0))) < 0.001:
-            return
-        self.store.settings["ui_scale"] = scale
-        self.store.save()
-        set_ui_scale(scale)
-        # 先把当前标签 / 分栏存下来，新窗口启动时会照单恢复。
-        # 没保存进集合的临时标签没有 node_id，open_tabs 带不过去，单独留一份内存快照。
-        self.store._reload_drafts = [
-            _copy.deepcopy(t["request"]) for t in self.tabs_data if not t.get("node_id")
-        ] if any(not t.get("node_id") for t in self.tabs_data) else []
-        self._persist()
-        geo = self.geometry()
-        was_max = self.isMaximized()
-        new = MainWindow(self.store)
-        new.safe_mode = getattr(self, "safe_mode", False)
-        new.setGeometry(geo)
-        if was_max:
-            new.showMaximized()
-        new.show()
-        new.raise_()
-        new.activateWindow()
-        QTimer.singleShot(160, lambda: new.show_settings("appearance"))
-        self._handing_off = True
-        self.close()
-        self.deleteLater()
+    def _on_scale_applied(self, _scale: float) -> None:
+        for widget in (self.sidebar, self.tabstrip, self.editor, self.response,
+                       self.toast):
+            try:
+                widget.updateGeometry()
+                widget.update()
+            except RuntimeError:
+                pass
+        self._sync_open_ids()
 
     def _reload_data(self) -> None:
         """从云端恢复后整份数据都换了：标签全部关掉，侧栏与主题重新刷一遍。"""
@@ -2371,7 +2324,47 @@ class MainWindow(QWidget):
         self._persist()
         self._cloud_upload_on_exit()
         self._wait_cloud()
+        self.prepare_quit()
         super().closeEvent(e)
+
+    def prepare_quit(self) -> None:
+        """退出前把会让 macOS 在析构阶段硬崩的东西先拆掉。
+
+        bus error（终端里只有一行 `zsh: bus error`，crash.log 里是
+        「<no Python frame>」）不是 Python 里的异常：它发生在 Cocoa / Qt 的
+        收尾路径上。能提前拆干净的有三类 —— 还在跑的动画、挂在控件上的
+        图形特效、以及没停的网络对象。拆完之后窗口销毁就只剩纯控件树。
+        """
+        from PyQt6.QtCore import QVariantAnimation
+
+        try:
+            self._autosave.stop()
+        except Exception:                 # noqa: BLE001
+            pass
+        for anim in self.findChildren(QVariantAnimation):
+            try:
+                anim.stop()
+            except RuntimeError:
+                pass
+        try:
+            from PyQt6.QtWidgets import QApplication
+
+            for w in QApplication.allWidgets():
+                try:
+                    if w.graphicsEffect() is not None:
+                        w.setGraphicsEffect(None)
+                except RuntimeError:
+                    pass
+        except Exception:                 # noqa: BLE001
+            pass
+        try:
+            self.mock.stop()
+        except Exception:                 # noqa: BLE001
+            pass
+        try:
+            self.ws.abort()
+        except Exception:                 # noqa: BLE001
+            pass
 
     def _cloud_upload_on_exit(self) -> None:
         """开了「退出时自动上传」就趁关窗把最新快照推上去，最多等 2 秒不拖住退出。"""

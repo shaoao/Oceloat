@@ -955,7 +955,7 @@ class Sidebar(QWidget):
         act_auth = (menu.addAction(icons.icon("lock", t.text, 14), i18n.tr("设置认证…"))
                     if is_folder else None)
         act_export = (menu.addAction(icons.icon("download", t.text, 14),
-                                     i18n.tr("导出这个文件夹"))
+                                     i18n.tr("导出集合"))
                       if is_folder else None)
         act_rename = menu.addAction(icons.icon("pencil", t.text, 14), i18n.tr("重命名…"))
         act_dup = menu.addAction(icons.icon("copy", t.text, 14), i18n.tr("创建副本"))

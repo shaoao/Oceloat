@@ -42,17 +42,16 @@ from .widgets import (
 )
 
 # 与参考图一致：GET / POST / PUT / DELETE / OPTIONS / HEAD / PATCH / TRACE
-# WS 是 WebSocket 握手请求，单独一套发送/接收流程，但共用地址栏与请求头。
-METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE", "WS"]
+# WebSocket 不是 HTTP 方法：它是一类独立的请求，只能从「新建」里创建，
+# 所以不出现在这张下拉表里，避免把普通请求切成一个半 HTTP 半 WS 的怪东西。
+METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"]
 WS_METHOD = "WS"
 
-# 两种模式下「请求区」的标签集合：WebSocket 没有请求体，改成「消息」
+# HTTP 请求区的标签集合；WebSocket 有自己的一整页（见 RequestEditor.ws_page），
+# 不共用这套页签。
 HTTP_TABS = [("params", "参数"), ("body", "请求体"), ("headers", "请求头"),
              ("cookies", "Cookies"), ("auth", "认证"),
              ("pre", "前置脚本"), ("post", "后置脚本")]
-WS_TABS = [("params", "参数"), ("headers", "请求头"), ("cookies", "Cookies"),
-           ("auth", "认证"), ("messages", "消息"),
-           ("pre", "前置脚本")]
 
 # 与 Postman / Hoppscotch 对齐的 body 类型；显示英文名，i18n 会保留原词。
 # 存储层仍用短 key（form = form-data，urlencoded = x-www-form-urlencoded），
@@ -206,6 +205,7 @@ class MethodSelector(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self._hover = False
+        self._locked = False
         self.setToolTip("选择请求方法")
         self._menu: Optional[MethodMenu] = None
 
@@ -214,6 +214,14 @@ class MethodSelector(QWidget):
 
     def set_method(self, method: str) -> None:
         self._method = (method or "GET").upper()
+        self.update()
+
+    def set_locked(self, locked: bool) -> None:
+        """WebSocket 请求的方法是固定的：不弹下拉、不画箭头，看起来就是个标识。"""
+        self._locked = bool(locked)
+        self.setCursor(Qt.CursorShape.ArrowCursor if locked
+                       else Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("" if locked else "选择请求方法")
         self.update()
 
     def enterEvent(self, e):
@@ -225,7 +233,7 @@ class MethodSelector(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, e):
-        if e.button() != Qt.MouseButton.LeftButton:
+        if self._locked or e.button() != Qt.MouseButton.LeftButton:
             return
         self._open_menu()
 
@@ -253,16 +261,17 @@ class MethodSelector(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         r = QRectF(self.rect()).adjusted(0, 0.5, -0.5, -0.5)
-        if self._hover:
+        if self._hover and not self._locked:
             p.setPen(QPen(C(t.border), 1))
             p.setBrush(C(t.panel_alt))
             p.drawRoundedRect(r, 7, 7)
         p.setFont(mono(11, QFont.Weight.Bold))
         p.setPen(C(method_color(self._method, t)))
-        p.drawText(self.rect().adjusted(10, 0, -20, 0),
+        p.drawText(self.rect().adjusted(10, 0, -20 if not self._locked else -8, 0),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), self._method)
-        pm = icons.pixmap("chevron_down", t.text_faint, 11, 1.8)
-        p.drawPixmap(QPointF(self.width() - 19, self.height() / 2 - 5), pm)
+        if not self._locked:
+            pm = icons.pixmap("chevron_down", t.text_faint, 11, 1.8)
+            p.drawPixmap(QPointF(self.width() - 19, self.height() / 2 - 5), pm)
         p.end()
 
 
@@ -475,6 +484,7 @@ class UrlBar(QWidget):
                          if ws else "输入请求地址，例如 https://httpbin.org/get")
         self.url.setToolTip("" if not ws else i18n.tr(
             "支持 ws:// wss://；直接粘 http(s) 地址会自动改写"))
+        self.method.set_locked(ws)
         if ws:
             self.set_ws_state(self._ws_state if self._busy else "idle")
         else:
@@ -1346,7 +1356,13 @@ class RequestEditor(QWidget):
         self.ws = WsComposer()
         self.ws.changed.connect(self._on_ws_changed)
         self.ws.sendRequested.connect(self.wsSendRequested.emit)
+        self.ws.headersToggled.connect(self._open_ws_headers)
         self._mode = "http"
+
+        # WebSocket 是独立的一套界面：只有「消息 + 握手头」两件事，
+        # 不掺 HTTP 的参数 / 请求体 / 认证 / 脚本那些页签。
+        # 握手头是低频配置，走弹层编辑（WsHeadersPopup），不占请求区的高度。
+        self._ws_headers_popup = None
 
         # Cookie 单独一栏：发送时拼成 Cookie 头，也能一键把响应里的 Set-Cookie 收进来
         self.cookies = KVEditor("Cookie 名", "值", empty_hint="添加 Cookie")
@@ -1370,25 +1386,33 @@ class RequestEditor(QWidget):
         self.pages.add("cookies", self._scroll_page(
             self._wrap(self.cookies, self.cookies_tools)))
         self.pages.add("auth", self._scroll_page(self.auth))
-        self.pages.add("messages", self._scroll_page(self.ws))
         self.pages.add("pre", self.scripts_pre)
         self.pages.add("post", self.scripts_post)
         self.pages.set_current("params", animate=False)
 
-        head = QWidget()
-        hl = QHBoxLayout(head)
+        self.ws_page = QWidget()
+        wl = QVBoxLayout(self.ws_page)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.setSpacing(0)
+        wl.addWidget(self.ws, 1)
+        self.ws_page.hide()
+
+        self.head = QWidget()
+        hl = QHBoxLayout(self.head)
         hl.setContentsMargins(14, 4, 10, 0)
         hl.setSpacing(0)
         hl.addWidget(tools, 1)
+        self.head_div = Divider()
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(self.urlbar)
         lay.addSpacing(2)
-        lay.addWidget(head)
-        lay.addWidget(Divider())
+        lay.addWidget(self.head)
+        lay.addWidget(self.head_div)
         lay.addWidget(self.pages, 1)
+        lay.addWidget(self.ws_page, 1)
         self.urlbar.refresh_node()
 
     def refresh_node(self) -> None:
@@ -1441,20 +1465,25 @@ class RequestEditor(QWidget):
         self.pages.set_current(self.tabs.current(), animate=False)
 
     def _set_mode(self, method: str, animate: bool = True) -> None:
-        """HTTP ↔ WebSocket：换一套页签，隐藏用不上的页。"""
+        """HTTP 请求 / WebSocket：两套完全独立的界面，只切显示的那一页。
+
+        WebSocket 没有请求体、没有查询参数、没有后置脚本，把 HTTP 那些页签
+        摆在那里只会让人以为能用 —— 所以整块换掉，不做「半套」。
+        """
         # 地址栏要跟着换语义（连接 / 断开、ws 地址占位），即便模式没变，
         # 每次 load 也重算一次，否则新开的 WS 标签还显示「发送」。
         self.urlbar._on_method_mode(method)
         mode = "ws" if (method or "").upper() == WS_METHOD else "http"
-        if mode == self._mode:
-            return
-        self._mode = mode
-        if mode == "ws":
-            self.tabs.set_items(WS_TABS, current="messages")
-            self.pages.set_current("messages", animate=animate)
-        else:
-            self.tabs.set_items(HTTP_TABS, current="params")
-            self.pages.set_current("params", animate=animate)
+        if mode != self._mode:
+            self._mode = mode
+            if mode == "http":
+                self.tabs.set_items(HTTP_TABS, current="params")
+                self.pages.set_current("params", animate=animate)
+        is_ws = mode == "ws"
+        self.head.setVisible(not is_ws)
+        self.head_div.setVisible(not is_ws)
+        self.pages.setVisible(not is_ws)
+        self.ws_page.setVisible(is_ws)
         if not self._loading:
             self._refresh_counts()
 
@@ -1471,7 +1500,9 @@ class RequestEditor(QWidget):
         self.request["method"] = self.urlbar.method.method()
         self.request["url"] = self.urlbar.url_text()
         self.request["params"] = self.params.rows()
-        self.request["headers"] = self.headers.rows()
+        if self._mode != "ws":
+            # WS 的握手头是弹层直接写进 request 的，这里不要去覆盖它
+            self.request["headers"] = self.headers.rows()
         self.request["cookies"] = self.cookies.rows()
         self.request["body"] = self.body.dump()
         self.request["auth"] = self.auth.dump()
@@ -1519,8 +1550,15 @@ class RequestEditor(QWidget):
             self.request["name"] = name[:40]
 
     def _refresh_counts(self) -> None:
-        ws_mode = self._mode == "ws"
-        for key in ("body", "cookies", "post", "messages", "auth", "pre"):
+        if self._mode == "ws":
+            headers = len(self.request.get("headers") or [])
+            messages = len((self.request.get("ws") or {}).get("messages") or [])
+            self.ws.set_headers_count(headers)
+            self.count_label.setText("")
+            self.params_preview.setText("")
+            self.ws.set_messages_count(messages)
+            return
+        for key in ("body", "cookies", "post", "auth", "pre"):
             if self.tabs.has(key):
                 self.tabs.set_badge(key, 0)
         self.tabs.set_badge("params", len(self.params.rows()))
@@ -1528,12 +1566,8 @@ class RequestEditor(QWidget):
         cookies = len(self.cookies.rows())
         if self.tabs.has("cookies"):
             self.tabs.set_badge("cookies", cookies)
-        if ws_mode:
-            messages = len((self.request.get("ws") or {}).get("messages") or [])
-            self.tabs.set_badge("messages", messages)
-        else:
-            # 不再 dump 整段请求体：只问「有没有内容」，避免每次按键复制一遍大正文
-            self.tabs.set_badge("body", 1 if self.body.has_content() else 0)
+        # 不再 dump 整段请求体：只问「有没有内容」，避免每次按键复制一遍大正文
+        self.tabs.set_badge("body", 1 if self.body.has_content() else 0)
         self.tabs.set_badge("auth", 1 if self.auth.dump().get("type") != "none" else 0)
         pre_script = self.scripts_pre.dump().get("pre", "").strip() if hasattr(self, "scripts_pre") else ""
         post_script = self.scripts_post.dump().get("post", "").strip() if hasattr(self, "scripts_post") else ""
@@ -1589,6 +1623,30 @@ class RequestEditor(QWidget):
             return
         self._set_mode(method)
         self._sync_request()
+
+    def _open_ws_headers(self) -> None:
+        """弹层里编辑握手请求头，改一条写一条，关掉即生效。"""
+        from .ws_panel import WsHeadersPopup
+
+        if self._ws_headers_popup is not None:
+            try:
+                self._ws_headers_popup.close()
+            except RuntimeError:
+                pass
+        popup = WsHeadersPopup(self, self.request.get("headers") or [])
+        popup.changed.connect(self._on_ws_headers_rows)
+        btn = self.ws.headers_btn
+        popup.popup_at(btn.mapToGlobal(QPoint(btn.width() - popup.width() + 8,
+                                             btn.height() + 8)))
+        self._ws_headers_popup = popup
+
+    def _on_ws_headers_rows(self, rows) -> None:
+        self.request["headers"] = list(rows or [])
+        # HTTP 那一侧的请求头表跟着同步：导出、发请求用的是同一份数据
+        self.headers.set_rows(self.request["headers"])
+        self.ws.set_headers_count(len(self.request["headers"]))
+        if not self._loading:
+            self._sync_request()
 
     def _on_ws_changed(self) -> None:
         self._refresh_counts()

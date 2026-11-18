@@ -34,7 +34,7 @@ from .code_editor import CodeView
 from .codegen import LANGUAGES
 from .kv_editor import KVEditor
 from .store import CHANGELOG, STATE_FILE, VERSION, Store, body_mode, uid
-from .theme import ACCENTS, C, S, font, mono, theme
+from .theme import ACCENTS, C, S, font, mono, px, theme
 from .widgets import (
     Button,
     Card,
@@ -332,19 +332,22 @@ class NavList(QWidget):
         self.items = items            # [(key, label, icon)]
         self.index = 0
         self._hover = -1
-        self.setFixedWidth(166)
+        self.row_h = px(self.ROW_H)    # 行高跟着界面字号走
+        self.setFixedWidth(px(166))
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(self.width(), 12 + len(self.items) * self.ROW_H)
+        return QSize(self.width(), px(12) + len(self.items) * self.row_h)
 
     def sync_width(self) -> None:
         """按当前语言量一遍：英文条目（Environment Variables）比中文长，166px 放不下。"""
         fm = QFontMetricsF(font(12.5, QFont.Weight.Medium))
         longest = max((fm.horizontalAdvance(i18n.tr(label)) for _k, label, _i in self.items),
                       default=0)
-        self.setFixedWidth(max(166, int(longest) + 52))
+        self.row_h = px(self.ROW_H)
+        self.setFixedWidth(max(px(166), int(longest) + px(52)))
+        self.updateGeometry()
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return self.sizeHint()
@@ -360,7 +363,7 @@ class NavList(QWidget):
                 return
 
     def _row_at(self, y: float) -> int:
-        i = int((y - 6) // self.ROW_H)
+        i = int((y - px(6)) // self.row_h)
         return i if 0 <= i < len(self.items) else -1
 
     def mouseMoveEvent(self, e):
@@ -389,7 +392,7 @@ class NavList(QWidget):
         p.setBrush(C(t.panel_alt))
         p.drawRoundedRect(QRectF(0, 0, self.width() - 6, self.height()), 10, 10)
         for i, (_key, label, icon_name) in enumerate(self.items):
-            r = QRectF(5, 6 + i * self.ROW_H, self.width() - 16, self.ROW_H - 2)
+            r = QRectF(5, px(6) + i * self.row_h, self.width() - 16, self.row_h - 2)
             selected = i == self.index
             hovered = i == self._hover
             if selected:
@@ -1491,19 +1494,28 @@ class SettingsDialog(GlassDialog):
         self.settingsChanged.emit()
 
     def _on_ui_scale(self, value: str) -> None:
-        """界面文字大小：存下来并交给主窗口重建界面。
+        """界面文字大小：当场缩放整个界面，不关设置页。
 
-        控件字体是在构造时量死的，改系数后只能重建才能「所有页面即时生效」。
-        先关掉设置窗口，主窗口会在重建后把设置重新打开到同一页。
+        以前是「存下来 → 关设置页 → 重建主窗口 → 再打开设置页」，用户点下去
+        什么都没看见，还以为功能坏了。现在直接按比例缩放现有控件（见 app.zoom），
+        设置页本身也跟着变，边调边看。
         """
+        from . import theme
+        from .zoom import apply_scale
+
         try:
             scale = float(value)
         except (TypeError, ValueError):
             return
+        old = theme.ui_scale()
+        if abs(scale - old) < 1e-3:
+            return
+        theme.set_ui_scale(scale)
+        apply_scale(scale / old)
         self.store.settings["ui_scale"] = scale
         self.store.save()
         self.uiScaleChanged.emit(scale)
-        self.accept()
+        self.update()
 
     def _on_font_size(self, value: str) -> None:
         from .code_editor import CodeView
@@ -2341,7 +2353,8 @@ class CommandPalette(QWidget):
     def _layout_card(self) -> None:
         # 卡片永远摆在正中间（上下左右都居中）：以前压在 16% 高度，
         # 大屏上看着像是「贴在顶上下不来」。
-        max_h = max(180, self.height() - 160)
+        # 高度上不铺满整窗：一屏塞太多行既晃眼也没必要，留白反而更好读。
+        max_h = max(180, min(px(360), self.height() - 260))
         # 卡片高度落在整行上：差几个像素就会把最后一行切掉半截。
         # 用二分查最后一整行（几千条请求时别每次按键都从头累加一遍）。
         import bisect
@@ -3436,7 +3449,7 @@ def export_folder(store: Store, node: Dict[str, Any], parent=None,
     if not isinstance(node, dict):
         return ""
     total = count_requests([node])
-    title = i18n.tr("导出这个文件夹")
+    title = i18n.tr("导出集合")
     targets = [
         ("ocelot", i18n.tr("导出为 Ocelot JSON"), "grid"),
         ("postman", i18n.tr("导出为 Postman v2.1"), "send"),

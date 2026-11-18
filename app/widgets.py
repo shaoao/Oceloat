@@ -43,7 +43,7 @@ from PyQt6.QtWidgets import (
 from . import i18n, icons
 from .anim import animations_on as _animations_on, running as _anim_running, stop as _anim_stop
 from .i18n import tr as _tr
-from .theme import C, S, font, mono, theme
+from .theme import C, S, font, mono, px, theme
 
 
 def _mix_colors(a: QColor, b: QColor, t: float) -> QColor:
@@ -795,6 +795,7 @@ class SegmentedTabs(QWidget):
         self._style = style
         self._pad_h = pad_h
         self._spacing = spacing
+        self._fsize = font_size
         self._font = font(font_size, QFont.Weight.Medium)
         self._badge_font = mono(9.5)
         self._hover = -1
@@ -819,6 +820,12 @@ class SegmentedTabs(QWidget):
 
     def _label(self, item: Dict) -> str:
         return _tr(item["label"])
+
+    def refresh_scale(self) -> None:
+        """界面文字大小变了：内部字体是按构造时的系数算死的，重算一遍。"""
+        self._font = font(self._fsize, QFont.Weight.Medium)
+        self._badge_font = mono(9.5)
+        self.sync_size()
 
     def sync_size(self) -> None:
         """按当前语言重新量宽度。
@@ -1397,28 +1404,28 @@ class EmptyState(QWidget):
         t = theme()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        cx, cy = self.width() / 2, self.height() / 2 - 14
-        # 圆环
-        ring = QRectF(cx - 27, cy - 62, 54, 54)
+        cx, cy = self.width() / 2, self.height() / 2 - px(14)
+        # 圆环（尺寸都跟着界面字号走，150% 时不会和下面的文字叠在一起）
+        ring = QRectF(cx - px(27), cy - px(62), px(54), px(54))
         p.setPen(QPen(C(t.border_strong), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(ring)
-        pm = icons.pixmap(self._icon, t.text_faint, 22, 1.5)
-        p.drawPixmap(QPointF(cx - 11, cy - 62 + 16), pm)
+        pm = icons.pixmap(self._icon, t.text_faint, px(22), 1.5)
+        p.drawPixmap(QPointF(cx - px(11), cy - px(62) + px(16)), pm)
         p.setFont(font(13.5, QFont.Weight.DemiBold))
         p.setPen(C(t.text_dim))
-        p.drawText(QRectF(cx - 200, cy + 2, 400, 22), int(Qt.AlignmentFlag.AlignCenter),
-                   i18n.tr(self._title))
+        p.drawText(QRectF(cx - px(200), cy + px(2), px(400), px(22)),
+                   int(Qt.AlignmentFlag.AlignCenter), i18n.tr(self._title))
         p.setFont(font(11.5))
         p.setPen(C(t.text_faint))
-        p.drawText(QRectF(cx - 220, cy + 24, 440, 40),
+        p.drawText(QRectF(cx - px(220), cy + px(24), px(440), px(40)),
                    int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap),
                    i18n.tr(self._subtitle))
         if self._hint:
             fm = QFontMetricsF(mono(10.5))
             hint = i18n.tr(self._hint)
-            w = fm.horizontalAdvance(hint) + 20
-            hr = QRectF(cx - w / 2, cy + 70, w, 21)
+            w = fm.horizontalAdvance(hint) + px(20)
+            hr = QRectF(cx - w / 2, cy + px(70), w, px(21))
             p.setPen(QPen(C(t.border), 1))
             p.setBrush(C(t.panel_alt))
             p.drawRoundedRect(hr, 5, 5)

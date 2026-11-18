@@ -2785,10 +2785,25 @@ def main() -> int:
         dlg = SettingsDialog(w.store, w, page="appearance")
         check("设置里有四档文字大小", len(dlg.scale_seg._items) == 4,
               str([i["label"] for i in dlg.scale_seg._items]))
-        dlg._on_ui_scale("1.25")
+        # 点一下当场就变：设置页不关、控件字号真的变大
+        dlg.show()
+        before = dlg.scale_seg.font().pointSizeF()
+        dlg.scale_seg.set_current("1.25", emit=True)
+        app.processEvents()
         check("选完文字大小会持久化", abs(float(w.store.settings["ui_scale"]) - 1.25) < 0.001,
               str(w.store.settings.get("ui_scale")))
-        w.store.settings["ui_scale"] = 1.0
+        check("改字号不关设置页", dlg.isVisible())
+        check("改字号当场放大（不用重建窗口）",
+              dlg.scale_seg.font().pointSizeF() > before + 0.5,
+              f"{before} → {dlg.scale_seg.font().pointSizeF()}")
+        check("自绘控件也跟着变高",
+              w.editor.urlbar.method.height() > 30,
+              str(w.editor.urlbar.method.height()))
+        # 拨回去，别把后面的截图/断言带偏
+        dlg.scale_seg.set_current("1.0", emit=True)
+        app.processEvents()
+        check("字号能拨回 100%", abs(float(w.store.settings["ui_scale"]) - 1.0) < 0.001,
+              str(w.store.settings.get("ui_scale")))
         dlg.close()
 
         # 4) 文件夹右键导出：只导出这个文件夹，结构不散
@@ -2838,6 +2853,8 @@ def main() -> int:
         w.palette.open()
         app.processEvents()
         first, last = w.palette.list.visible_range()
+        check("命令面板高度不再铺满整窗",
+              w.palette.card.height() <= 460, str(w.palette.card.height()))
         check("命令面板只绘制可视行", 0 < last - first <= 40, f"{first}-{last}")
         w.palette._filter("设置")
         check("命令面板搜索仍然全量匹配",
@@ -2889,9 +2906,29 @@ def main() -> int:
         w.new_websocket()
         check("新建的是 WebSocket 请求",
               w.current_tab()["request"].get("method") == "WS")
-        check("WebSocket 标签页是「消息」而不是请求体",
-              w.editor.is_ws() and w.editor.tabs.has("messages")
-              and not w.editor.tabs.has("body"))
+        check("WebSocket 是独立页面，不显示 HTTP 页签",
+              w.editor.is_ws() and w.editor.ws_page.isVisible()
+              and not w.editor.head.isVisible() and not w.editor.pages.isVisible())
+        check("WebSocket 页面里有消息编辑器",
+              w.editor.ws.editor is not None and w.editor.ws.send_btn is not None)
+        from app.request_panel import METHODS as _METHODS
+
+        check("WS 不再能从方法下拉里切过去", "WS" not in _METHODS)
+        # 握手头：低频配置走弹层，不占消息编辑器的高度
+        w.editor._open_ws_headers()
+        popup = w.editor._ws_headers_popup
+        check("握手头能在弹层里打开", popup is not None and popup.isVisible())
+        popup.editor.set_rows([{"key": "X-Client", "value": "ocelot", "enabled": True}])
+        app.processEvents()
+        check("握手头写进请求头",
+              any((h.get("key") or "") == "X-Client"
+                  for h in w.current_tab()["request"].get("headers") or []),
+              str(w.current_tab()["request"].get("headers")))
+        check("握手头数量反映在按钮上", "1" in w.editor.ws.headers_btn.text(),
+              w.editor.ws.headers_btn.text())
+        popup.close()
+        check("握手头弹层不占请求区高度", w.editor.ws.geometry().height() > 200,
+              str(w.editor.ws.geometry().height()))
 
         w.editor.urlbar.set_url(f"ws://127.0.0.1:{port}/echo")
         w.editor._on_url("x")
@@ -2943,8 +2980,8 @@ def main() -> int:
             check("双击收到的消息会填回编辑器",
                   "hello" in w.editor.ws.editor.toPlainText(),
                   w.editor.ws.editor.toPlainText()[:40])
-            check("重放后自动切到「消息」页",
-                  w.editor.tabs.current() == "messages", str(w.editor.tabs.current()))
+            check("重放后停在 WS 独立页",
+                  w.editor.ws_page.isVisible() and not w.editor.head.isVisible())
 
         w.ws.disconnect_ws()
         check("能主动断开连接", wait_until(lambda: not w.ws.busy, 5000), w.ws.state)

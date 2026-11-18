@@ -1,5 +1,33 @@
 # What's Changed
 
+## v1.0.33 — 2026-11-18
+
+**Fixed**
+- Occasional hard crash (`zsh: bus error`, `crash.log` showing `<no Python frame>`) when
+  quitting. Shutdown now stops every animation, drops graphics effects, closes sockets and
+  tears the window down explicitly instead of relying on Qt / Cocoa destruction order.
+- The WebSocket log's empty hint was squeezed into a 1px line (the list is 8px tall when it
+  has no rows). It now has its own centred page, with a different message when a filter
+  matches nothing.
+- **Settings → Appearance → Text size** did nothing: the dialog saved the value and closed,
+  so the rebuild step saw "no change". It now zooms in place — the settings page stays open
+  and the whole UI resizes as you click.
+
+**Changed**
+- WebSocket is a request *kind*, not a method: `WS` is gone from the method dropdown, and a
+  WS request is created only from **New request → WebSocket request**.
+- WS requests get a dedicated page with only what they need: message editor (text / JSON /
+  binary), saved messages, subprotocol, heartbeat, auto-reconnect, clear-after-send, and a
+  collapsible handshake-headers editor. The HTTP-only tabs are gone.
+- "Export this folder" is now **Export collection**.
+- The command palette is shorter — a floating panel rather than a full-height sheet.
+
+**Improved**
+- Welcome cards and empty states scale with the text-size setting, so 150% no longer
+  overlaps lines.
+- Self-test suite extended to 529 checks (WS page, handshake headers, live text scaling,
+  palette height).
+
 ## v1.0.32 — 2026-11-18
 
 **Added**

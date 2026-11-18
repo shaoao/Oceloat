@@ -1212,12 +1212,20 @@ _EN.update({
     "调整界面文字的整体大小，所有页面即时生效。":
         "Scales text across the whole app. Applies to every page instantly.",
 
-    # ---- 文件夹导出
-    "导出这个文件夹": "Export this folder",
+    # ---- 集合导出
     "{name} · {n} 个请求": "{name} · {n} requests",
     "已导出到 {name}": "Exported to {name}",
 
     # ---- WebSocket
+    "握手头": "Handshake headers",
+    "握手头 · {n}": "Headers · {n}",
+    "握手请求头": "Handshake headers",
+    "连接时一起发送的请求头，例如 Authorization":
+        "Extra headers sent with the handshake, e.g. Authorization",
+    "添加握手请求头，例如 Authorization":
+        "Add a handshake header, e.g. Authorization",
+    "没有符合条件的内容。清空搜索或换个筛选试试。":
+        "Nothing matches. Clear the search or try another filter.",
     "HTTP 请求": "HTTP request",
     "WebSocket 请求": "WebSocket request",
     "新建 WebSocket 请求": "New WebSocket request",
