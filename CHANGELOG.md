@@ -1,5 +1,11 @@
 # What's Changed
 
+## v1.0.50 — 2026-11-19
+
+**Changed**
+- Request tabs now lift and follow the mouse while being dragged to reorder, leaving a translucent placeholder at the original spot — matching the sidebar's drag feel.
+- WebSocket and Socket.IO "Params" pages now include "Paste" and "Bulk Edit", fully on par with HTTP params: bulk import from clipboard, key: value bulk editing, comment lines mark rows disabled, and the final-URL preview updates live.
+
 ## v1.0.49 — 2026-11-19
 
 **Changed**

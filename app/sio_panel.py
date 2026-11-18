@@ -116,7 +116,7 @@ class SioComposer(QWidget):
 
         chat_page = QWidget()
         cl = QVBoxLayout(chat_page)
-        cl.setContentsMargins(14, 10, 14, 12)
+        cl.setContentsMargins(22, 10, 14, 12)
         cl.setSpacing(8)
         cl.addLayout(ev_row)
         cl.addWidget(tools)
@@ -128,6 +128,16 @@ class SioComposer(QWidget):
         self.params = KVEditor("参数名", "值", empty_hint="添加查询参数", with_types=True,
                                file_tooltip="查询参数不支持文件上传")
         self.params.changed.connect(self._on_option)
+        # 与 HTTP 参数页一致：粘贴导入 + 批量编辑
+        self.paste_btn = Button(i18n.tr("粘贴"), None, kind="ghost", height=24, padding=8,
+                                font_size=11.5,
+                                tooltip=i18n.tr("从剪贴板批量导入：a=1&b=2 / 多行 key: value / JSON"))
+        self.paste_btn.clicked.connect(self._paste_params)
+        self.params_bulk_btn = Button(i18n.tr("批量编辑"), None, kind="ghost", height=24,
+                                      padding=8, font_size=11.5,
+                                      tooltip=i18n.tr("以 key: value 文本一次编辑全部参数"))
+        self.params_bulk_btn.clicked.connect(self._toggle_params_bulk)
+        self.params_tools = HBox(1, self.paste_btn, self.params_bulk_btn, spacing=4)
         self.params_preview = Label("", 10.5, t.text_faint, mono_font=True)
         self.params_preview.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -138,6 +148,7 @@ class SioComposer(QWidget):
         pal.setSpacing(6)
         pal.addWidget(Label(i18n.tr("查询参数会在连接时拼到地址后面"), 11, t.text_dim))
         pal.addWidget(self.params, 1)
+        pal.addWidget(self.params_tools)
         pal.addWidget(self.params_preview)
 
         # --- 「认证」页：握手期认证与连接行为，单独成页
@@ -295,6 +306,19 @@ class SioComposer(QWidget):
     def _on_option(self) -> None:
         if not self._loading:
             self.changed.emit()
+
+    def _paste_params(self) -> None:
+        """从剪贴板批量导入参数；KVEditor.set_rows 会触发 changed，进而同步 URL 预览。"""
+        from PyQt6.QtWidgets import QApplication
+
+        text = QApplication.clipboard().text()
+        if text.strip():
+            self.params.paste_text(text)
+
+    def _toggle_params_bulk(self) -> None:
+        self.params.set_bulk(not self.params.is_bulk())
+        self.params_bulk_btn.setText(
+            i18n.tr("退出批量") if self.params.is_bulk() else i18n.tr("批量编辑"))
 
     def set_params_preview(self, text: str) -> None:
         """由 RequestEditor 用统一的 URL 拼接算法算好最终地址后传入。"""

@@ -19,9 +19,17 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.49"
+VERSION = "1.0.50"
 
 CHANGELOG = [
+    {
+        "version": "1.0.50",
+        "date": "2026-11-19",
+        "items": [
+            "顶部请求标签拖动换序时，被拖的标签浮起并跟随鼠标移动，原位留半透明占位，手感和侧栏拖拽一致",
+            "WebSocket 与 Socket.IO 的「参数」页补齐「粘贴」和「批量编辑」两个功能，与 HTTP 请求参数页完全一致：剪贴板批量导入、key: value 批量编辑、注释行禁用、最终地址预览实时同步",
+        ],
+    },
     {
         "version": "1.0.49",
         "date": "2026-11-19",

@@ -353,6 +353,8 @@ _EN.update({
     "显示编码：UTF-8 / GBK / Base64 等": "Encoding: UTF-8 / GBK / Base64…",
     "从剪贴板批量导入：a=1&b=2 / 多行 key: value / JSON":
         "Bulk paste from clipboard: a=1&b=2 · lines of key: value · JSON",
+    "以 key: value 文本一次编辑全部参数":
+        "Edit all parameters at once as key: value text",
     "拖动调整高度 · 双击恢复 50 / 50": "Drag to resize · double-click to reset 50 / 50",
     "最终发送的完整地址": "The full URL that will be sent",
     "选择请求方法": "Choose request method",

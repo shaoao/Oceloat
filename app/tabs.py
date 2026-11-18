@@ -44,6 +44,9 @@ class TabStrip(QWidget):
         self._drag_id: Optional[str] = None
         self._drag_start = QPoint()
         self._dragging = False
+        # 拖拽浮层：记录鼠标相对标签左边缘的抓取偏移，让浮起的标签跟手移动
+        self._drag_pos: Optional[QPointF] = None
+        self._drag_grab = QPointF()
         self._font = font(12.2, weight=QFont.Weight.Medium)
         self._indicator = QRectF()
         self._ind_from = QRectF()
@@ -322,6 +325,7 @@ class TabStrip(QWidget):
                 self._dragging = True
                 self._drag_id = self._press_id
         if self._dragging and self._drag_id:
+            self._drag_pos = QPointF(e.position())   # 浮层实时跟随光标
             cur = next((j for j, t in enumerate(self.tabs) if t["id"] == self._drag_id), None)
             if cur is not None:
                 target = len(self.tabs)
@@ -335,7 +339,8 @@ class TabStrip(QWidget):
                     self.tabs.insert(target, self.tabs.pop(cur))
                     self.orderChanged.emit(self.ids())
                     self._snap_indicator()
-                    self.update()
+            # 即使没有跨过别的标签，浮层也要跟着鼠标动
+            self.update()
         super().mouseMoveEvent(e)
 
     def leaveEvent(self, e):  # noqa: N802
@@ -362,6 +367,11 @@ class TabStrip(QWidget):
         self._press_id = tab_id
         self._drag_start = pos
         self._dragging = False
+        # 抓取偏移在按下瞬间记录：浮层从第一帧就跟着鼠标，而不是先钉在原位
+        idx = next((j for j, t in enumerate(self.tabs) if t["id"] == tab_id), None)
+        if idx is not None:
+            r = self._rects()[idx]
+            self._drag_grab = QPointF(pos.x() - r.left(), pos.y() - r.top())
         old = self._current
         if tab_id != self._current:
             self.set_current(tab_id)
@@ -380,6 +390,7 @@ class TabStrip(QWidget):
             self._dragging = False
             self._press_id = None
             self._drag_id = None
+            self._drag_pos = None
             self._animate_indicator()
             return
         tab_id = self._hit(pos.toPoint())
@@ -411,6 +422,61 @@ class TabStrip(QWidget):
         self.update()
 
     # -------------------------------------------------- 绘制
+    def _draw_tab(self, p: QPainter, tab: Dict, rect: QRectF, is_cur: bool,
+                  is_hover: bool, hot: float, *, ghost: bool = False) -> None:
+        """画一个标签本体；ghost=拖动时留在原位的半透明占位。"""
+        t = theme()
+        if ghost:
+            p.setOpacity(0.32)
+        if is_hover and not is_cur:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(C(t.hover))
+            p.drawRoundedRect(rect, 7, 7)
+        # 方法徽标（替代原先的小色点，信息更明确、更好看）
+        method = (tab.get("method") or "GET").upper()
+        mcol = C(method_color(method, t))
+        br = self._badge_rect(rect)
+        fill = QColor(mcol)
+        fill.setAlpha(int(22 + 18 * hot))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(fill)
+        p.drawRoundedRect(br, 4.5, 4.5)
+        p.setFont(mono(8.2, QFont.Weight.Bold))
+        if hot < 0.999 and (is_cur or tab["id"] == self._prev_id):
+            mcol = QColor(mcol)
+            mcol.setAlpha(int(150 + 105 * hot))
+        p.setPen(mcol)
+        short = "DEL" if method == "DELETE" else ("OPT" if method == "OPTIONS" else method)
+        p.drawText(br, int(Qt.AlignmentFlag.AlignCenter), short)
+        # 标题（预览态用斜体，仿 VSCode：单击=临时查看，双击=固定）
+        if tab.get("preview"):
+            pf = QFont(self._font)
+            pf.setItalic(True)
+            p.setFont(pf)
+        else:
+            p.setFont(self._font)
+        base = C(t.text_dim if is_hover else t.text_faint)
+        p.setPen(_mix(base, C(t.accent), hot) if hot > 0.001 else base)
+        left = self._title_left(rect)
+        avail = rect.right() - self.RIGHT_PAD - self.CLOSE_W - left - 4
+        title = QFontMetricsF(self._font).elidedText(
+            tab.get("title") or "Untitled", Qt.TextElideMode.ElideRight, max(avail, 24))
+        p.drawText(QRectF(left, rect.top(), avail, rect.height()),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), title)
+        # 关闭按钮
+        show_close = is_cur or is_hover
+        if show_close and not ghost:
+            cr = self._close_rect(rect)
+            if tab["id"] == self._hover_close:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(C(t.selected))
+                p.drawRoundedRect(cr.adjusted(-3, -3, 3, 3), 4, 4)
+            col = t.text if tab["id"] == self._hover_close else t.text_faint
+            pm = icons.pixmap("close", col, 9, 2.1)
+            p.drawPixmap(QPointF(cr.left() + 1.5, cr.top() + 1.5), pm)
+        if ghost:
+            p.setOpacity(1.0)
+
     def paintEvent(self, _e):
         t = theme()
         p = QPainter(self)
@@ -440,52 +506,9 @@ class TabStrip(QWidget):
                 hot = 1.0 - self._switch_t
             else:
                 hot = 0.0
-            if is_hover and not is_cur:
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(C(t.hover))
-                p.drawRoundedRect(rect, 7, 7)
-            # 方法徽标（替代原先的小色点，信息更明确、更好看）
-            method = (tab.get("method") or "GET").upper()
-            mcol = C(method_color(method, t))
-            br = self._badge_rect(rect)
-            fill = QColor(mcol)
-            fill.setAlpha(int(22 + 18 * hot))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(fill)
-            p.drawRoundedRect(br, 4.5, 4.5)
-            p.setFont(mono(8.2, QFont.Weight.Bold))
-            if hot < 0.999 and (is_cur or tab["id"] == self._prev_id):
-                mcol = QColor(mcol)
-                mcol.setAlpha(int(150 + 105 * hot))
-            p.setPen(mcol)
-            short = "DEL" if method == "DELETE" else ("OPT" if method == "OPTIONS" else method)
-            p.drawText(br, int(Qt.AlignmentFlag.AlignCenter), short)
-            # 标题（预览态用斜体，仿 VSCode：单击=临时查看，双击=固定）
-            if tab.get("preview"):
-                pf = QFont(self._font)
-                pf.setItalic(True)
-                p.setFont(pf)
-            else:
-                p.setFont(self._font)
-            base = C(t.text_dim if is_hover else t.text_faint)
-            p.setPen(_mix(base, C(t.accent), hot) if hot > 0.001 else base)
-            left = self._title_left(rect)
-            avail = rect.right() - self.RIGHT_PAD - self.CLOSE_W - left - 4
-            title = QFontMetricsF(self._font).elidedText(
-                tab.get("title") or "Untitled", Qt.TextElideMode.ElideRight, max(avail, 24))
-            p.drawText(QRectF(left, rect.top(), avail, rect.height()),
-                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), title)
-            # 关闭按钮
-            show_close = is_cur or is_hover
-            if show_close:
-                cr = self._close_rect(rect)
-                if tab["id"] == self._hover_close:
-                    p.setPen(Qt.PenStyle.NoPen)
-                    p.setBrush(C(t.selected))
-                    p.drawRoundedRect(cr.adjusted(-3, -3, 3, 3), 4, 4)
-                col = t.text if tab["id"] == self._hover_close else t.text_faint
-                pm = icons.pixmap("close", col, 9, 2.1)
-                p.drawPixmap(QPointF(cr.left() + 1.5, cr.top() + 1.5), pm)
+            self._draw_tab(p, tab, rect, is_cur, is_hover, hot,
+                           ghost=self._dragging and tab["id"] == self._drag_id)
+
         # 新建按钮
         pr = self._plus_rect()
         if pr.right() < self.width() + 40:
@@ -495,4 +518,24 @@ class TabStrip(QWidget):
                 p.drawRoundedRect(pr, 6, 6)
             pm = icons.pixmap("plus", t.text if getattr(self, "_hover_plus", False) else t.text_faint, 13, 1.8)
             p.drawPixmap(QPointF(pr.center().x() - 6.5, pr.center().y() - 6.5), pm)
+
+        # 拖拽浮层：被拖的标签脱离原位，跟随鼠标。纯灰阶描边 + 轻微投影，无彩色无渐变。
+        if self._dragging and self._drag_id and self._drag_pos is not None:
+            tab = self.tab(self._drag_id)
+            if tab:
+                idx = next((j for j, x in enumerate(self.tabs) if x["id"] == self._drag_id), None)
+                w = self._tab_widths()[idx] if idx is not None else 150.0
+                fr = QRectF(self._drag_pos.x() - self._drag_grab.x(),
+                            self._drag_pos.y() - self._drag_grab.y(), w, TAB_H)
+                # 投影：向下偏移几像素的半透明灰块
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(0, 0, 0, 70 if t.is_dark else 34))
+                p.drawRoundedRect(fr.adjusted(1, 3, 1, 3), 8, 8)
+                # 浮层底：比选中胶囊更实一点，靠 border_strong 勾边
+                p.setBrush(C(t.elevated))
+                p.drawRoundedRect(fr, 7, 7)
+                p.setPen(C(t.border_strong))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRoundedRect(fr.adjusted(0.5, 0.5, -0.5, -0.5), 7, 7)
+                self._draw_tab(p, tab, fr, True, False, 1.0)
         p.end()
