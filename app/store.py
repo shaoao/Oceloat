@@ -19,9 +19,18 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.47"
+VERSION = "1.0.48"
 
 CHANGELOG = [
+    {
+        "version": "1.0.48",
+        "date": "2026-11-19",
+        "items": [
+            "WebSocket 与 Socket.IO 请求页的页签、工具行和输入框统一到顶部方法徽标所在竖线，两个协议页面左边缘完全一致",
+            "协议页 / 认证页移除整块灰色卡片底色，只留分组标题与细分隔线，做减法更清净",
+            "清理折叠卡片残留状态、未使用的消息计数与重复辅助方法，减少冗余代码",
+        ],
+    },
     {
         "version": "1.0.47",
         "date": "2026-11-19",

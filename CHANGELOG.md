@@ -1,5 +1,12 @@
 # What's Changed
 
+## v1.0.48 — 2026-11-19
+
+**Changed**
+- WebSocket and Socket.IO request pages now align their tabs, toolbar rows and inputs to the same left edge as the method badge; both protocols share one baseline.
+- Protocol and Auth pages drop the full grey card background, keeping only group titles and thin dividers for a cleaner look.
+- Removed leftover collapsed-card state, unused message counters and duplicate helpers to cut dead code.
+
 ## v1.0.47 — 2026-11-19
 
 **Changed**

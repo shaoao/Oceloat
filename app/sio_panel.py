@@ -15,8 +15,8 @@ from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QStackedWidget, QVBoxLayout,
 from . import i18n
 from .code_editor import CodeView
 from .store import uid
-from .theme import font, theme
-from .widgets import Button, Card, Divider, HBox, Label, SegmentedTabs, SmoothScrollArea, Switch
+from .theme import theme
+from .widgets import Button, Divider, HBox, Label, SegmentedTabs, SmoothScrollArea, Switch
 from .ws_panel import KIND_LABEL, MsgChip, WsLogView
 
 # 日志行上的技术标签保持大写短词，不需要翻译
@@ -144,9 +144,11 @@ class SioComposer(QWidget):
         self.reconnect_sw = Switch(True)
         self.reconnect_sw.toggled.connect(lambda _v: self._on_option())
 
-        auth_card = Card(radius=10)
+        # 认证页去掉整块灰色底：与协议页一样直接铺在页面底色上，
+        # 分组标题 + 细分隔线足够分层，输入框左边缘与其他页保持同一条线。
+        auth_card = QWidget()
         av = QVBoxLayout(auth_card)
-        av.setContentsMargins(16, 14, 16, 14)
+        av.setContentsMargins(10, 10, 14, 14)
         av.setSpacing(12)
         av.addWidget(Label(i18n.tr("握手认证"), 11, t.text_dim))
         a1 = QHBoxLayout()
@@ -186,9 +188,15 @@ class SioComposer(QWidget):
         al.addWidget(auth_card, 1)
 
         # 与 HTTP 请求页同款 underline 页签：只有「通讯 / 认证」两页。
+        # 与 UrlBar / HTTP 页签栏同款 14px 缩进，文字落在顶部徽标那条竖线上。
         self.tabs = SegmentedTabs([("chat", "通讯"), ("auth", "认证")],
                                   style="underline", height=32, pad_h=10, font_size=12.2)
         self.tabs.changed.connect(self._on_tab)
+        tab_host = QWidget()
+        tab_l = QHBoxLayout(tab_host)
+        tab_l.setContentsMargins(14, 0, 0, 0)
+        tab_l.setSpacing(0)
+        tab_l.addWidget(self.tabs, 0, Qt.AlignmentFlag.AlignLeft)
         self.stack = QStackedWidget()
         self.stack.addWidget(chat_page)
         self.stack.addWidget(auth_page)
@@ -196,7 +204,7 @@ class SioComposer(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(self.tabs)
+        lay.addWidget(tab_host)
         lay.addWidget(self.stack, 1)
         self._refresh_saved()
 
@@ -275,23 +283,9 @@ class SioComposer(QWidget):
     def kind_key(self) -> str:
         return self.kind.current() or "json"
 
-    @staticmethod
-    def _looks_json(text: str) -> bool:
-        s = (text or "").lstrip()
-        if s[:1] not in ("{", "["):
-            return False
-        try:
-            json.loads(s)
-            return True
-        except Exception:  # noqa: BLE001
-            return False
-
     def set_headers_count(self, n: int) -> None:
         self.headers_btn.setText(i18n.trf("握手头 · {n}", n=n) if n
                                  else i18n.tr("握手头"))
-
-    def set_messages_count(self, n: int) -> None:
-        self._messages_count = n
 
     def event_value(self) -> str:
         """事件名。不能叫 event()——那是 QWidget 的事件处理器，会被 Qt 用参数调用。"""

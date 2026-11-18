@@ -8,9 +8,8 @@ from __future__ import annotations
 import datetime
 import json
 import math
-from typing import Any, Dict, List
-
 from bisect import bisect_left, bisect_right
+from typing import Any, Dict, List
 
 from PyQt6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
@@ -217,9 +216,11 @@ class WsComposer(QWidget):
         self.clear_sw = Switch(False)
         self.clear_sw.toggled.connect(lambda _v: self._on_option())
 
-        proto_card = Card(radius=10)
+        # 低频配置不再套整块灰色卡片：直接铺在页面底色上，靠分组标题 +
+        # 细分隔线做层次，左边缘与通讯页 / 顶部方法徽标落在同一条竖线上。
+        proto_card = QWidget()
         pcv = QVBoxLayout(proto_card)
-        pcv.setContentsMargins(16, 14, 16, 14)
+        pcv.setContentsMargins(10, 10, 14, 14)
         pcv.setSpacing(12)
         pcv.addWidget(Label(i18n.tr("连接参数"), 11, t.text_dim))
         p1 = QHBoxLayout()
@@ -260,9 +261,16 @@ class WsComposer(QWidget):
         pl.addWidget(proto_card, 1)
 
         # 与 HTTP 请求页同款 underline 页签：只有「通讯 / 协议」两页。
+        # 14px 与 UrlBar / HTTP 页签栏的左缩进一致，页签文字正好落在顶部
+        # 方法徽标文字那条竖线上；内容区沿用 14 + 控件内边距 10 的基准。
         self.tabs = SegmentedTabs([("chat", "通讯"), ("protocol", "协议")],
                                   style="underline", height=32, pad_h=10, font_size=12.2)
         self.tabs.changed.connect(self._on_tab)
+        tab_host = QWidget()
+        tab_l = QHBoxLayout(tab_host)
+        tab_l.setContentsMargins(14, 0, 0, 0)
+        tab_l.setSpacing(0)
+        tab_l.addWidget(self.tabs, 0, Qt.AlignmentFlag.AlignLeft)
         self.stack = QStackedWidget()
         self.stack.addWidget(chat_page)
         self.stack.addWidget(proto_page)
@@ -270,7 +278,7 @@ class WsComposer(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(self.tabs)
+        lay.addWidget(tab_host)
         lay.addWidget(self.stack, 1)
         self._refresh_saved()
 
@@ -324,9 +332,6 @@ class WsComposer(QWidget):
     def set_headers_count(self, n: int) -> None:
         self.headers_btn.setText(i18n.trf("握手头 · {n}", n=n) if n
                                  else i18n.tr("握手头"))
-
-    def set_messages_count(self, n: int) -> None:
-        self._messages_count = n
 
     def payload(self) -> str:
         return self.editor.toPlainText()
@@ -598,7 +603,6 @@ class FrameCard(QWidget):
         self.frame = frame
         self.setObjectName("FrameCard")
         self._raw = frame.preview(20000)
-        self.collapsed = False
         self._syncing = False
 
         # 智能判断页签：内容真的是合法 JSON 才给 JSON / Raw 双标签，
@@ -697,37 +701,28 @@ class FrameCard(QWidget):
             return False
         self._syncing = True
         try:
-            if self.collapsed:
-                want = 36
-            else:
-                # QPlainTextEdit 的 document().size() 不是像素高度（它报的是块数），
-                # 自己按字体行距 × 可视行数算，长 JSON 也能整段铺开而不出滚动条。
-                doc = self.body.document()
-                fm = QFontMetricsF(self.body.font())
-                avail = max(40.0, float(self.body.viewport().width()) - 46)
-                lines = 0
-                block = doc.begin()
-                while block.isValid():
-                    text = block.text()
-                    lines += max(1, math.ceil(fm.horizontalAdvance(text) / avail))
-                    block = block.next()
-                h = int(lines * fm.lineSpacing() + doc.documentMargin() * 2 + 6)
-                self.body.setFixedHeight(max(26, h))
-                self.code_card.setFixedHeight(self.body.height() + 12)
-                # 4(top) + 24(tabs) + 4(spacing) + code_card + 7(bottom)
-                want = 4 + 24 + 4 + self.code_card.height() + 7
+            # QPlainTextEdit 的 document().size() 不是像素高度（它报的是块数），
+            # 自己按字体行距 × 可视行数算，长 JSON 也能整段铺开而不出滚动条。
+            doc = self.body.document()
+            fm = QFontMetricsF(self.body.font())
+            avail = max(40.0, float(self.body.viewport().width()) - 46)
+            lines = 0
+            block = doc.begin()
+            while block.isValid():
+                text = block.text()
+                lines += max(1, math.ceil(fm.horizontalAdvance(text) / avail))
+                block = block.next()
+            h = int(lines * fm.lineSpacing() + doc.documentMargin() * 2 + 6)
+            self.body.setFixedHeight(max(26, h))
+            self.code_card.setFixedHeight(self.body.height() + 12)
+            # 4(top) + 24(tabs) + 4(spacing) + code_card + 7(bottom)
+            want = 4 + 24 + 4 + self.code_card.height() + 7
             if abs(self.height() - want) <= 1:
                 return False
             self.setFixedHeight(want)
             return True
         finally:
             self._syncing = False
-
-    def _set_collapsed(self, expanded: bool) -> None:
-        self.collapsed = not expanded
-        self.code_card.setVisible(expanded)
-        if self.sync_height():
-            self.heightChanged.emit()
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
@@ -779,7 +774,7 @@ class FrameList(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     # -------------------------------------------------- 布局
-    def _layout_tops(self) -> Tuple[List[float], float]:
+    def _layout_tops(self) -> tuple[List[float], float]:
         """按每张卡片的「当前真实高度」算出所有行的 top 与内容总高。纯计算。"""
         tops: List[float] = []
         top = 4.0

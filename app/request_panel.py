@@ -1595,11 +1595,8 @@ class RequestEditor(QWidget):
     def _refresh_counts(self) -> None:
         if self._mode in ("ws", "sio"):
             headers = len(self.request.get("headers") or [])
-            key, composer = (("ws", self.ws) if self._mode == "ws"
-                             else ("sio", self.sio))
-            messages = len((self.request.get(key) or {}).get("messages") or [])
+            composer = self.ws if self._mode == "ws" else self.sio
             composer.set_headers_count(headers)
-            composer.set_messages_count(messages)
             self.count_label.setText("")
             self.params_preview.setText("")
             return
