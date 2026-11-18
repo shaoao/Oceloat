@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 
 from bisect import bisect_left, bisect_right
 
-from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -512,6 +512,31 @@ class ChevronToggle(QWidget):
         p.end()
 
 
+class _WheelForward(QObject):
+    """把代码区的滚轮事件转交给外层日志滚动区。
+
+    代码区是只读 QPlainTextEdit，即使滚动条关掉、内容又正好装得下，它仍会
+    先吃掉滚轮事件（哪怕只滚 1px）。结果鼠标停在展开的卡片上滚动时，
+    外层日志列表纹丝不动 —— 用户说的「滑不下去、看不了」。这里在安装到
+    代码区的过滤器里把 Wheel 事件原样转发给外层 SmoothScrollArea。
+    """
+
+    def __init__(self, target: QWidget, host):
+        super().__init__(target)
+        self._target = target
+        self._host = host
+
+    def eventFilter(self, obj, e):  # noqa: N802
+        if e.type() == QEvent.Type.Wheel and (
+                obj is self._target or
+                (hasattr(self._target, "viewport") and obj is self._target.viewport())):
+            host = self._host() if callable(self._host) else self._host
+            if host is not None and hasattr(host, "wheelEvent"):
+                host.wheelEvent(e)
+                return True          # 拦截：不让内层代码区再滚自己
+        return False
+
+
 class FrameCard(QWidget):
     """一条消息展开后的详情卡。
 
@@ -541,18 +566,20 @@ class FrameCard(QWidget):
         self.collapsed = False
         self._syncing = False
 
+        # 智能判断页签：内容真的是合法 JSON 才给 JSON / Raw 双标签，
+        # 普通文本（如「hello asfafsafga」）和系统消息只给一个 Raw —— 跟参考图
+        # 保持一致。之前按发送时选的 kind 判断会把纯文本也标成 JSON，用户截图
+        # 里整条 ERR 都挂了个 JSON 页，就是这个原因。
         if frame.kind == "binary":
             items = [("hex", "Hex"), ("raw", "Raw")]
-        else:
-            # 文本帧也一律给出 JSON 页：内容是合法 JSON 时美化显示，否则原样
-            # 呈现。用户截过图问「为什么只有一个 Raw，JSON 那个显示呢」——
-            # 光靠 frame.kind 判定会把带前缀 / 大段的 JSON 误判成 text。
+        elif self._looks_json(self._raw):
             items = [("pretty", "JSON"), ("raw", "Raw")]
+        else:
+            items = [("raw", "Raw")]
         self.tabs = SegmentedTabs(items, style="underline", height=24,
                                   font_size=10.8, pad_h=9, show_badges=False)
         self.tabs.changed.connect(self._render)
-        self.chevron = ChevronToggle(True)
-        self.chevron.toggled.connect(self._set_collapsed)
+        # 用户要求去掉左上角那个折叠箭头：详情卡固定展开，入口不再显示。
         copy = icon_button("copy", "复制这条消息", 22, 12)
         copy.clicked.connect(self._copy)
 
@@ -560,7 +587,6 @@ class FrameCard(QWidget):
         bl = QHBoxLayout(bar)
         bl.setContentsMargins(4, 0, 4, 0)
         bl.setSpacing(4)
-        bl.addWidget(self.chevron, 0)
         bl.addWidget(self.tabs, 0)
         bl.addStretch(1)
         bl.addWidget(copy, 0)
@@ -586,6 +612,13 @@ class FrameCard(QWidget):
         self.body.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.body.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.body.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        # 滚轮透传：鼠标压在代码区上时也要能滚动整个日志列表。
+        # 滚轮事件实际投递给 QAbstractScrollArea 的 viewport，而不是控件本身，
+        # 所以两处都要装过滤器（装 body 上只是兜底）。
+        self._wheel_forward = _WheelForward(
+            self.body, lambda: self._outer_scroll())
+        self.body.viewport().installEventFilter(self._wheel_forward)
+        self.body.installEventFilter(self._wheel_forward)
         cl.addWidget(self.body, 1)
 
         lay = QVBoxLayout(self)
@@ -595,6 +628,12 @@ class FrameCard(QWidget):
         lay.addWidget(self.body_label, 0)
         lay.addWidget(self.code_card, 1)
         self._render(self.tabs.current())
+
+    def _outer_scroll(self):
+        """沿父链找到承载日志列表的滚动区（延迟查找，构造时还没挂上去）。"""
+        from .widgets import _scroll_host
+
+        return _scroll_host(self)
 
     def paintEvent(self, _e):  # noqa: N802
         t = theme()

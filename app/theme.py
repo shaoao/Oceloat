@@ -123,7 +123,7 @@ def _dark_scheme(key: str, label: str, base: str) -> Theme:
         danger="#E48178",
         info="#89AECE",
         selection=(255, 255, 255, 48),
-        code_bg=_shift(base, -5),
+        code_bg=_shift(base, -2),
         detail_bg=_shift(base, -10),
         scroll=(255, 255, 255, 28),
         scroll_hover=(255, 255, 255, 60),

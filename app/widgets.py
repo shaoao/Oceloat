@@ -6,6 +6,7 @@ OutCubic / OutQuart 缓动，保持 macOS 的轻盈手感。
 """
 from __future__ import annotations
 
+import os
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from PyQt6.QtCore import (
@@ -1705,11 +1706,19 @@ class SmoothScrollArea(QScrollArea):
         if not delta:
             return
         step = -delta / 120 * 78
-        target = max(bar.minimum(), min(bar.value() + step, bar.maximum()))
+        target = int(max(bar.minimum(), min(bar.value() + step, bar.maximum())))
+        # 动画在部分环境（safemode / 某些平台）不会发出 valueChanged，滚轮会
+        # 彻底失灵。先直接落到目标值保证一定能滚，再用动画只是锦上添花的缓动
+        # ——真要缓动时从原位置插到目标；不能把「能滚」押在动画回调上。
+        if os.environ.get("OCELOT_NO_ANIM"):
+            bar.setValue(target)
+            return
         _anim_stop(self._anim)
         self._anim.setStartValue(bar.value())
         self._anim.setEndValue(target)
         self._anim.start()
+        if self._anim.state() == QVariantAnimation.State.Stopped:
+            bar.setValue(target)
 
 
 class KeyCap(QWidget):

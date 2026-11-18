@@ -1,5 +1,29 @@
 # What's Changed
 
+## v1.0.37 — 2026-11-18
+
+**Fixed**
+- Scrolling over an expanded message card now scrolls the whole log again. The
+  read-only code view was swallowing every wheel event (it still scrolled its
+  own 1px), so the outer list never moved — the mouse sat on the card and
+  nothing happened. Wheel events are now forwarded to the log scroll area.
+- The scroll area no longer depends solely on its easing animation to move:
+  it lands on the target value even when the animation cannot fire, so the
+  wheel always works (including in safe mode).
+- Tabs are chosen by **content** again: a plain-text frame shows only **Raw**,
+  a real JSON payload shows **JSON / Raw**. Previously every text frame was
+  given a JSON tab, so a plain "hello" message and even ERR system messages
+  sported a meaningless JSON tab.
+- Removed the collapse chevron from the top-left of detail cards; cards stay
+  open with their full content visible.
+
+**Changed**
+- Code surface background moved closer to the window base (`#171717`-like),
+  matching the response panel look the user compared against.
+
+**Verified**
+- Self-test suite: 549 checks, 0 failures.
+
 ## v1.0.36 — 2026-11-18
 
 **Fixed**

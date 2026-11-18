@@ -2981,22 +2981,21 @@ def main() -> int:
                   and all(c.isVisible() for c in view.list._cards.values()),
                   str(len(view.list._cards)))
             card = view.list._cards[id(view.list.frames[rows[0]])]
-            check("文本帧也有 JSON 页签", card.tabs.has("pretty"),
-                  str([i["key"] for i in card.tabs._items]))
+            src = card.frame.preview(20000).lstrip()
+            is_json = False
+            if src[:1] in ("{", "["):
+                try:
+                    _json.loads(src)
+                    is_json = True
+                except Exception:  # noqa: BLE001
+                    pass
+            keys = [i["key"] for i in card.tabs._items]
+            check("页签按内容智能判断",
+                  (is_json and "pretty" in keys) or (not is_json and keys == ["raw"]),
+                  str(keys))
             if card.tabs.has("pretty"):
                 card.tabs.set_current("pretty", emit=True)
-                src = card.frame.preview(20000).lstrip()
-                is_json = False
-                if src[:1] in ("{", "["):
-                    try:
-                        _json.loads(src)
-                        is_json = True
-                    except Exception:  # noqa: BLE001
-                        pass
-                check("JSON 页签显示分行排版",
-                      (not is_json) or "\n" in card.body.toPlainText())
-            else:
-                card.tabs.set_current("raw", emit=True)
+                check("JSON 页签显示分行排版", "\n" in card.body.toPlainText())
             from app.theme import theme as _theme
             check("代码区底色跟随主题而非纯黑",
                   _theme().code_bg.lower() != "#000000"
@@ -3007,18 +3006,12 @@ def main() -> int:
                   == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
                   and card.body.horizontalScrollBarPolicy()
                   == Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            h_open = card.height()
-            card.chevron.expanded = False
-            card.chevron.toggled.emit(False)
-            app.processEvents()
-            check("代码框能折叠", not card.code_card.isVisible()
-                  and card.height() < h_open,
-                  f"{h_open} → {card.height()}")
-            card.chevron.expanded = True
-            card.chevron.toggled.emit(True)
-            app.processEvents()
-            check("代码框能展开回来", card.code_card.isVisible()
-                  and card.height() >= h_open)
+            check("详情卡左上角无折叠箭头",
+                  not hasattr(card, "chevron"), "chevron removed")
+            check("卡片内容默认完整可见", card.code_card.isVisible())
+            check("滚轮事件能透传到外层日志区",
+                  card._wheel_forward is not None
+                  and card._outer_scroll() is view.scroll)
             check("统计数字带补间动画", view.stats._num_anim is not None)
 
             # 展开的卡片后面再来消息：必须按真实高度排布，不能盖在详情上
