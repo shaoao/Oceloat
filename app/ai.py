@@ -12,9 +12,12 @@ base_url 留空就用服务商默认，填了就覆盖（自建网关 / 中转�
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import time
 import urllib.error
 import urllib.request
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -288,45 +291,67 @@ def messages_for_json(keys: List[str], method: str = "GET", url: str = "",
 # ---------------------------------------------------------------- 响应分析
 # 按当前页签切换关注点：同一份响应在「响应头」和「时间线」里该说的话完全不同。
 _SYS_ANALYZE_BASE = (
-    "你是资深 API 调试专家，正在帮用户分析刚刚发出的一次请求。"
-    "用户给你的是原始事实，你只基于事实下结论，不许脑补接口文档里没有的约定。\n"
-    "铁律：\n"
-    "- HTTP 状态码是传输层结果；2xx 就是成功，绝不因为响应体里出现 code:1 就说「返回错误码」。"
-    "业务 code 必须结合 msg / message / success / data 等字段的语义判断："
-    "msg 是祝福语、data 有内容、success 不为 false 时，code:1 很可能是成功约定；"
-    "只有 msg 明确是错误或 data 为空且 success=false 才判为业务失败。\n"
-    "- 先给结论，再给证据：每个判断都点出具体字段名和值，不要说「建议查看文档」这类空话。\n"
-    "- 没发现异常就直说「未发现异常」，并指出哪些字段支撑这个判断；不为了凑字数制造问题。\n"
-    "输出格式（简体中文 Markdown，不要一级标题）：\n"
-    "## 结论\n两句话以内：这次请求到底成没成功、当前页里最值得注意的一点。\n"
-    "## 详细解读\n分点写，按给定关注点逐项分析，引用具体字段 / 头部 / 数值，4-8 条。\n"
-    "## 建议\n只写和证据直接相关的可执行动作，1-3 条；没有问题就写「无需调整」。"
+    "你是资深 API 调试与线上排障专家，正在为专业开发者分析一次真实请求。"
+    "只依据给定事实下结论，禁止脑补接口文档里没有的约定；每个判断都要点出具体字段名和值。\n"
+    "铁律（违反任意一条都算不合格）：\n"
+    "1）HTTP 状态码是传输层结果：2xx 一律判定请求成功。"
+    "绝不因为响应体里出现 code:1 / code:1001 之类数字就说「返回错误码」。"
+    "业务 code 必须结合 msg / message / success / data / error 判断："
+    "msg 是祝福语或正常文案、data 有内容、success 非 false 时，判为成功，"
+    "并说明该服务用 code 表示业务子状态；只有 msg 明确报错、success=false、"
+    "或 data 为空且伴随错误文案时才判业务失败，并原样引用错误文案。\n"
+    "2）先结论、后证据。结论一句话，给出明确判定（成功 / 业务失败 / 传输失败 / 需人工确认）"
+    "和最关键的一条证据，不许模棱两可。\n"
+    "3）每个发现写成「现象（字段=值）→ 影响 → 依据」，级别只用：阻断 / 警告 / 提示 / 正常，"
+    "按严重程度排序。不做无证据的猜测，不写教科书式清单。\n"
+    "4）没异常就直说「未发现异常」，并列出支撑判断的字段与值；不为凑字数制造问题。\n"
+    "5）建议必须可执行：指明改哪个字段 / 头部 / 参数、改成什么、为什么；"
+    "涉及安全与性能要标出风险等级，不写「建议查看文档」这类空话。\n"
+    "输出格式（简体中文 Markdown，不要一级标题，全文 350-600 字）：\n"
+    "## 结论\n一句话判定 + 一句最关键证据。\n"
+    "## 关键发现\n按严重程度排序 3-6 条，每条以 `- **级别｜短标题**：` 开头，"
+    "随后用反引号写出 `字段=值`，再说影响；没有发现就写一条"
+    "`- **正常｜未发现异常**：` 并给出支撑字段。\n"
+    "## 逐项解读\n按「当前查看的页面」关注点逐条分析，引用具体字段 / 头部 / 数值，4-8 条。\n"
+    "## 排查建议\n用 `1.` 编号写 1-3 条动作，每条指明改什么、改成什么、为什么；"
+    "没有问题写「无需调整」。"
 )
 
 _TAB_FOCUS = {
-    "pretty": "关注点：响应体的业务语义、字段是否自洽、数据是否完整、异常值或类型不一致。"
-              "解释 code/msg/data 的实际含义，指出哪些字段能证明成功或失败。",
+    "pretty": "关注点：响应体的业务语义与数据质量。判断 code / msg / data 是否自洽，"
+              "字段是否缺失、为 null 或类型漂移，分页与时间戳是否合理，"
+              "是否有 token / 密码 / 身份证等敏感信息明文回显；指出哪些字段能证明成功或失败。",
     "tree": "关注点：JSON 树形结构。指出层级是否过深、数组元素是否同构、"
-            "哪些字段有嵌套价值、是否存在空值或类型漂移。",
-    "raw": "关注点：原始报文。检查编码、BOM、换行、Content-Type 与实际内容是否匹配，"
-           "是否有被截断或转义异常，正文首几行的结构特征。",
-    "headers": "关注点：响应头。逐项解释关键头部（Content-Type / Cache-Control / ETag / "
-               "Set-Cookie / CORS / Content-Encoding / Location / Server），"
-               "指出缓存、安全、跨域或压缩方面值得注意的配置。",
-    "cookies": "关注点：Cookies。逐个分析名称、作用域、Path、 expires/max-age、Secure、"
-               "HttpOnly、SameSite，指出会话安全与过期风险。",
-    "console": "关注点：脚本控制台。按日志 and 断言逐条分析：前置脚本是否改到请求、"
-               "后置脚本提取了什么变量、哪些断言失败、错误堆栈指向哪一行；给出修法。",
-    "preview": "关注点：预览。判断响应类型能不能被正确渲染，"
-               "说明当前内容适合什么预览方式；若是媒体，指出格式、大小与加载风险。",
-    "diff": "关注点：与基准响应的差异。逐项列出新增 / 删除 / 值变化的字段，"
-            "判断哪些变化是正常波动、哪些可能是回归，指出影响范围。",
-    "extract": "关注点：JSON 路径提取。评估给定路径是否指向正确的值、类型是否符合预期、"
-               "路径是否脆弱（依赖数组下标等），给出更稳的写法建议。",
-    "timeline": "关注点：时间线。分析状态码变化、耗时趋势与离群点，"
-                "结合耗时判断是否有变慢趋势或抖动，指出最可疑的一次请求。",
-    "error": "关注点：请求没有拿到正常响应。区分 DNS / 连接 / TLS / 超时 / 代理 / "
-             "本地脚本异常，按证据给出最可能的原因与 1-3 步排查动作。",
+            "键名风格是否一致、空值与类型漂移出现在哪一层、是否有大数组会拖慢前端渲染；"
+            "给出能直接照着取值的层级路径。",
+    "raw": "关注点：原始报文。核对编码与 BOM、换行符、Content-Type 与实际内容是否匹配，"
+           "检查转义异常、截断痕迹、gzip / chunked 残留；从正文首几行推断真实格式与解析风险。",
+    "headers": "关注点：响应头。逐项解释 Content-Type / Cache-Control / ETag / Last-Modified / "
+               "Set-Cookie / Access-Control-Allow-Origin / Content-Encoding / Location / Server / "
+               "Strict-Transport-Security；重点指出缓存策略是否自相矛盾、CORS 能否放行当前源、"
+               "安全头缺失、压缩与长连接对性能的影响，并给出具体头部改法。",
+    "cookies": "关注点：Cookies。逐个分析名称、Domain / Path 作用域、expires 与 Max-Age、"
+               "Secure / HttpOnly / SameSite 组合，指出会话固定、跨站携带、过期失效风险；"
+               "按风险等级给出属性修改建议。",
+    "console": "关注点：脚本控制台。逐条分析前置脚本对请求方法 / 头部 / 参数的改动、"
+               "后置脚本提取了哪些变量、每条断言通过还是失败、错误堆栈指向哪一行；"
+               "定位到具体脚本行号并给出可直接替换的修法。",
+    "preview": "关注点：预览。判断响应能否被正确渲染，说明适合的预览方式；"
+               "若是图片 / 音视频 / PDF，指出格式、体积、解码失败或加载超时的具体原因，"
+               "并区分是内容问题还是头部声明问题。",
+    "diff": "关注点：与基准响应的差异。逐项列出新增 / 删除 / 值变化的字段及变化量，"
+            "结合字段语义区分正常波动与回归；指出受影响的下游逻辑范围，"
+            "并标明最可疑的一次变化。",
+    "extract": "关注点：JSON 路径提取。判断给定路径是否指向预期值、返回类型是否符合下游用法、"
+               "路径是否依赖数组下标而脆弱；给出更稳的等价写法（过滤条件 / 取首个匹配 / "
+               "空值兜底），并说明原路径在什么数据下会取错。",
+    "timeline": "关注点：时间线。分解 DNS / TCP / TLS / 请求发送 / 等待首字节 / 内容传输各段耗时，"
+                "找出最慢环节与离群点，分析耗时趋势与抖动，比较多次请求是否持续变慢；"
+                "结合状态码与响应体大小判断是服务端慢、网络慢还是本地处理慢，"
+                "指出最可疑的一次并给排查动作。",
+    "error": "关注点：请求没有拿到正常响应。依据错误文案与阶段区分 DNS 解析失败、"
+             "连接被拒、TLS 证书 / 协议不匹配、超时、代理配置、CORS 预检被拦、"
+             "本地脚本异常；给出最可能的原因排序和 1-3 步可立即执行的排查动作。",
 }
 
 
@@ -336,7 +361,7 @@ def messages_for_analysis(ctx: Dict[str, Any]) -> List[Dict[str, str]]:
     focus = _TAB_FOCUS.get(tab, _TAB_FOCUS["pretty"])
     parts = [
         f"当前查看的页面：{ctx.get('tab_label') or tab}（key={tab}）",
-        f"关注点：{focus}",
+        focus,  # _TAB_FOCUS 的值本身已带「关注点：」前缀，别再拼一层
     ]
     req = ctx.get("request") or {}
     if req:
@@ -382,6 +407,76 @@ def messages_for_analysis(ctx: Dict[str, Any]) -> List[Dict[str, str]]:
         parts.append("错误信息：" + str(ctx["error"]).strip()[:1000])
     return [{"role": "system", "content": _SYS_ANALYZE_BASE},
             {"role": "user", "content": "\n\n".join(parts)}]
+
+
+# ---------------------------------------------------------------- 分析结果缓存
+# 同一「页签 + 请求 + 响应」再看一次不必重新烧 token；但缓存只在内存里，
+# 有条数上限和过期时间，窗口一关就跟着释放，不会越攒越多。
+def analysis_key(ctx: Dict[str, Any]) -> str:
+    """给一次分析上下文算指纹。长正文截断即可——提示词本来也只看这段。"""
+    req = ctx.get("request") or {}
+    payload = {
+        "tab": ctx.get("tab"),
+        "status": ctx.get("status"),
+        "reason": ctx.get("reason"),
+        "method": str(req.get("method") or "").upper(),
+        "url": req.get("url"),
+        "req_headers": req.get("headers"),
+        "req_params": req.get("params"),
+        "req_body": str((req.get("body") or {}).get("raw") or "")[:1500],
+        "body": str(ctx.get("body") or "")[:4000],
+        "headers": ctx.get("headers"),
+        "cookies": ctx.get("cookies"),
+        "console": ctx.get("console"),
+        "diff": str(ctx.get("diff") or "")[:2000],
+        "extract": ctx.get("extract"),
+        "timeline": ctx.get("timeline"),
+        "preview": ctx.get("preview"),
+        "error": ctx.get("error"),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()
+
+
+class AnalysisCache:
+    """有限容量的分析结果缓存：LRU 淘汰 + TTL 过期 + 显式清空。"""
+
+    MAX = 8          # 最多留 8 份分析（每份 1~2KB，内存占用可忽略但有硬上限）
+    TTL = 30 * 60    # 30 分钟没人看就当过期，避免「一直存着」
+
+    def __init__(self) -> None:
+        self._data: "OrderedDict[str, tuple]" = OrderedDict()
+
+    def get(self, key: str) -> Optional[str]:
+        hit = self._data.get(key)
+        if hit is None:
+            return None
+        ts, text = hit
+        if time.time() - ts > self.TTL:
+            self._data.pop(key, None)
+            return None
+        self._data.move_to_end(key)
+        return text
+
+    def put(self, key: str, text: str) -> None:
+        if not text:
+            return
+        self._data[key] = (time.time(), text)
+        self._data.move_to_end(key)
+        self._prune()
+
+    def clear(self) -> None:
+        self._data.clear()
+
+    def _prune(self) -> None:
+        now = time.time()
+        for key in [k for k, (ts, _text) in self._data.items() if now - ts > self.TTL]:
+            self._data.pop(key, None)
+        while len(self._data) > self.MAX:
+            self._data.popitem(last=False)
+
+    def __len__(self) -> int:
+        return len(self._data)
 
 
 _SYS_DOC = (

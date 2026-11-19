@@ -1667,3 +1667,9 @@ _EN.update({
     "改动请求后提示「下面是上一次的响应」，可随时关掉。":
         "Show a notice when the request changes but the previous response is kept.",
 })
+
+# v1.0.55：分析缓存状态 + 弹窗核对提示
+_EN.update({
+    "来自缓存": "Cached",
+    "AI 生成 · 请结合原始响应核对": "AI-generated · verify against the raw response",
+})

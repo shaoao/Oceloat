@@ -1,5 +1,22 @@
 # What's Changed
 
+## v1.0.55 — 2026-11-19
+
+**Fixed**
+- "Analyzing" no longer jitters: the status text stays put while only the spinner moves; streaming refreshes are throttled to 90ms.
+- AI analysis layout rebuilt: the conclusion is a card with a side rule, evidence and recommendation lists use a separate bullet / 01-02 column so wrapped lines align with the text instead of snapping back to the left margin. Body text is brighter and larger, and bold fragments are highlighted.
+
+**Added**
+- Analysis cache: reopening an already analysed tab shows the saved result instantly instead of calling the AI again. Results are keyed by tab + request + response, shown as "Cached", capped at 8 entries, expired after 30 minutes, and cleared on close or data reload.
+- "AI-generated · verify against the raw response" hint in the dialog footer.
+
+**Changed**
+- The analysis prompt is now a professional troubleshooting framework: HTTP status and business codes are strictly separated, findings are ranked (blocking / warning / note / normal), and every claim must cite a concrete field and value. All 11 tabs have their own focus; output budget raised to 1400 tokens, and a duplicated "focus:" prefix in the prompt was removed.
+- Entry fade-in is 190ms; cache hits get a very light 160ms content softening without delaying the instant display.
+
+**Verified**
+- Targeted and full smoke checks pass.
+
 ## v1.0.54 — 2026-11-19
 
 **Fixed**

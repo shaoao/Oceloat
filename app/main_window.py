@@ -617,6 +617,10 @@ class MainWindow(QWidget):
         from .mock_server import MockServer
 
         self.mock = MockServer()
+        # AI 响应分析结果缓存：同一页签 + 同一响应再看一次直接显示，不再烧 token。
+        # LRU 上限 + 30 分钟过期 + 关窗清空，绝不会一直占着内存。
+        from . import ai as _ai
+        self._analysis_cache = _ai.AnalysisCache()
         self._shortcuts: List[QShortcut] = []
 
         self.setWindowTitle(APP_NAME)
@@ -2196,7 +2200,7 @@ class MainWindow(QWidget):
             bool(self.store.settings.get("stale_notice", True)))
 
     def _ai_explain_response(self) -> None:
-        """用 AI 分析当前响应页：不同页签喂不同证据，结果在弹窗里流式输出。"""
+        """分析当前响应页：命中缓存直接显示，否则按页签喂证据并流式输出。"""
         from . import ai as ai_mod
         from .dialogs import AiAnswerDialog
 
@@ -2207,6 +2211,7 @@ class MainWindow(QWidget):
             self.show_settings("ai")
             return
         ctx = self.response.ai_context(self.editor.request)
+        key = ai_mod.analysis_key(ctx)
         subtitle = i18n.trf("{page} · {method} {url}",
                             page=ctx.get("tab_label") or "响应",
                             method=str((ctx.get("request") or {}).get("method") or "GET").upper(),
@@ -2214,21 +2219,33 @@ class MainWindow(QWidget):
         dlg = AiAnswerDialog("AI 响应分析", subtitle, parent=self)
 
         def run() -> None:
+            # 重新分析时按「当时的」响应重新算指纹，结果直接覆盖旧缓存。
             context = self.response.ai_context(self.editor.request)
+            cache_key = ai_mod.analysis_key(context)
             messages = ai_mod.messages_for_analysis(context)
             dlg.reset()
             dlg.set_busy(True, "正在分析")
+
+            def done(_text: str) -> None:
+                result = dlg.result()
+                self._analysis_cache.put(cache_key, result)
+                dlg.set_result(result)
+
             self._ai_explain_chat = ai_mod.start(
-                messages, cfg=cfg, max_tokens=900, temperature=0.25,
+                messages, cfg=cfg, max_tokens=1400, temperature=0.2,
                 on_chunk=dlg.append_chunk,
-                on_done=lambda _text: dlg.set_result(dlg.result()),
+                on_done=done,
                 on_error=lambda err: dlg.set_result(err[:200], error=True))
 
         dlg.retryRequested.connect(run)
         dlg.copyRequested.connect(lambda: (
             QGuiApplication.clipboard().setText(dlg.result()),
             self.toast.show_message("分析结果已复制", "success")))
-        run()
+        cached = self._analysis_cache.get(key)
+        if cached:
+            dlg.set_result(cached, cached=True)
+        else:
+            run()
         dlg.exec()
 
     def _on_scale_applied(self, _scale: float) -> None:
@@ -2245,6 +2262,7 @@ class MainWindow(QWidget):
         """从云端恢复后整份数据都换了：标签全部关掉，侧栏与主题重新刷一遍。"""
         for tab in list(self.tabs_data):
             self.close_tab(tab["id"])
+        self._analysis_cache.clear()
         self.sidebar.refresh()
         self.sidebar.refresh_history()
         self.response.set_stale_notice(bool(self.store.settings.get("stale_notice", True)))
@@ -2626,6 +2644,11 @@ class MainWindow(QWidget):
             pass
         try:
             self.sio.abort()          # Socket.IO 连接同样不能留成孤儿
+        except Exception:             # noqa: BLE001
+            pass
+        # 分析结果只缓存在内存里，关窗即丢弃，不留常驻占用。
+        try:
+            self._analysis_cache.clear()
         except Exception:             # noqa: BLE001
             pass
         self._persist()

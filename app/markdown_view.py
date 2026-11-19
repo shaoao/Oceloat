@@ -553,3 +553,184 @@ class MarkdownView(QScrollArea):
                                    | Qt.TextInteractionFlag.LinksAccessibleByMouse)
         lab.setStyleSheet("background: transparent; font-size: 12.4px;")
         return lab
+
+
+# ---------------------------------------------------------------- AI 响应分析专用排版
+#
+# 与接口文档共用解析器（parse_blocks），但渲染规则完全不同：
+# - 结论是一张带竖条的卡片，正文更亮更大；
+# - 每个二级标题变成「标题 + 右侧细线」的一行，不再顶着上下大留白和分隔线；
+# - 列表用「左侧固定宽度的圆点 / 序号 + 右侧独立标签」实现真正的悬挂缩进，
+#   长文本折行后第二行贴着正文而不是贴着项目符号（这是旧版排版显乱的根因）；
+# - 加粗文字自动提亮，字段与级别一眼能分开。
+# 视觉仍是纯黑简约，靠字重、明暗、间距划分层次，不用彩色描边或渐变。
+class AnalysisView(MarkdownView):
+    """AI 响应分析结果：分节清晰、证据可读、长列表不塌。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._section = ""
+        self._lay.setContentsMargins(22, 12, 22, 22)
+        self._lay.setSpacing(0)
+
+    # -------------------------------------------------- API
+    def set_markdown(self, md: str) -> None:
+        self._section = ""
+        super().set_markdown(md)
+
+    @staticmethod
+    def _answer_rich(text: str, color: str) -> str:
+        """在通用行内渲染之上，把加粗片段提亮成正文色。"""
+        t = theme()
+        out = inline_html(text).replace("<b>", f'<b style="color:{t.text};">')
+        return f'<span style="color:{color};">{out}</span>'
+
+    # -------------------------------------------------- 分块渲染
+    def _build(self, block: Dict[str, Any]) -> Optional[QWidget]:
+        kind = block["kind"]
+        if kind == "h2":
+            self._section = str(block["text"] or "").strip()
+            return self._section_header(self._section)
+        if kind in ("h1", "h3", "h4"):
+            return self._small_heading(str(block["text"] or ""), kind)
+        if kind == "list":
+            items = [str(x) for x in block.get("items") or []]
+            if any(k in self._section for k in ("建议", "排查", "下一步", "行动")):
+                return self._numbered(items)
+            return self._bullets(items)
+        if kind == "p":
+            text = str(block["text"] or "")
+            if "结论" in self._section:
+                return self._conclusion(text)
+            return self._paragraph(text)
+        return super()._build(block)
+
+    # -------------------------------------------------- 具体样式
+    def _section_header(self, text: str) -> QWidget:
+        t = theme()
+        wrap = QWidget()
+        vl = QVBoxLayout(wrap)
+        vl.setContentsMargins(0, 18, 0, 9)
+        vl.setSpacing(0)
+        row = QWidget()
+        hl = QHBoxLayout(row)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(11)
+        lab = QLabel(text)
+        lab.setFont(font(12.4, QFont.Weight.DemiBold))
+        lab.setStyleSheet(f"color: {t.text}; background: transparent;")
+        lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        hl.addWidget(lab, 0, Qt.AlignmentFlag.AlignVCenter)
+        line = QWidget()
+        line.setFixedHeight(1)
+        line.setStyleSheet(f"background: {t.border};")
+        hl.addWidget(line, 1, Qt.AlignmentFlag.AlignVCenter)
+        vl.addWidget(row)
+        return wrap
+
+    def _small_heading(self, text: str, kind: str) -> QWidget:
+        t = theme()
+        wrap = QWidget()
+        vl = QVBoxLayout(wrap)
+        vl.setContentsMargins(0, 12, 0, 6)
+        lab = QLabel(self._answer_rich(text, t.text_dim))
+        lab.setTextFormat(Qt.TextFormat.RichText)
+        lab.setWordWrap(True)
+        lab.setFont(font(12.0 if kind == "h3" else 11.6, QFont.Weight.Medium))
+        lab.setStyleSheet("background: transparent;")
+        lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        vl.addWidget(lab)
+        return wrap
+
+    def _conclusion(self, text: str) -> QWidget:
+        t = theme()
+        card = Card(radius=9)
+        hl = QHBoxLayout(card)
+        hl.setContentsMargins(14, 11, 14, 11)
+        hl.setSpacing(12)
+        bar = QWidget()
+        bar.setFixedSize(2, 24)
+        bar.setStyleSheet(f"background: {t.accent_dim}; border-radius: 1px;")
+        hl.addWidget(bar, 0, Qt.AlignmentFlag.AlignTop)
+        lab = QLabel(self._answer_rich(text, t.text))
+        lab.setTextFormat(Qt.TextFormat.RichText)
+        lab.setWordWrap(True)
+        lab.setOpenExternalLinks(True)
+        lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                   | Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        lab.setStyleSheet("background: transparent; font-size: 13.4px;")
+        hl.addWidget(lab, 1, Qt.AlignmentFlag.AlignTop)
+        return card
+
+    def _paragraph(self, text: str) -> QWidget:
+        t = theme()
+        wrap = QWidget()
+        vl = QVBoxLayout(wrap)
+        vl.setContentsMargins(0, 2, 0, 6)
+        lab = QLabel(self._answer_rich(text, t.text_dim))
+        lab.setTextFormat(Qt.TextFormat.RichText)
+        lab.setWordWrap(True)
+        lab.setOpenExternalLinks(True)
+        lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                   | Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        lab.setStyleSheet("background: transparent; font-size: 12.6px;")
+        vl.addWidget(lab)
+        return wrap
+
+    def _bullets(self, items: List[str]) -> QWidget:
+        """证据列表：圆点独立成列，正文折行自动对齐（悬挂缩进）。"""
+        t = theme()
+        wrap = QWidget()
+        vl = QVBoxLayout(wrap)
+        vl.setContentsMargins(2, 0, 2, 0)
+        vl.setSpacing(9)
+        for item in items:
+            row = QWidget()
+            hl = QHBoxLayout(row)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(9)
+            dot = QLabel("•")
+            dot.setFixedWidth(9)
+            dot.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+            dot.setFont(font(12.6))
+            dot.setStyleSheet(f"color: {t.text_faint}; background: transparent;")
+            hl.addWidget(dot, 0, Qt.AlignmentFlag.AlignTop)
+            lab = QLabel(self._answer_rich(item, t.text_dim))
+            lab.setTextFormat(Qt.TextFormat.RichText)
+            lab.setWordWrap(True)
+            lab.setOpenExternalLinks(True)
+            lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                       | Qt.TextInteractionFlag.LinksAccessibleByMouse)
+            lab.setStyleSheet("background: transparent; font-size: 12.6px;")
+            hl.addWidget(lab, 1, Qt.AlignmentFlag.AlignTop)
+            vl.addWidget(row)
+        return wrap
+
+    def _numbered(self, items: List[str]) -> QWidget:
+        """建议列表：等宽序号 01 / 02，与正文分列，长句不会顶回最左边。"""
+        t = theme()
+        wrap = QWidget()
+        vl = QVBoxLayout(wrap)
+        vl.setContentsMargins(2, 0, 2, 0)
+        vl.setSpacing(10)
+        for idx, item in enumerate(items, 1):
+            row = QWidget()
+            hl = QHBoxLayout(row)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(10)
+            num = QLabel(f"{idx:02d}")
+            num.setFixedWidth(18)
+            num.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+            num.setFont(mono(10.6))
+            num.setStyleSheet(f"color: {t.text_faint}; background: transparent;")
+            hl.addWidget(num, 0, Qt.AlignmentFlag.AlignTop)
+            lab = QLabel(self._answer_rich(item, t.text_dim))
+            lab.setTextFormat(Qt.TextFormat.RichText)
+            lab.setWordWrap(True)
+            lab.setOpenExternalLinks(True)
+            lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                       | Qt.TextInteractionFlag.LinksAccessibleByMouse)
+            lab.setStyleSheet("background: transparent; font-size: 12.6px;")
+            hl.addWidget(lab, 1, Qt.AlignmentFlag.AlignTop)
+            vl.addWidget(row)
+        return wrap

@@ -33,7 +33,7 @@ from . import backdrop, i18n, icons, shortcuts as sc
 from . import ai as ai_mod
 from .anim import stop as _anim_stop
 from .code_editor import CodeView
-from .markdown_view import MarkdownView
+from .markdown_view import AnalysisView
 from .codegen import LANGUAGES
 from .kv_editor import KVEditor
 from .store import CHANGELOG, STATE_FILE, VERSION, Store, body_mode, uid
@@ -295,41 +295,45 @@ def _scalar_text(value: Any) -> str:
 
 
 class AiAnswerDialog(GlassDialog):
-    """AI 回答弹窗：流式写入、淡入动画、可复制 / 重新分析。
+    """AI 响应分析弹窗：流式写入、分节排版、可复制 / 重新分析。
 
-    只负责呈现：调用方拿 messages 起流，逐块喂 append_chunk()，结束后 finish()。
+    只负责呈现：调用方拿 messages 起流，逐块喂 append_chunk()，结束后 set_result()；
+    命中缓存时直接 set_result(..., cached=True) 秒开，不再起 AI 请求。
     """
 
     copyRequested = pyqtSignal()
     retryRequested = pyqtSignal()
 
     def __init__(self, title: str, subtitle: str = "", parent=None,
-                 width: int = 760, height: int = 560):
+                 width: int = 800, height: int = 620):
         super().__init__(parent, width, height, i18n.tr(title))
         t = theme()
         self._buf = ""
         self._dirty = False
         self._done = False
         self._timer = QTimer(self)
-        self._timer.setInterval(70)
+        self._timer.setInterval(90)
         self._timer.timeout.connect(self._flush)
 
         lay = QVBoxLayout(self.body)
         lay.setContentsMargins(18, 12, 18, 16)
         lay.setSpacing(10)
 
-        # 状态条：分析对象 + 状态 + 转圈；一行就够，不抢正文注意力
+        # 状态条：分析对象 + 状态 + 转圈。状态文字固定不动，转圈交给 spinner，
+        # 不再每收到一段就往文字后面加 / 减圆点（那会让整行字一直抖）。
         strip = Card(radius=9)
         sl = QHBoxLayout(strip)
-        sl.setContentsMargins(12, 8, 12, 8)
-        sl.setSpacing(8)
+        sl.setContentsMargins(12, 9, 12, 9)
+        sl.setSpacing(9)
         icon = QLabel()
         icon.setPixmap(icons.pixmap("spark", t.text_dim, 13, 1.5))
         sub = Label(subtitle or "", 10.6, t.text_faint)
         sub.setWordWrap(True)
-        self.spinner = Spinner(13)
+        self.spinner = Spinner(12, t.text_dim)
         self.spinner.hide()
         self.state = Label("", 10.6, t.text_faint, mono_font=True)
+        self.state.setMinimumWidth(64)
+        self.state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         sl.addWidget(icon)
         sl.addWidget(sub, 1)
         sl.addWidget(self.state, 0)
@@ -340,7 +344,7 @@ class AiAnswerDialog(GlassDialog):
         paper = Card(radius=10)
         pl = QVBoxLayout(paper)
         pl.setContentsMargins(0, 0, 0, 0)
-        self.view = MarkdownView()
+        self.view = AnalysisView()
         self.view.setStyleSheet(f"background: {t.panel};")
         pl.addWidget(self.view, 1)
         lay.addWidget(paper, 1)
@@ -354,13 +358,13 @@ class AiAnswerDialog(GlassDialog):
         self.copy_btn.clicked.connect(self.copyRequested.emit)
         self.retry_btn.clicked.connect(self.retryRequested.emit)
         close_btn.clicked.connect(self.accept)
-        lay.addWidget(HBox(1, self.retry_btn, self.copy_btn, close_btn, spacing=7))
+        hint = Label("AI 生成 · 请结合原始响应核对", 9.8, t.text_faint)
+        lay.addWidget(HBox(hint, 1, self.retry_btn, self.copy_btn, close_btn, spacing=7))
         self._state_text = ""
-        self._pulse = 0
 
     def showEvent(self, e):
         super().showEvent(e)
-        fade_in(self.body, 170)
+        fade_in(self.body, 190)
 
     def reset(self) -> None:
         """重新分析：清掉上一轮内容与状态，不重建窗口。"""
@@ -369,14 +373,16 @@ class AiAnswerDialog(GlassDialog):
         self._done = False
         self._timer.stop()
         self.view.clear()
+        self.state.setText("")
         self.state.setStyleSheet("")
 
     def set_busy(self, busy: bool, text: str = "") -> None:
         if busy:
             self.spinner.start()
             self._state_text = i18n.tr(text or "正在分析")
-            self._pulse = 0
+            # 状态文字写死一次，之后 render 只动 spinner —— 这是「正在分析一直抖」的根治点。
             self.state.setText(self._state_text)
+            self.state.setStyleSheet("")
         else:
             self.spinner.stop()
             self.state.setText(i18n.tr(text))
@@ -384,20 +390,28 @@ class AiAnswerDialog(GlassDialog):
     def append_chunk(self, piece: str) -> None:
         self._buf += piece or ""
         self._dirty = True
-        self._pulse = (self._pulse + 1) % 4
-        self.state.setText(self._state_text + "·" * self._pulse)
         if not self._timer.isActive():
             self._timer.start()
 
-    def set_result(self, text: str, error: bool = False) -> None:
+    def set_result(self, text: str, error: bool = False, cached: bool = False) -> None:
+        """写入最终结果。cached=True 表示命中本地缓存，直接淡入呈现，不再跑 AI。"""
         self._buf = text or ""
         self._dirty = True
         self._done = True
         self._flush()
         self.spinner.stop()
-        self.state.setText(i18n.tr("分析失败" if error else "分析完成"))
-        self.state.setStyleSheet(
-            f"color: {theme().danger if error else theme().success}; background: transparent;")
+        t = theme()
+        if error:
+            label, color = i18n.tr("分析失败"), t.danger
+        elif cached:
+            label, color = i18n.tr("来自缓存"), t.text_faint
+        else:
+            label, color = i18n.tr("分析完成"), t.success
+        self.state.setText(label)
+        self.state.setStyleSheet(f"color: {color}; background: transparent;")
+        if cached and self._buf:
+            # 缓存秒开：正文只做一次很轻的柔化，不让它比「直接显示」慢半拍。
+            fade_in(self.view, 160, start=0.55)
 
     def result(self) -> str:
         return self._buf.strip()
