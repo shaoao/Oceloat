@@ -55,7 +55,7 @@ from .sio_client import SocketIoClient
 from .request_panel import REALTIME_METHODS, SIO_METHOD, RequestEditor
 from .response_panel import ResponsePanel
 from .sidebar import Sidebar
-from .store import Store, kv, new_request, resolve_vars, uid
+from .store import VERSION, Store, kv, new_request, resolve_vars, uid
 from .tabs import TabStrip
 from .anim import running as _anim_running, set_animations, stop as _anim_stop
 from .theme import (C, S, apply_theme, font, mono, px, set_accent, set_ui_scale,
@@ -552,6 +552,89 @@ class WelcomeView(QWidget):
 # ---------------------------------------------------------------- 主窗口
 
 
+# ---------------------------------------------------------------- 状态栏徽章
+
+
+class MockBadge(QWidget):
+    """底部状态栏的 Mock 胶囊：一个绿点 + 端口，点一下就回到 Mock 中心。
+
+    状态从 MockHub 直接读，不做本地缓存 —— 面板里启停、多实例开关都靠它反映，
+    定时器每秒半才 refresh 一次，代价可以忽略。
+    """
+
+    clicked = pyqtSignal()
+
+    def __init__(self, hub, parent=None):
+        super().__init__(parent)
+        self.hub = hub
+        self._hover = 0.0
+        self._text = ""
+        self._on = False
+        self.setFixedHeight(22)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setToolTip("打开 Mock 中心 / 请求日志")
+        self.refresh()
+
+    def _compute(self) -> None:
+        running = self.hub.running()
+        if running:
+            ports = " / ".join(str(s.port) for s in running)
+            self._text = f"Mock: {ports} {i18n.tr('运行中')}"
+        else:
+            self._text = i18n.tr("Mock 未启动")
+        self._on = bool(running)
+
+    def refresh(self) -> None:
+        self._compute()
+        self.updateGeometry()
+        self.update()
+
+    def sizeHint(self):  # noqa: N802
+        fm = QFontMetricsF(mono(10.5))
+        return QSize(int(fm.horizontalAdvance(self._text) + 34), 22)
+
+    def enterEvent(self, e):  # noqa: N802
+        self._hover = 1.0
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):  # noqa: N802
+        self._hover = 0.0
+        self.update()
+        super().leaveEvent(e)
+
+    def mouseReleaseEvent(self, e):  # noqa: N802
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(
+                e.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(e)
+
+    def paintEvent(self, _e):  # noqa: N802
+        t = theme()
+        self._compute()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        r = QRectF(self.rect()).adjusted(0.5, 1.5, -0.5, -1.5)
+        bg = C(t.hover if self._hover else t.panel_alt)
+        bg.setAlpha(int(bg.alpha() * (0.9 if self._hover else 0.72)))
+        p.setPen(QPen(C(t.border), 1))
+        p.setBrush(bg)
+        p.drawRoundedRect(r, 9, 9)
+        # 小圆点：运行中是语义绿，未启动是灰
+        dot = QColor(t.success if self._on else t.text_faint)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(dot)
+        p.drawEllipse(QPointF(11, self.height() / 2), 3.0, 3.0)
+        p.setFont(mono(10.5))
+        p.setPen(C(t.text_dim if self._on else t.text_faint))
+        p.drawText(QRectF(19, 0, self.width() - 22, self.height()),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                   self._text)
+        p.end()
+
+
 class MainWindow(QWidget):
     def __init__(self, store: Store):
         super().__init__()
@@ -598,10 +681,10 @@ class MainWindow(QWidget):
         self._autosave.setSingleShot(True)
         self._autosave.setInterval(700)
         self._autosave.timeout.connect(self._persist)
-        # 本地 Mock 服务（懒启动）：整个应用一个实例，关窗时统一收掉
-        from .mock_server import MockServer
+        # 本地 Mock：Hub 管多个实例（多端口同时跑），关窗时统一收掉
+        from .mock_server import MockHub
 
-        self.mock = MockServer()
+        self.mock = MockHub()
         # AI 响应分析结果缓存：同一页签 + 同一响应再看一次直接显示，不再烧 token。
         # LRU 上限 + 8 分钟过期 + 关窗清空，绝不会一直占着内存。
         from . import ai as _ai
@@ -743,6 +826,7 @@ class MainWindow(QWidget):
         self.editor.copyCurlRequested.connect(self._copy_curl)
         self.editor.deleteRequested.connect(self._delete_current)
         self.editor.mockRequested.connect(self.open_mock)
+        self.editor.mockizeRequested.connect(self._mockize_current)
         self.editor.duplicateRequested.connect(self._duplicate_request)
         self.editor.notify.connect(lambda msg: self.toast.show_message(msg, "info"))
         self.editor.aiSettingsRequested.connect(lambda: self.show_settings("ai"))
@@ -788,6 +872,8 @@ class MainWindow(QWidget):
         self.split.splitterMoved.connect(self._on_sidebar_dragged)
         body_lay.addWidget(self.split, 1)
         root_lay.addWidget(body, 1)
+        root_lay.addWidget(Divider())
+        root_lay.addWidget(self._build_statusbar())
 
         self.toast = Toast(self.root)
         # 挂在主窗口本身（不是内容容器）：命令面板要盖在背景模糊遮罩之上，
@@ -796,6 +882,36 @@ class MainWindow(QWidget):
         self.palette.execute.connect(self._on_palette_action)
         self._update_stack()
         self.response.show_empty()
+
+    def _build_statusbar(self) -> QWidget:
+        """底部一条 28px 的状态栏：左边 Mock 胶囊，右边版本号。
+
+        以前 Mock 只能在弹窗里看状态，关掉就不知道服务还在不在；把状态钉在
+        底部之后，随时能点回去，也不用为了看一眼端口重开面板。
+        """
+        t = theme()
+        bar = QWidget()
+        bar.setFixedHeight(28)
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(12, 0, 14, 0)
+        lay.setSpacing(10)
+        self.mock_badge = MockBadge(self.mock)
+        self.mock_badge.clicked.connect(self.open_mock)
+        lay.addWidget(self.mock_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.status_hint = Label("", 9.8, t.text_faint)
+        lay.addWidget(self.status_hint, 1, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(Label(f"v{VERSION}", 9.6, t.text_faint, mono_font=True),
+                      0, Qt.AlignmentFlag.AlignVCenter)
+        self._status_tick = QTimer(self)
+        self._status_tick.setInterval(1800)
+        self._status_tick.timeout.connect(self._refresh_mock_badge)
+        self._status_tick.start()
+        return bar
+
+    def _refresh_mock_badge(self) -> None:
+        badge = getattr(self, "mock_badge", None)
+        if badge is not None:
+            badge.refresh()
 
     def _build_titlebar(self) -> QWidget:
         bar = TitleBar(self)
@@ -1031,12 +1147,14 @@ class MainWindow(QWidget):
         """Mock 中心：本地 Mock 服务 + 公开接口清单。"""
         from .mock_panel import MockDialog
 
-        was_running = self.mock.running
         dlg = MockDialog(self.store, self.mock, self)
         dlg.chosen.connect(self._use_mock)
         dlg.trialRequested.connect(self._mock_trial)
+        dlg.stateChanged.connect(self._refresh_mock_badge)
+        was_running = self.mock.is_running
         dlg.exec()
-        if self.mock.running != was_running:
+        self._refresh_mock_badge()
+        if self.mock.is_running != was_running:
             self._sync_mock_state()
 
     def _mock_trial(self, method: str, url: str) -> None:
@@ -1046,10 +1164,86 @@ class MainWindow(QWidget):
         self.toast.show_message("已连上本地 Mock 路由", "success")
         QTimer.singleShot(80, self.send_current)
 
+    def _mockize_current(self) -> None:
+        """一键 Mock：把当前请求的 Method / Path 和真实响应体，直接变成本地路由。
+
+        痛点很具体 —— 手动新建路由、填路径、复制响应体太麻烦。这里点了就落一条，
+        服务没开顺手拉起来，然后 toast 告诉用户「已经能请求了」。
+        """
+        from .mock_import import route_from_request
+        from .mock_server import mock_config
+
+        tab = self.current_tab()
+        if tab is None:
+            self.toast.show_message(i18n.tr("先打开或新建一个请求"), "info")
+            return
+        req = tab.get("request") or {}
+        url = str(req.get("url") or "").strip()
+        if not url:
+            self.toast.show_message(i18n.tr("这个请求还没有地址，先填一个再 Mock"), "info")
+            return
+        method = str(req.get("method") or "GET").upper()
+        if method in REALTIME_METHODS:
+            self.toast.show_message(i18n.tr("WebSocket / Socket.IO 不能做 HTTP Mock"), "info")
+            return
+        resp = tab.get("response")
+        body, ctype, status = "", "application/json", 200
+        if resp is not None and getattr(resp, "body", b""):
+            try:
+                body = resp.body.decode(resp.charset(), "replace")[:200_000]
+            except Exception:      # noqa: BLE001
+                body = ""
+            ctype = (getattr(resp, "content_type", "") or "application/json").split(";")[0]
+            status = int(getattr(resp, "status", 200) or 200)
+            if not 200 <= status <= 599:
+                status = 200
+        if not body:
+            raw = ""
+            b = req.get("body") or {}
+            if isinstance(b, dict):
+                raw = str(b.get("raw") or "")
+            body = raw or json.dumps({"code": 0, "message": "ok", "data": {}},
+                                     ensure_ascii=False, indent=2)
+            ctype = "application/json"
+        item = route_from_request(method, url, body, name=str(req.get("name") or ""),
+                                  group=i18n.tr("一键 Mock"), status=status,
+                                  content_type=ctype)
+        cfg = mock_config(self.store.data)
+        inst = (cfg.get("instances") or [{}])[0]
+        routes = inst.setdefault("routes", [])
+        replaced = False
+        for existing in routes:
+            if (str(existing.get("method") or "").upper() == item["method"]
+                    and str(existing.get("path") or "") == item["path"]):
+                existing.update({k: item[k] for k in ("body", "status", "content_type", "name")})
+                replaced = True
+                break
+        if not replaced:
+            item["id"] = "m" + uid()[:8]
+            routes.append(item)
+        self.store.save()
+        srv = self.mock.get(inst.get("id") or "main", inst.get("name") or "")
+        if not srv.running:
+            ok, msg = srv.start(routes, inst.get("port") or 8787,
+                                bool(cfg.get("fallback_echo")), bool(inst.get("lan")))
+            if ok:
+                inst["port"] = srv.port
+                self.store.save()
+            else:
+                self.toast.show_message(msg, "danger")
+        self._refresh_mock_badge()
+        verb = i18n.tr("已更新") if replaced else i18n.tr("已添加")
+        self.toast.show_message(
+            i18n.trf("{verb} Mock 路由 {method} {path}", verb=verb, method=item["method"],
+                     path=item["path"]), "success")
+
     def _sync_mock_state(self) -> None:
-        """服务在对话框里启动 / 停止后，标题栏和提示保持同步。"""
-        if self.mock.running:
-            self.toast.show_message(i18n.trf("本地 Mock 服务运行在 {url}", url=self.mock.base), "success")
+        """服务在对话框里启动 / 停止后，底部徽章和提示保持同步。"""
+        self._refresh_mock_badge()
+        running = self.mock.running()
+        if running:
+            self.toast.show_message(
+                i18n.trf("本地 Mock 服务运行在 {url}", url=self.mock.base), "success")
 
     def _use_mock(self, item: Dict[str, Any]) -> None:
         path = (item.get("u") or "").rstrip("/").split("/")[-1] or "mock"
@@ -2017,17 +2211,29 @@ class MainWindow(QWidget):
         timer.start()
 
     def _cloud_push_now(self) -> None:
+        """把最新快照推上去。上一轮还没结束时记一个 dirty，结束后补传 ——
+        以前这里是直接 return，连续改几次就会把最后一次改动丢掉。"""
         from .cloud import CloudWorker, client_for
 
         old = getattr(self, "_cloud_worker", None)
         if old is not None and old.isRunning():
-            return                     # 上一轮还没传完，不叠线程
+            self._cloud_dirty = True
+            return
+        self._cloud_dirty = False
         text = json.dumps(self.store.data, ensure_ascii=False)
         client = client_for(self.store.settings)
         worker = CloudWorker(lambda: client.push(text), self)
-        worker.done.connect(lambda ok, msg, _data: None)   # 失败不打扰，设置页可见
-        worker.start()
         self._cloud_worker = worker
+
+        def done(ok, _msg, _data):
+            if self._cloud_worker is worker:
+                self._cloud_worker = None
+            if self._cloud_dirty:
+                # 这一轮传的是旧快照，立刻补一次最新的
+                QTimer.singleShot(300, self._cloud_push_now)
+
+        worker.done.connect(done)
+        worker.start()
 
     def _wait_cloud(self) -> None:
         """退出前等一次性上传收尾，避免线程还在跑时窗口先被销毁。"""
@@ -2562,14 +2768,26 @@ class MainWindow(QWidget):
             self._shortcuts.append(hot)
 
     def _auto_start_mock(self) -> None:
-        """上次开着本地 Mock 就顺手拉起来，失败也不打扰（端口可能被占）。"""
-        cfg = self.store.data.get("mock") or {}
-        if not cfg.get("auto_start"):
-            return
-        ok, _msg = self.mock.start(cfg.get("routes") or [], cfg.get("port") or 8787,
-                                   bool(cfg.get("fallback_echo")))
-        if ok:
-            self.toast.show_message(i18n.trf("本地 Mock 服务已在 {port} 运行", port=self.mock.base), "success")
+        """上次开着本地 Mock 就顺手拉起来（多实例逐个恢复），失败也不打扰。"""
+        from .mock_server import mock_config
+
+        cfg = mock_config(self.store.data)
+        started = []
+        for inst in cfg.get("instances") or []:
+            if not inst.get("auto_start"):
+                continue
+            srv = self.mock.get(inst.get("id") or "main", inst.get("name") or "")
+            if srv.running:
+                continue
+            ok, _msg = srv.start(inst.get("routes") or [], inst.get("port") or 8787,
+                                 bool(cfg.get("fallback_echo")), bool(inst.get("lan")))
+            if ok:
+                inst["port"] = srv.port
+                started.append(srv.base)
+        self._refresh_mock_badge()
+        if started:
+            self.toast.show_message(
+                i18n.trf("本地 Mock 服务已启动 · {n} 个实例", n=len(started)), "success")
 
     def _next_tab(self) -> None:
         ids = self.tabstrip.ids()
@@ -2660,7 +2878,7 @@ class MainWindow(QWidget):
         except Exception:             # noqa: BLE001
             pass
         try:
-            self.mock.stop()          # 本地 Mock 服务不留后台线程
+            self.mock.stop_all()      # 本地 Mock 服务不留后台线程
         except Exception:             # noqa: BLE001
             pass
         try:
@@ -2713,7 +2931,7 @@ class MainWindow(QWidget):
         except Exception:                 # noqa: BLE001
             pass
         try:
-            self.mock.stop()
+            self.mock.stop_all()
         except Exception:                 # noqa: BLE001
             pass
         try:

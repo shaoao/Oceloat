@@ -1,5 +1,30 @@
 # What's Changed
 
+## v1.0.64 — 2026-11-20
+
+**Added**
+- **Multiple mock instances**: each instance owns its own port and route list, and they can all run at once — no more editing the port back and forth when one service calls another.
+- **One-click mock**: a button in the request bar turns the current method, path and real response body into a local mock route. If the server is stopped it starts it, then confirms with "added to local mock service". Hitting it again on the same path updates the route.
+- **Tree groups for routes**: `orders/payments` style nesting, collapsible and renameable. Importing an OpenAPI (3 / Swagger 2) or Postman collection builds the whole tree automatically from tags and folders.
+- **Full OpenAPI / Postman import**: example JSON is generated from schemas, path params become prefix wildcards, and up to 400 routes land in one go.
+- **AI for mock**: describe the business in one sentence and get a coherent set of routes with realistic bodies; or generate test cases for existing routes (happy path, missing params, boundaries, auth failures), each copyable as cURL.
+- **LAN debugging with a QR code**: enabling LAN binds `0.0.0.0`, shows the LAN URL and renders a QR code (pure-stdlib encoder, no new dependency) so a phone can connect straight away.
+- **Status-bar badge**: a permanent `● Mock: 8787 running` capsule at the bottom; click it to jump back to the mock center. Multiple instances list all their ports.
+
+**Changed**
+- **Mock center restructured into three tabs**: local mock / public APIs / request log, with a narrower toolbar so the route list keeps the width.
+- **Request log is fully hand-drawn**: timestamps no longer collapse to `00:34:0`, the size column is never pushed out of the window, and hundreds of rows scroll without spawning child widgets.
+- **Self-check on every start**: after binding, the server is probed — if the port answers but the server does not, the badge turns to "not responding" in a warning colour; an occupied port or duplicate `method + path` routes are named in the start message.
+- The request log now also reports response size, client IP, content type and instance; logs from every instance merge in reverse chronological order.
+- **What's New** lays out as range summary → category sections (new features / improvements / fixes) → per-version entries, with the range picker moved into the title bar and accent dots on section headers.
+- The Ocelot row in the import/export page now uses the app mark itself instead of a generic grid icon.
+- Dock icon strokes thickened from 3.6% to 4.2% (1.1px floor at small sizes); the face, spots and ink-writing animation are unchanged.
+- **Cloud sync reports real numbers**: local and cloud snapshots each show collections / requests / environments / mock routes / size, and push writes a metadata row in the same batch, so the panel shows what the cloud actually holds.
+- Auto cloud sync no longer drops the last edit when a push is still in flight — it marks the snapshot dirty and re-pushes as soon as the worker finishes.
+
+**Verified**
+- Full smoke suite: 679 checks pass; the QR encoder was cross-checked byte-for-byte against a reference implementation across random payloads and masks.
+
 ## v1.0.63 — 2026-11-19
 
 **Changed**

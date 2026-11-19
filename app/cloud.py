@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from . import i18n
 
+import hashlib
 import json
 import time
 import urllib.error
@@ -23,6 +24,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 TABLE = "ocelot_sync"
 KEY = "state"
+META_KEY = "meta"
 
 
 def normalize_url(raw: str) -> str:
@@ -70,6 +72,61 @@ def _value(cell: Optional[dict]) -> Any:
     return v
 
 
+
+def snapshot_stats(data: dict) -> dict:
+    """数一份快照里到底有什么：集合 / 请求 / 环境 / 变量 / 历史 / 体积 / 摘要。
+
+    界面上展示的「云端有 42 条请求」必须真的数出来，不能拿本地数字凑 ——
+    多机同步最怕的就是「看起来同步了，其实少了一半」。
+    """
+    collections = data.get("collections") or []
+    requests = 0
+
+    def walk(nodes):
+        nonlocal requests
+        for node in nodes or []:
+            if not isinstance(node, dict):
+                continue
+            if node.get("type") == "request":
+                requests += 1
+            walk(node.get("children"))
+
+    walk(collections)
+    envs = data.get("environments") or []
+    variables = sum(len((e or {}).get("variables") or []) for e in envs if isinstance(e, dict))
+    text = json.dumps(data, ensure_ascii=False)
+    raw = text.encode("utf-8")
+    return {
+        "collections": len(collections),
+        "requests": requests,
+        "environments": len(envs),
+        "variables": variables,
+        "history": len(data.get("history") or []),
+        "mocks": sum(len((i or {}).get("routes") or [])
+                     for i in ((data.get("mock") or {}).get("instances") or [])),
+        "size": len(raw),
+        "sha": hashlib.sha256(raw).hexdigest()[:16],
+    }
+
+
+def fmt_size(n: int) -> str:
+    if n >= 1024 * 1024:
+        return f"{n / 1048576:.1f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.0f} KB"
+    return f"{n} B"
+
+
+def stats_line(stats: dict) -> str:
+    """一行人能读的统计，界面直接用。"""
+    if not stats:
+        return i18n.tr("云端还没有数据")
+    return i18n.trf("{c} 个集合 · {r} 条请求 · {e} 个环境 · {m} 条 Mock 路由 · {s}",
+                    c=stats.get("collections", 0), r=stats.get("requests", 0),
+                    e=stats.get("environments", 0), m=stats.get("mocks", 0),
+                    s=fmt_size(int(stats.get("size") or 0)))
+
+
 class CloudError(Exception):
     pass
 
@@ -79,6 +136,7 @@ class TursoClient:
         self.url = normalize_url(url)
         self.token = (token or "").strip()
         self.timeout = timeout
+        self.last_meta: dict = {}
 
     # ------------------------------------------------------------ 底层
     def _post(self, statements: List[Tuple[str, List[Any]]]) -> dict:
@@ -152,22 +210,54 @@ class TursoClient:
             ")", [])])
 
     def push(self, text: str) -> Tuple[bool, str, int]:
+        """上传快照 + 一份统计元数据（同一批语句里写，不会出现「有数据没统计」）。"""
         stamp = int(time.time())
         self.ensure_table()
-        self._post([(
-            f"INSERT INTO {TABLE}(k, v, updated_at) VALUES(?, ?, ?) "
-            "ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at",
-            [KEY, text, stamp])])
-        return True, "已上传到云端", stamp
+        try:
+            stats = snapshot_stats(json.loads(text))
+        except (TypeError, ValueError):
+            stats = {}
+        meta = dict(stats, at=stamp)
+        meta_text = json.dumps(meta, ensure_ascii=False)
+        self._post([
+            (f"INSERT INTO {TABLE}(k, v, updated_at) VALUES(?, ?, ?) "
+             "ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at",
+             [KEY, text, stamp]),
+            (f"INSERT INTO {TABLE}(k, v, updated_at) VALUES(?, ?, ?) "
+             "ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at",
+             [META_KEY, meta_text, stamp]),
+        ])
+        self.last_meta = meta
+        return True, i18n.trf("已上传 · {line}", line=stats_line(stats)), stamp
 
     def pull(self) -> Tuple[Optional[str], int]:
         self.ensure_table()
-        rows = self._rows(self._post([(
-            f"SELECT v, updated_at FROM {TABLE} WHERE k = ?", [KEY])]))
+        data = self._post([(f"SELECT v, updated_at FROM {TABLE} WHERE k = ?", [KEY]),
+                           (f"SELECT v FROM {TABLE} WHERE k = ?", [META_KEY])])
+        rows = self._rows(data, 0)
+        self.last_meta = {}
+        try:
+            meta_rows = self._rows(data, 1)
+            if meta_rows and meta_rows[0] and meta_rows[0][0]:
+                self.last_meta = json.loads(str(meta_rows[0][0]))
+        except (CloudError, TypeError, ValueError):
+            self.last_meta = {}
         if not rows or not rows[0]:
             return None, 0
         stamp = int(rows[0][1] or 0) if len(rows[0]) > 1 else 0
         return str(rows[0][0]), stamp
+
+    def stats(self) -> dict:
+        """只读云端统计，用来在设置页显示「云端现在有什么」。"""
+        self.ensure_table()
+        rows = self._rows(self._post([(
+            f"SELECT v FROM {TABLE} WHERE k = ?", [META_KEY])]))
+        if not rows or not rows[0] or not rows[0][0]:
+            return {}
+        try:
+            return dict(json.loads(str(rows[0][0])))
+        except (TypeError, ValueError):
+            return {}
 
 
 class CloudWorker(QThread):

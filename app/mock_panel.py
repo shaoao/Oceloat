@@ -13,23 +13,34 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QPainter
+from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QFont, QFontMetricsF, QPainter, QPen
 from PyQt6.QtWidgets import (
+    QFileDialog,
+    QGridLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from . import i18n
+from . import i18n, icons, mock_ai, mock_import, qr
 from .code_editor import CodeView
-from .dialogs import GlassDialog
-from .mock_server import DEFAULT_PORT, MockServer, default_routes, render_placeholders
-from .theme import C, font, method_color, mono, theme
+from .dialogs import GlassDialog, Menu
+from .mock_server import (
+    DEFAULT_PORT,
+    MockHub,
+    MockServer,
+    default_routes,
+    local_ips,
+    mock_config,
+    render_placeholders,
+)
+from .theme import C, S, font, method_color, mono, theme
 from .widgets import (
     Button,
     Card,
@@ -205,7 +216,8 @@ class RouteRow(QWidget):
 
     ROW_H = 52
 
-    def __init__(self, item: Dict[str, Any], running: bool, parent=None, hits: int = 0):
+    def __init__(self, item: Dict[str, Any], running: bool, parent=None, hits: int = 0,
+                 indent: int = 0):
         super().__init__(parent)
         self.item = item
         self._hover = False
@@ -214,7 +226,7 @@ class RouteRow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(LIST_PAD, 5, 8, 5)
+        lay.setContentsMargins(LIST_PAD + 14 * indent, 5, 8, 5)
         lay.setSpacing(10)
 
         method = (item.get("method") or "GET").upper()
@@ -803,69 +815,601 @@ def _rule_sample_body() -> str:
 # ---------------------------------------------------------------- 日志行
 
 
+def _fmt_size(n: int) -> str:
+    if n >= 1024 * 1024:
+        return f"{n / 1048576:.1f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n} B"
+
+
 class LogRow(QWidget):
-    """一条请求日志：时间 · 方法 · 路径 · 状态 · 耗时 · 命中。"""
+    """一条请求日志：时间 · 方法 · 路径 · 状态 · 耗时 · 体积 · 来源 · 命中。
+
+    整行自己画，不放子控件：日志最多 300 条，一行 8 个 QLabel 就是两千多个控件，
+    滚动时全在重排；自己画只有一次 paintEvent，快得多，也不会出现
+    「最后一列被挤出窗口」这种布局问题。
+    """
 
     ROW_H = 30
+    COLS = (  # (右边距起算的宽度, 对齐) —— 从右往左排，路径吃掉剩下的宽度
+        ("route", 150),
+        ("client", 92),
+        ("size", 52),
+        ("ms", 60),
+        ("status", 38),
+    )
+    GAP = 10
+    TIME_W = 66
+    METHOD_W = 50
 
     def __init__(self, entry: Dict[str, Any], parent=None):
         super().__init__(parent)
-        t = theme()
+        self.entry = entry
         self.setFixedHeight(self.ROW_H)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(LIST_PAD, 0, LIST_PAD, 0)
-        lay.setSpacing(10)
 
-        def cell(text: str, width: int, color: str, mono_font: bool = True,
-                 align=None) -> Label:
-            lab = Label(text, 10.8, color, mono_font=mono_font)
-            lab.setFixedWidth(width)
-            if align is not None:
-                lab.setAlignment(align | Qt.AlignmentFlag.AlignVCenter)
-            return lab
+    def paintEvent(self, _e):  # noqa: N802
+        t = theme()
+        e = self.entry
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        w = self.width()
+        mid = self.height() // 2
 
-        lay.addWidget(cell(entry.get("time", ""), 62, t.text_faint),
-                      0, Qt.AlignmentFlag.AlignVCenter)
-        status = int(entry.get("status") or 0)
+        p.setPen(QPen(C(t.border)))
+        p.drawLine(LIST_PAD, self.height() - 1, w - LIST_PAD, self.height() - 1)
+
+        # 右侧固定列
+        x = w - LIST_PAD
+        status = int(e.get("status") or 0)
         token = {2: t.success, 3: t.text_dim, 4: t.warning, 5: t.danger}.get(
             status // 100, t.text_dim)
-        lay.addWidget(cell(entry.get("method", ""), 52, method_color(entry.get("method"), t)),
-                      0, Qt.AlignmentFlag.AlignVCenter)
-        path = ElideLabel(entry.get("path", ""), 11.2, t.text_dim, mono_font=True)
-        lay.addWidget(path, 1)
-        lay.addWidget(cell(str(status), 44, token, align=Qt.AlignmentFlag.AlignRight),
-                      0, Qt.AlignmentFlag.AlignVCenter)
-        lay.addWidget(cell(f"{entry.get('ms', 0)} ms", 66, t.text_faint,
-                           align=Qt.AlignmentFlag.AlignRight),
-                      0, Qt.AlignmentFlag.AlignVCenter)
-        rule = entry.get("rule") or ""
-        route = entry.get("route") or ""
-        label = f"{route} · {rule}" if rule else route
-        lay.addWidget(cell(label, 190, t.text_faint, mono_font=False,
-                           align=Qt.AlignmentFlag.AlignRight),
-                      0, Qt.AlignmentFlag.AlignVCenter)
+        values = {
+            "route": (e.get("route") or "") +
+                     (f" · {e['rule']}" if e.get("rule") else ""),
+            "client": e.get("client") or "-",
+            "size": _fmt_size(int(e.get("size") or 0)),
+            "ms": f"{e.get('ms', 0)} ms",
+            "status": str(status),
+        }
+        colors = {"status": token, "route": t.text_faint, "client": t.text_faint,
+                  "size": t.text_faint, "ms": t.text_faint}
+        route_left = x
+        for key, cw in self.COLS:
+            x -= cw
+            p.setFont(mono(10.4) if key != "route" else font(10.6))
+            p.setPen(C(colors[key]))
+            text = values[key]
+            rect = QRectF(x, 0, cw, self.height())
+            if key == "route":
+                fm = QFontMetricsF(p.font())
+                text = fm.elidedText(text, Qt.TextElideMode.ElideRight, cw)
+                p.drawText(rect, int(Qt.AlignmentFlag.AlignLeft |
+                                     Qt.AlignmentFlag.AlignVCenter), text)
+            else:
+                p.drawText(rect, int(Qt.AlignmentFlag.AlignRight |
+                                     Qt.AlignmentFlag.AlignVCenter), text)
+            x -= self.GAP
+        path_right = x
+        if not values["route"]:
+            path_right = w - LIST_PAD
+
+        # 左侧固定列
+        p.setFont(mono(10.4))
+        p.setPen(C(t.text_faint))
+        p.drawText(QRectF(LIST_PAD, 0, self.TIME_W, self.height()),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                   str(e.get("time", "")))
+        mx = LIST_PAD + self.TIME_W + self.GAP
+        p.setPen(C(method_color(e.get("method"), t)))
+        p.drawText(QRectF(mx, 0, self.METHOD_W, self.height()),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                   str(e.get("method", "")))
+
+        # 中间路径：吃掉剩余空间，超长右省略
+        px = mx + self.METHOD_W + self.GAP
+        avail = max(24.0, path_right - px)
+        p.setFont(mono(11.0))
+        p.setPen(C(t.text_dim))
+        fm = QFontMetricsF(p.font())
+        shown = fm.elidedText(i18n.tr(str(e.get("path", ""))),
+                              Qt.TextElideMode.ElideRight, avail)
+        p.drawText(QRectF(px, 0, avail, self.height()),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), shown)
+        p.end()
+
+
+# ---------------------------------------------------------------- 主对话框
+
+
+# ---------------------------------------------------------------- 分组树
+
+
+def _ensure_groups(routes: List[Dict[str, Any]]) -> None:
+    """补齐老数据缺的字段：id / group / enabled。"""
+    for r in routes:
+        if not r.get("id"):
+            r["id"] = _new_id("m")
+        if not r.get("group") and str(r.get("name") or "").startswith("示例"):
+            r["group"] = "示例"
+        r.setdefault("group", "")
+        r.setdefault("enabled", True)
+        r.setdefault("rules", [])
+
+
+class GroupRow(QWidget):
+    """树里的一个分组标题：折叠箭头 + 名字 + 条数。点击折叠，右键出菜单。"""
+
+    toggled = pyqtSignal(str)
+    menuRequested = pyqtSignal(str, object)
+
+    H = 32
+
+    def __init__(self, prefix: str, label: str, count: int, depth: int,
+                 collapsed: bool, parent=None):
+        super().__init__(parent)
+        self.prefix = prefix
+        self.label = label
+        self.count = count
+        self.depth = depth
+        self.collapsed = collapsed
+        self._hover = False
+        self.setFixedHeight(self.H)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setToolTip(i18n.trf("{name} · {n} 条路由 · 右键可重命名", name=prefix, n=count))
+
+    def enterEvent(self, e):  # noqa: N802
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, e):  # noqa: N802
+        self._hover = False
+        self.update()
+
+    def mouseReleaseEvent(self, e):  # noqa: N802
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(
+                e.position().toPoint()):
+            self.toggled.emit(self.prefix)
+        super().mouseReleaseEvent(e)
+
+    def contextMenuEvent(self, e):  # noqa: N802
+        self.menuRequested.emit(self.prefix, e.globalPos())
+
+    def paintEvent(self, _e):  # noqa: N802
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        if self._hover:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(C(t.hover))
+            p.drawRoundedRect(QRectF(self.rect()).adjusted(4, 2, -4, -2), 6, 6)
+        x = LIST_PAD + 14 * self.depth
+        chev = icons.pixmap("chevron_right" if self.collapsed else "chevron_down",
+                            t.text_faint, 11, 1.7)
+        p.drawPixmap(QPointF(x, (self.height() - 11) / 2), chev)
+        x += 15
+        folder = icons.pixmap("folder", t.text_faint, 13, 1.5)
+        p.drawPixmap(QPointF(x, (self.height() - 13) / 2), folder)
+        x += 19
+        p.setFont(font(11.8, QFont.Weight.DemiBold))
+        p.setPen(C(t.text_dim))
+        p.drawText(QRectF(x, 0, self.width() - x - 40, self.height()),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                   self.label)
+        fm = QFontMetricsF(font(11.8, QFont.Weight.DemiBold))
+        x += fm.horizontalAdvance(self.label) + 7
+        p.setFont(mono(9.8))
+        p.setPen(C(t.text_faint))
+        p.drawText(QRectF(x, 0, 40, self.height()),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                   str(self.count))
+        p.end()
+
+
+# ---------------------------------------------------------------- 小工具弹窗
+
+
+class TextPromptDialog(GlassDialog):
+    """一个输入框的轻量弹窗：建分组、重命名、改名字都用它。"""
+
+    def __init__(self, title: str, label: str, value: str = "", hint: str = "",
+                 parent=None, width: int = 460):
+        super().__init__(parent, width, 214, title)
+        t = theme()
+        self._value = value
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(20, 12, 20, 16)
+        lay.setSpacing(10)
+        lay.addWidget(Label(label, 11.2, t.text_dim, weight=QFont.Weight.DemiBold))
+        self.edit = QLineEdit(value)
+        self.edit.setObjectName("Field")
+        self.edit.setFixedHeight(30)
+        self.edit.setFont(mono(12))
+        self.edit.returnPressed.connect(self._accept)
+        lay.addWidget(self.edit)
+        if hint:
+            h = Label(hint, 10.4, t.text_faint)
+            h.setWordWrap(True)
+            lay.addWidget(h)
+        lay.addStretch(1)
+        cancel = Button("取消", None, kind="ghost", height=28, padding=12, font_size=12)
+        cancel.clicked.connect(self.reject)
+        ok = Button("确定", "check", kind="primary", height=28, padding=14, font_size=12)
+        ok.clicked.connect(self._accept)
+        lay.addWidget(HBox(1, cancel, ok, spacing=6))
+        QTimer.singleShot(0, self.edit.setFocus)
+
+    def _accept(self) -> None:
+        self._value = self.edit.text().strip()
+        if self._value:
+            self.accept()
+
+    def value(self) -> str:
+        return self._value
+
+
+class NewInstanceDialog(GlassDialog):
+    """新建一个 Mock 实例：名字 + 端口，端口冲突会自动顺延。"""
+
+    def __init__(self, ports: List[int], parent=None):
+        super().__init__(parent, 480, 268, "新建 Mock 实例")
+        t = theme()
+        suggest = (max(ports) + 1) if ports else DEFAULT_PORT
+        while suggest in ports:
+            suggest += 1
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(20, 12, 20, 16)
+        lay.setSpacing(10)
+        lay.addWidget(Label("实例名称", 11.2, t.text_dim, weight=QFont.Weight.DemiBold))
+        self.name = QLineEdit(i18n.trf("服务 {n}", n=len(ports) + 1))
+        self.name.setObjectName("Field")
+        self.name.setFixedHeight(30)
+        lay.addWidget(self.name)
+        lay.addWidget(Label("端口", 11.2, t.text_dim, weight=QFont.Weight.DemiBold))
+        self.port = QLineEdit(str(suggest))
+        self.port.setObjectName("Field")
+        self.port.setFixedHeight(30)
+        self.port.setFixedWidth(110)
+        self.port.setFont(mono(12))
+        lay.addWidget(self.port)
+        hint = Label("每个实例是一个独立的 HTTP 服务，端口不同；可以同时启动，"
+                     "用来模拟「订单服务 + 商品服务」这种互相调用的场景。",
+                     10.4, t.text_faint)
+        hint.setWordWrap(True)
+        lay.addWidget(hint, 1)
+        cancel = Button("取消", None, kind="ghost", height=28, padding=12, font_size=12)
+        cancel.clicked.connect(self.reject)
+        ok = Button("创建", "plus", kind="primary", height=28, padding=14, font_size=12)
+        ok.clicked.connect(self._accept)
+        lay.addWidget(HBox(1, cancel, ok, spacing=6))
+
+    def _accept(self) -> None:
+        name = (self.name.text() or "").strip()
+        try:
+            port = int(self.port.text() or DEFAULT_PORT)
+        except ValueError:
+            return
+        if not name:
+            return
+        self.result_item = {"name": name, "port": max(0, min(port, 65535))}
+        self.accept()
+
+
+class LanQrDialog(GlassDialog):
+    """局域网调试：把当前实例的地址画成二维码，手机扫一下就能连。"""
+
+    def __init__(self, server: MockServer, parent=None):
+        super().__init__(parent, 520, 560, "手机调试 · 局域网")
+        t = theme()
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(22, 12, 22, 18)
+        lay.setSpacing(12)
+
+        nets = server.lan_urls()
+        target = nets[0] if nets else (server.base if server.running else "")
+        lay.addWidget(Label(i18n.tr("用手机扫这个码，就能直接访问当前 Mock 服务。"),
+                            11.4, t.text_dim))
+
+        card = Card(radius=12)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(18, 18, 18, 18)
+        cl.setSpacing(10)
+        pic = QLabel()
+        pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if target:
+            pic.setPixmap(qr.pixmap(target, 196, fg="#111111" if not t.is_dark else "#111111",
+                                    bg="#FFFFFF"))
+        else:
+            pic.setText(i18n.tr("服务还没启动"))
+            pic.setStyleSheet(f"color: {t.text_faint};")
+        cl.addWidget(pic)
+        url = Label(target or "—", 12.5, t.text, mono_font=True)
+        url.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cl.addWidget(url)
+        cl.addWidget(Label(i18n.tr("手机与电脑要连同一个 Wi-Fi"), 10.4, t.text_faint))
+        lay.addWidget(card)
+
+        rows = [("localhost", server.base if server.running else "")]
+        for addr in nets:
+            rows.append((i18n.tr("局域网"), addr))
+        for name, addr in rows:
+            if not addr:
+                continue
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(2, 0, 2, 0)
+            rl.setSpacing(8)
+            rl.addWidget(Label(name, 10.4, t.text_faint, mono_font=True))
+            rl.addWidget(ElideLabel(addr, 11.6, t.text_dim, mono_font=True), 1)
+            btn = Button("复制", "copy", kind="ghost", height=24, padding=9, font_size=10.8,
+                         icon_size=11)
+            btn.clicked.connect(lambda _c=False, a=addr: self._copy(a))
+            rl.addWidget(btn)
+            lay.addWidget(row)
+
+        if server.running and not server.lan:
+            warn = Label(i18n.tr("当前只监听本机。打开上面的「局域网」开关重启服务后，"
+                                 "手机才能访问；访问不到时检查系统防火墙是否放行该端口。"),
+                         10.4, t.warning)
+            warn.setWordWrap(True)
+            lay.addWidget(warn)
+        lay.addStretch(1)
+        ok = Button("关闭", None, kind="primary", height=28, padding=20, font_size=12)
+        ok.clicked.connect(self.accept)
+        lay.addWidget(HBox(1, ok, spacing=6))
+
+    @staticmethod
+    def _copy(text: str) -> None:
+        from PyQt6.QtGui import QGuiApplication
+
+        QGuiApplication.clipboard().setText(text)
+
+
+class MockAiDialog(GlassDialog):
+    """AI 生成 Mock：一句话描述业务，生成一组路由；或者给现有路由生成测试用例。"""
+
+    MODES = [("routes", "生成接口"), ("cases", "生成用例")]
+
+    def __init__(self, routes: List[Dict[str, Any]], parent=None):
+        super().__init__(parent, 720, 620, "AI 生成 Mock")
+        t = theme()
+        self.routes = routes
+        self.result_routes: List[Dict[str, Any]] = []
+        self.result_cases: List[Dict[str, Any]] = []
+        self._buf = ""
+        self._chat = None
+
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(20, 10, 20, 16)
+        lay.setSpacing(10)
+
+        self.mode = SegmentedTabs(self.MODES, style="pill", current="routes", height=27,
+                                  pad_h=12, font_size=11.6)
+        self.mode.changed.connect(self._sync)
+        lay.addWidget(HBox(self.mode, 1))
+
+        self.desc = QLineEdit()
+        self.desc.setObjectName("Field")
+        self.desc.setFixedHeight(30)
+        i18n.placeholder(self.desc, "例如：一个博客系统，有文章列表、详情、发布、删除")
+        self.desc.returnPressed.connect(self._go)
+        lay.addWidget(self.desc)
+
+        self.note = Label("", 10.4, t.text_faint)
+        self.note.setWordWrap(True)
+        lay.addWidget(self.note)
+
+        self.out = CodeView(read_only=True, highlight=True, show_gutter=False)
+        self.out.setFont(mono(11))
+        self.out.setPlaceholderText(
+            i18n.tr("生成的路由会显示在这里；点右下角「生成」开始。"))
+        card = Card(radius=8)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(8, 8, 8, 8)
+        cl.addWidget(self.out)
+        lay.addWidget(card, 1)
+
+        self.status = Label("", 10.6, t.text_faint)
+        lay.addWidget(self.status)
+
+        cancel = Button("取消", None, kind="ghost", height=28, padding=12, font_size=12)
+        cancel.clicked.connect(self.reject)
+        self.go = Button("生成", "spark", kind="primary", height=28, padding=16,
+                         font_size=12, icon_size=12)
+        self.go.clicked.connect(self._go)
+        self.ok = Button("插入", "check", kind="primary", height=28, padding=14, font_size=12)
+        self.ok.clicked.connect(self.accept)
+        self.ok.setEnabled(False)
+        lay.addWidget(HBox(1, cancel, self.ok, self.go, spacing=6))
+
+        self._sync("routes")
+
+    # -------------------------------------------------- 交互
+    def _sync(self, key: str) -> None:
+        cases = key == "cases"
+        i18n.placeholder(self.desc, "补充要求（可留空），例如：多加几个鉴权失败的用例"
+                         if cases else
+                         "例如：一个博客系统，有文章列表、详情、发布、删除")
+        if cases and self.routes:
+            self.note.setText(i18n.trf("将基于当前实例的 {n} 条路由生成用例（正常 / 参数缺失 / "
+                                       "边界 / 鉴权失败）。", n=len(self.routes)))
+        else:
+            self.note.setText(i18n.tr("AI 会直接生成可用的路由与响应体，插到当前实例里；"
+                                      "Key 在「设置 → AI」里配置。"))
+        self.result_routes = []
+        self.result_cases = []
+        self.ok.setEnabled(False)
+
+    def _go(self) -> None:
+        from . import ai
+
+        cfg = ai.config()
+        ok, why = ai.ready(cfg)
+        if not ok:
+            self.status.setText(why)
+            self.status.setStyleSheet(f"color: {theme().danger};")
+            return
+        text = (self.desc.text() or "").strip()
+        mode = self.mode.current()
+        if mode == "routes" and not text:
+            self.status.setText(i18n.tr("先用一句话说清楚要做什么"))
+            return
+        msgs = (mock_ai.messages_for_cases(self.routes, text) if mode == "cases"
+                else mock_ai.messages_for_routes(text, 6, self.routes))
+        self._buf = ""
+        self.out.setPlainText("")
+        self.status.setText(i18n.tr("生成中…"))
+        self.status.setStyleSheet(f"color: {theme().text_faint};")
+        self.go.setEnabled(False)
+        self.ok.setEnabled(False)
+        self._chat = ai.start(msgs, on_chunk=self._chunk, on_done=self._done,
+                              on_error=self._fail)
+
+    def _chunk(self, piece: str) -> None:
+        self._buf += piece
+        self.out.setPlainText(self._buf)
+        bar = self.out.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def _done(self, _text: str) -> None:
+        self.go.setEnabled(True)
+        mode = self.mode.current()
+        try:
+            if mode == "cases":
+                self.result_cases = mock_ai.parse_cases(self._buf)
+                self.out.setPlainText("\n".join(
+                    f"{c['method']} {c['path']}  →  {c['expect_status']}  {c['name']}"
+                    for c in self.result_cases))
+                self.status.setText(i18n.trf("生成了 {n} 条用例", n=len(self.result_cases)))
+            else:
+                self.result_routes = mock_ai.parse_routes(self._buf)
+                self.out.setPlainText(json.dumps(
+                    [{k: r[k] for k in ("name", "group", "method", "path", "status")}
+                     for r in self.result_routes], ensure_ascii=False, indent=2))
+                self.status.setText(i18n.trf("生成了 {n} 条路由", n=len(self.result_routes)))
+            self.status.setStyleSheet(f"color: {theme().success};")
+            self.ok.setEnabled(True)
+        except ValueError as exc:
+            self.status.setText(str(exc))
+            self.status.setStyleSheet(f"color: {theme().danger};")
+
+    def _fail(self, msg: str) -> None:
+        self.go.setEnabled(True)
+        self.status.setText(msg)
+        self.status.setStyleSheet(f"color: {theme().danger};")
+
+    def closeEvent(self, e):  # noqa: N802
+        chat = self._chat
+        if chat is not None and chat.isRunning():
+            try:
+                chat.cancel()
+            except Exception:      # noqa: BLE001
+                pass
+        super().closeEvent(e)
+
+
+class CasesDialog(GlassDialog):
+    """测试用例清单：每条都能复制成 curl，拿去终端或 CI 里跑。"""
+
+    def __init__(self, cases: List[Dict[str, Any]], base: str, parent=None):
+        super().__init__(parent, 780, 600, "Mock 测试用例")
+        t = theme()
+        self.cases = cases
+        self.base = base
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(18, 10, 18, 14)
+        lay.setSpacing(8)
+
+        head = HBox(Label(i18n.trf("{n} 条用例 · 点右侧复制成 cURL", n=len(cases)), 10.8,
+                          t.text_faint), 1, spacing=8)
+        head.layout().setContentsMargins(2, 0, 2, 0)
+        copy_all = Button("全部复制", "copy", kind="ghost", height=26, padding=10,
+                          font_size=11.2, icon_size=11)
+        copy_all.clicked.connect(self._copy_all)
+        head.layout().addWidget(copy_all)
+        lay.addWidget(head)
+
+        card = Card(radius=10)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(2, 4, 2, 4)
+        self.scroll = SmoothScrollArea()
+        holder = QWidget()
+        box = QVBoxLayout(holder)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(0)
+        for case in cases:
+            box.addWidget(self._row(case))
+        box.addStretch(1)
+        self.scroll.setWidget(holder)
+        cl.addWidget(self.scroll)
+        lay.addWidget(card, 1)
+        ok = Button("关闭", None, kind="primary", height=28, padding=20, font_size=12)
+        ok.clicked.connect(self.accept)
+        lay.addWidget(HBox(1, ok, spacing=6))
+
+    def _row(self, case: Dict[str, Any]) -> QWidget:
+        t = theme()
+        row = QWidget()
+        row.setFixedHeight(46)
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(LIST_PAD, 4, LIST_PAD, 4)
+        rl.setSpacing(10)
+        status = Label(str(case.get("expect_status")), 10, t.success, mono_font=True,
+                       weight=QFont.Weight.DemiBold)
+        status.setFixedWidth(34)
+        rl.addWidget(status)
+        method = Label(case.get("method", "GET"), 9.6, method_color(case.get("method", "GET"), t),
+                       mono_font=True, weight=QFont.Weight.DemiBold)
+        method.setFixedWidth(METHOD_W)
+        rl.addWidget(method)
+        mid = VBox(ElideLabel(case.get("path", "/"), 11.8, t.text, mono_font=True),
+                   ElideLabel(f"{case.get('name', '')} · {case.get('note', '')}", 10.4,
+                              t.text_faint), spacing=1)
+        mid.layout().setContentsMargins(0, 0, 0, 0)
+        rl.addWidget(mid, 1)
+        btn = icon_button("copy", "复制为 cURL", 22, 12)
+        btn.clicked.connect(lambda _c=False, c=case: self._copy(mock_ai.case_as_curl(c, self.base)))
+        rl.addWidget(btn)
+        return row
+
+    def _copy(self, text: str) -> None:
+        from PyQt6.QtGui import QGuiApplication
+
+        QGuiApplication.clipboard().setText(text)
+
+    def _copy_all(self) -> None:
+        self._copy("\n\n".join(mock_ai.case_as_curl(c, self.base) for c in self.cases))
 
 
 # ---------------------------------------------------------------- 主对话框
 
 
 class MockDialog(GlassDialog):
-    """Mock 中心：本地服务 / 公开接口 / 请求日志。"""
+    """Mock 中心：本地服务（可多实例）/ 公开接口 / 请求日志。"""
 
     chosen = pyqtSignal(dict)                 # 选了一个公开接口
-    trialRequested = pyqtSignal(str, str)     # (method, url) 直接把请求发出去前先建好请求
+    trialRequested = pyqtSignal(str, str)     # (method, url)
+    stateChanged = pyqtSignal()               # 启停后通知主窗口刷新状态徽章
 
-    def __init__(self, store, server: Optional[MockServer] = None, parent=None):
-        super().__init__(parent, 940, 660, "Mock 中心")
+    def __init__(self, store, server: Optional[MockHub] = None, parent=None):
+        super().__init__(parent, 960, 690, "Mock 中心")
         self.store = store
-        self.server = server or MockServer()
-        self._owns_server = server is None
+        if isinstance(server, MockHub):
+            self.hub = server
+        else:
+            self.hub = MockHub()
+            if server is not None:            # 兼容只传单个 MockServer 的旧调用
+                self.hub.attach(server)
         self._query = ""
         self._group = "全部"
+        self._collapsed: set = set()
         self.rows: List[MockRow] = []
         self.route_rows: List[RouteRow] = []
         self.log_rows: List[LogRow] = []
         self._log_fp: tuple = ()
+        self._chat = None
         t = theme()
 
         body = QVBoxLayout(self.body)
@@ -897,13 +1441,36 @@ class MockDialog(GlassDialog):
         self.log_timer.setInterval(900)
         self.log_timer.timeout.connect(self._refresh_logs)
 
+    # -------------------------------------------------- 配置
+    def _cfg(self) -> Dict[str, Any]:
+        return mock_config(self.store.data)
+
+    def _instances(self) -> List[Dict[str, Any]]:
+        return self._cfg()["instances"]
+
+    def _current(self) -> Dict[str, Any]:
+        insts = self._instances()
+        iid = getattr(self, "_instance", "main")
+        for inst in insts:
+            if inst.get("id") == iid:
+                return inst
+        self._instance = insts[0].get("id", "main")
+        return insts[0]
+
+    def _srv(self) -> MockServer:
+        inst = self._current()
+        return self.hub.get(inst.get("id") or "main", inst.get("name") or "")
+
+    def _routes(self) -> List[Dict[str, Any]]:
+        return self._current().setdefault("routes", [])
+
     # -------------------------------------------------- 本地 Mock 页
     def _page_local(self) -> QWidget:
         t = theme()
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(10)
+        lay.setSpacing(9)
 
         card = Card(radius=10)
         cl = QVBoxLayout(card)
@@ -913,30 +1480,78 @@ class MockDialog(GlassDialog):
         top = QWidget()
         tl = QHBoxLayout(top)
         tl.setContentsMargins(0, 0, 0, 0)
-        tl.setSpacing(8)
+        tl.setSpacing(7)
         self.status_pill = Pill("未启动", t.text_faint, font_size=9.8)
         tl.addWidget(self.status_pill)
-        tl.addWidget(Label("本地 Mock 服务", 12.6, t.text, weight=QFont.Weight.DemiBold))
-        self.base_label = ElideLabel("http://127.0.0.1:%d" % DEFAULT_PORT, 11.2, t.text_faint,
-                                     mono_font=True)
-        tl.addWidget(self.base_label, 1)
-        tl.addWidget(Label("端口", 10.6, t.text_faint))
-        self.port_edit = QLineEdit(str(self._cfg().get("port") or DEFAULT_PORT))
+        self.inst_tabs = SegmentedTabs([("main", "默认实例")], style="pill",
+                                       current="main", height=26, pad_h=10, font_size=11.2)
+        self.inst_tabs.changed.connect(self._switch_instance)
+        tl.addWidget(self.inst_tabs)
+        self.inst_more = icon_button("more", "实例管理", 24, 13)
+        self.inst_more.clicked.connect(self._instance_menu)
+        tl.addWidget(self.inst_more)
+        tl.addStretch(1)
+        self.port_edit = QLineEdit(str(self._current().get("port") or DEFAULT_PORT))
         self.port_edit.setObjectName("Field")
         self.port_edit.setFixedHeight(26)
-        self.port_edit.setFixedWidth(62)
+        self.port_edit.setFixedWidth(58)
         self.port_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.port_edit.setFont(mono(11.5))
+        self.port_edit.setToolTip(i18n.tr("服务端口"))
         tl.addWidget(self.port_edit)
+        self.lan_switch = Switch(bool(self._current().get("lan")))
+        self.lan_switch.toggled.connect(self._on_lan)
+        lan_box = HBox(Label("局域网", 10.6, t.text_faint), self.lan_switch, spacing=5)
+        lan_box.setToolTip("打开后监听 0.0.0.0，手机 / 其它电脑可以用局域网 IP 访问")
+        tl.addWidget(lan_box)
+        self.qr_btn = Button("扫码", "external", kind="ghost", height=26, padding=10,
+                             font_size=11.4, icon_size=11, tooltip="手机上打开二维码")
+        self.qr_btn.clicked.connect(self._show_qr)
+        tl.addWidget(self.qr_btn)
         self.start_btn = Button("启动服务", "play", kind="primary", height=26, padding=12,
                                 font_size=11.6, icon_size=12)
         self.start_btn.clicked.connect(self._toggle)
         tl.addWidget(self.start_btn)
         cl.addWidget(top)
 
-        self.local_hint = Label("", 10.6, t.text_faint)
+        base_row = QWidget()
+        brl = QHBoxLayout(base_row)
+        brl.setContentsMargins(0, 0, 0, 0)
+        brl.setSpacing(8)
+        self.base_label = ElideLabel("http://127.0.0.1:%d" % DEFAULT_PORT, 11.2, t.text_faint,
+                                     mono_font=True, mode=Qt.TextElideMode.ElideRight)
+        brl.addWidget(self.base_label, 1)
+        copy_base = Button("复制地址", "copy", kind="ghost", height=22, padding=8,
+                           font_size=10.6, icon_size=11)
+        copy_base.clicked.connect(self._copy_base)
+        brl.addWidget(copy_base)
+        cl.addWidget(base_row)
+
+        self.local_hint = Label("", 10.5, t.text_faint)
         self.local_hint.setWordWrap(True)
         cl.addWidget(self.local_hint)
+
+        tools = QWidget()
+        tool_l = QHBoxLayout(tools)
+        tool_l.setContentsMargins(0, 0, 0, 0)
+        tool_l.setSpacing(6)
+        for text, icon, slot in (
+            ("新建路由", "plus", self._add_route),
+            ("新建分组", "folder", self._new_group),
+            ("导入 OpenAPI / Postman", "transfer", self._import_doc),
+            ("AI 生成", "spark", self._ai_generate),
+            ("AI 用例", "check", self._ai_cases),
+        ):
+            b = Button(text, icon, kind="subtle", height=26, padding=10, font_size=11.2,
+                       icon_size=11)
+            b.clicked.connect(slot)
+            tool_l.addWidget(b)
+        tool_l.addStretch(1)
+        self.fallback_switch = Switch(bool(self._cfg().get("fallback_echo", False)))
+        self.fallback_switch.toggled.connect(self._on_fallback)
+        tool_l.addWidget(Label("无匹配时回显", 10.6, t.text_faint))
+        tool_l.addWidget(self.fallback_switch)
+        cl.addWidget(tools)
 
         self.scroll = SmoothScrollArea()
         holder = QWidget()
@@ -947,146 +1562,222 @@ class MockDialog(GlassDialog):
         self.scroll.setWidget(holder)
         cl.addWidget(self.scroll, 1)
 
-        empty = Label("还没有路由。点下面的「新建路由」，写个 /api/hello 试试。",
-                      11.4, t.text_faint)
+        empty = Label("还没有路由。点「新建路由」写个 /api/hello，"
+                      "或者直接导入现成的 OpenAPI / Postman 文件。", 11.4, t.text_faint)
         empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty.setWordWrap(True)
         self.empty_label = empty
         cl.addWidget(empty)
-        cl.addWidget(Label(
-            "路径末尾写 * 做前缀匹配（/api/users/*）；没匹配上的请求返回 404，"
-            "并列出当前全部可用路由。响应体支持动态占位符与条件规则。",
-            10.4, t.text_faint))
+        tip = Label("路径末尾写 * 做前缀匹配（/api/users/*）；没匹配上的请求返回 404，"
+                    "并列出当前全部可用路由。响应体支持 {{@name}} 动态占位符与条件规则。",
+                    10.3, t.text_faint)
+        tip.setWordWrap(True)
+        cl.addWidget(tip)
         lay.addWidget(card, 1)
-
-        foot = QWidget()
-        fl = QHBoxLayout(foot)
-        fl.setContentsMargins(2, 0, 2, 0)
-        fl.setSpacing(10)
-        add = Button("新建路由", "plus", kind="subtle", height=28, padding=12, font_size=11.8,
-                     icon_size=12)
-        add.clicked.connect(self._add_route)
-        copy_base = Button("复制地址", "copy", kind="ghost", height=28, padding=10,
-                           font_size=11.6, icon_size=12)
-        copy_base.clicked.connect(self._copy_base)
-        fl.addWidget(add)
-        fl.addWidget(copy_base)
-        fl.addStretch(1)
-        self.fallback_switch = Switch(bool(self._cfg().get("fallback_echo", False)))
-        self.fallback_switch.toggled.connect(self._on_fallback)
-        fl.addWidget(Label("无匹配时回显请求", 10.8, t.text_faint))
-        fl.addWidget(self.fallback_switch)
-        self.auto_switch = Switch(bool(self._cfg().get("auto_start", False)))
-        self.auto_switch.toggled.connect(self._on_auto)
-        fl.addWidget(Label("随应用启动", 10.8, t.text_faint))
-        fl.addWidget(self.auto_switch)
-        lay.addWidget(foot)
         return page
 
-    LEGACY_ROUTES = {"示例 · 用户信息", "示例 · 回显请求", "示例 · 服务异常"}
+    # -------------------------------------------------- 实例
+    def _sync_instance_tabs(self) -> None:
+        insts = self._instances()
+        items = [(i.get("id") or "main", i.get("name") or "实例") for i in insts]
+        self.inst_tabs.set_items(items, current=self._current().get("id") or "main")
+        # 只有一个实例时不必占地方
+        self.inst_tabs.setVisible(len(items) > 1)
 
-    def _cfg(self) -> Dict[str, Any]:
-        cfg = self.store.data.setdefault("mock", {})
-        cfg.setdefault("port", DEFAULT_PORT)
-        routes = cfg.get("routes")
-        # 老版本只有三条示例：新版本把动态数据 / 条件规则 / 延迟做成示例，
-        # 只有「完全没动过那三条」时才替换，用户自己改过的路由一条都不碰
-        if routes and {r.get("name") for r in routes} == self.LEGACY_ROUTES \
-                and not any(r.get("rules") for r in routes):
-            cfg["routes"] = default_routes()
-        cfg.setdefault("routes", default_routes())
-        cfg.setdefault("fallback_echo", False)
-        cfg.setdefault("auto_start", False)
-        return cfg
+    def _switch_instance(self, iid: str) -> None:
+        if iid == self._current().get("id"):
+            return
+        self._instance = iid
+        inst = self._current()
+        self.port_edit.setText(str(inst.get("port") or DEFAULT_PORT))
+        self.lan_switch.setChecked(bool(inst.get("lan")))
+        self._sync_local(rebuild=True)
 
-    # 启动 / 停止
+    def _instance_menu(self) -> None:
+        t = theme()
+        menu = Menu(self)
+        a_new = menu.addAction(icons.icon("plus", t.text, 14), i18n.tr("新建实例…"))
+        a_rename = menu.addAction(icons.icon("pencil", t.text, 14), i18n.tr("重命名当前实例…"))
+        a_del = menu.addAction(icons.icon("trash", t.text, 14), i18n.tr("删除当前实例…"))
+        menu.addSeparator()
+        for inst in self._instances():
+            mark = "✓ " if inst.get("id") == self._current().get("id") else "   "
+            act = menu.addAction(f"{mark}{inst.get('name')}  :{inst.get('port')}")
+            act.triggered.connect(lambda _c=False, i=inst: self._switch_instance(i["id"]))
+        chosen = menu.exec(self.inst_more.mapToGlobal(self.inst_more.rect().bottomLeft()))
+        if chosen is a_new:
+            self._add_instance()
+        elif chosen is a_rename:
+            self._rename_instance()
+        elif chosen is a_del:
+            self._delete_instance()
+
+    def _add_instance(self) -> None:
+        dlg = NewInstanceDialog([int(i.get("port") or 0) for i in self._instances()], self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        new_id = _new_id("i")
+        self._instances().append({
+            "id": new_id, "name": dlg.result_item["name"], "port": dlg.result_item["port"],
+            "lan": False, "auto_start": False, "routes": [],
+        })
+        self._instance = new_id
+        self.store.save()
+        self._sync_instance_tabs()
+        self.port_edit.setText(str(dlg.result_item["port"]))
+        self.lan_switch.setChecked(False)
+        self._sync_local(rebuild=True)
+        self.local_hint.setText(i18n.tr("新实例已创建，点「启动服务」就能各自跑一个端口。"))
+
+    def _rename_instance(self) -> None:
+        inst = self._current()
+        dlg = TextPromptDialog(i18n.tr("重命名实例"), i18n.tr("实例名称"),
+                               str(inst.get("name") or ""), parent=self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        inst["name"] = dlg.value()
+        self.store.save()
+        self._sync_instance_tabs()
+
+    def _delete_instance(self) -> None:
+        insts = self._instances()
+        if len(insts) <= 1:
+            self.local_hint.setText(i18n.tr("至少保留一个实例。"))
+            return
+        inst = self._current()
+        self._srv().stop()
+        insts[:] = [i for i in insts if i.get("id") != inst.get("id")]
+        self._instance = insts[0].get("id") or "main"
+        self.store.save()
+        self._sync_instance_tabs()
+        self.port_edit.setText(str(self._current().get("port") or DEFAULT_PORT))
+        self.lan_switch.setChecked(bool(self._current().get("lan")))
+        self._sync_local(rebuild=True)
+        self.stateChanged.emit()
+
+    # -------------------------------------------------- 启停
     def _toggle(self) -> None:
-        if self.server.running:
+        if self._srv().running:
             self._stop()
         else:
             self._start()
 
     def _start(self) -> bool:
-        cfg = self._cfg()
+        inst, srv = self._current(), self._srv()
         try:
             port = int(self.port_edit.text() or DEFAULT_PORT)
         except ValueError:
             port = DEFAULT_PORT
-        ok, msg = self.server.start(cfg.get("routes") or [], port,
-                                    bool(cfg.get("fallback_echo")))
+        ok, msg = srv.start(inst.get("routes") or [], port,
+                            bool(self._cfg().get("fallback_echo")),
+                            bool(inst.get("lan")))
         if ok:
-            cfg["port"] = port
+            inst["port"] = srv.port
             self.store.save()
-            self.port_edit.setText(str(self.server.port))
-            note = msg if msg.startswith("端口") else ""
-            running_hint = i18n.trf(
-                "服务运行中：{url} —— 本机浏览器、脚本、别的设备都能连。",
-                url=self.server.base)
-            self.local_hint.setText((i18n.tr(msg) if note else "") + running_hint)
+            self.port_edit.setText(str(srv.port))
+            tip = (i18n.tr("服务已启动，局域网也开着：手机扫码或直接访问上面的局域网地址。"
+                           "改路由会立刻生效，不用重启。") if srv.lan else
+                   i18n.tr("服务已启动：改路由会立刻生效，不用重启。"
+                           "想把手机接进来，打开上面的「局域网」开关。"))
+            # 端口被占用时 start() 会给一句「端口 8787 已被…，改用 8788」，别把它吞掉
+            if ("端口" in msg or "重复" in msg) and "已启动" not in msg:
+                tip = msg + "\n" + tip
+            self.local_hint.setText(tip)
         else:
             self.local_hint.setText(msg)
         self._sync_local(rebuild=True)
+        self.stateChanged.emit()
         return ok
 
     def _stop(self) -> None:
-        port = self.server.port
-        self.server.stop()
-        # 停完再确认一次端口真的关了：否则界面说「已停止」，浏览器还能连上
-        if port and self.server.port_in_use(port):
+        srv = self._srv()
+        port = srv.port
+        srv.stop()
+        if port and srv.port_in_use(port):
             self.local_hint.setText(
-                i18n.trf("已停止本地服务，但端口 {port} 仍被其它程序占用"
-                         "（可能是另一个 Ocelot 实例）。", port=port))
+                i18n.trf("已停止，但端口 {port} 仍被其它程序占用（可能是另一个 Ocelot 实例）。",
+                         port=port))
         else:
-            self.local_hint.setText(i18n.tr("服务已停止。已经填好的路由仍然保留，重启后继续用。"))
+            self.local_hint.setText(i18n.tr("服务已停止。路由都保留着，重启后继续用。"))
         self._sync_local(rebuild=True)
+        self.stateChanged.emit()
+
+    def _on_lan(self, on: bool) -> None:
+        inst = self._current()
+        inst["lan"] = bool(on)
+        self.store.save()
+        if self._srv().running:
+            self._start()
+        else:
+            self.local_hint.setText(
+                i18n.tr("已开启局域网访问：启动后手机用本机 IP 就能连，点右边的扫码按钮出二维码。")
+                if on else i18n.tr("只监听本机 127.0.0.1。"))
+        self._sync_local()
 
     def _sync_local(self, rebuild: bool = False) -> None:
         t = theme()
-        running = self.server.running
+        srv, inst = self._srv(), self._current()
+        running = srv.running
         self.status_pill.set_text(i18n.tr("运行中") if running else i18n.tr("未启动"))
         self.status_pill.set_color(t.success if running else t.text_faint)
-        # 按钮必须跟着真实状态走：之前固定写成「停止服务」，没启动时点一下等于什么也没做
         self.start_btn.setText(i18n.tr("停止服务") if running else i18n.tr("启动服务"))
         self.start_btn.set_icon("stop" if running else "play")
         self.start_btn.set_kind("subtle" if running else "primary")
-        self.base_label.setText(self.server.base if running
-                               else f"http://127.0.0.1:{self.port_edit.text() or DEFAULT_PORT}")
+        self.qr_btn.setEnabled(running)
+        shown = srv.base if running else f"http://127.0.0.1:{inst.get('port') or DEFAULT_PORT}"
+        nets = srv.lan_urls() if running else []
+        if nets:
+            shown += "    ·    " + i18n.trf("局域网 {url}", url=nets[0])
+        self.base_label.setText(shown)
         self.port_edit.setEnabled(not running)
+        self.lan_switch.setEnabled(not running)
         if running:
             if not self.local_hint.text() or "已停止" in self.local_hint.text():
                 self.local_hint.setText(i18n.trf(
-                    "服务运行中：{url} —— 本机任何工具都能连这个地址。",
-                    url=self.server.base))
+                    "服务运行中：{url} —— 本机浏览器、脚本、手机都能连。", url=srv.base))
         else:
             if not self.local_hint.text() or "运行中" in self.local_hint.text():
                 self.local_hint.setText(i18n.tr(
-                    "启动后：请求发到 http://127.0.0.1:<端口>/<路径>，"
-                    "本机的浏览器、脚本、别的设备都能连。"))
+                    "启动后：请求发到 http://127.0.0.1:<端口>/<路径>；"
+                    "打开「局域网」还能让手机直接连。"))
             self._check_port_owner()
         for row in self.route_rows:
             row.setup_buttons(running)
         if rebuild:
-            self._rebuild_routes()
+            self._rebuild_tree()
+        self._sync_instance_tabs()
+
+    def _self_check(self) -> None:
+        """自检：真连一下自己。端口在、但服务被系统掐掉时能立刻发现。"""
+        srv = self._srv()
+        if not srv.running:
+            return
+        if srv.probe():
+            return
+        self.status_pill.set_text(i18n.tr("无响应"))
+        self.status_pill.set_color(theme().danger)
+        self.local_hint.setText(i18n.trf(
+            "端口 {port} 还在监听，但服务没有响应：可能被系统回收了。"
+            "点「停止服务」再「启动服务」即可恢复。", port=srv.port))
 
     def _check_port_owner(self) -> None:
-        """没启动却有人在这个端口应答时，明确告诉用户是谁 —— 不要装作没这回事。"""
         try:
             port = int(self.port_edit.text() or DEFAULT_PORT)
         except ValueError:
             return
-        if not self.server.port_in_use(port):
+        if not self._srv().port_in_use(port):
             return
         if MockServer._probe_ocelot(port):
             self.local_hint.setText(
-                i18n.trf("端口 {port} 上已经有一个 Ocelot Mock 服务在响"
-                         "（可能是另一次启动的 Ocelot，或上次没有正常退出）。"
-                         "要接管请先在那边停止，或直接点「启动服务」，会自动换端口。",
-                         port=port))
+                i18n.trf("端口 {port} 上已经有一个 Ocelot Mock 服务在响（可能是别的实例，"
+                         "或上次没正常退出）。点「启动服务」会自动换端口。", port=port))
         else:
             self.local_hint.setText(
-                i18n.trf("端口 {port} 已被其它程序占用。点「启动服务」会自动挑一个空闲端口，"
-                         "实际地址会显示在这里。", port=port))
+                i18n.trf("端口 {port} 已被其它程序占用。点「启动服务」会自动挑空闲端口。",
+                         port=port))
 
-    def _rebuild_routes(self) -> None:
+    # -------------------------------------------------- 树
+    def _rebuild_tree(self) -> None:
         while self.routes_box.count() > 1:
             item = self.routes_box.takeAt(0)
             w = item.widget()
@@ -1094,88 +1785,230 @@ class MockDialog(GlassDialog):
                 w.setParent(None)
                 w.deleteLater()
         self.route_rows.clear()
-        routes = self._cfg().get("routes") or []
-        hits = getattr(self.server, "hits", {}) or {}
+        routes = self._routes()
+        hits = getattr(self._srv(), "hits", {}) or {}
+        running = self._srv().running
+
+        # 组装分组树：prefix -> 直接子分组 / 直接挂的路由
+        children: Dict[str, List[str]] = {"": []}
+        own: Dict[str, List[Dict[str, Any]]] = {"": []}
         for r in routes:
-            row = RouteRow(r, self.server.running, hits=int(hits.get(r.get("name") or "", 0)))
-            row.edit.connect(self._edit_route)
-            row.remove.connect(self._remove_route)
-            row.copy.connect(self._copy_route)
-            row.trial.connect(self._trial_route)
-            self.route_rows.append(row)
-            self.routes_box.insertWidget(self.routes_box.count() - 1, row)
+            g = str(r.get("group") or "").strip().strip("/")
+            own.setdefault(g, []).append(r)
+            if g:
+                parts = g.split("/")
+                for i in range(1, len(parts) + 1):
+                    pre = "/".join(parts[:i])
+                    parent = "/".join(parts[:i - 1])
+                    children.setdefault(pre, [])
+                    children.setdefault(parent, [])
+                    if pre not in children[parent]:
+                        children[parent].append(pre)
+
+        def count_under(prefix: str) -> int:
+            return sum(len(own.get(g, [])) for g in own
+                       if g == prefix or g.startswith(prefix + "/"))
+
+        def render(prefix: str, depth: int) -> None:
+            for child in children.get(prefix, []):
+                collapsed = child in self._collapsed
+                row = GroupRow(child, child.split("/")[-1], count_under(child), depth,
+                               collapsed)
+                row.toggled.connect(self._toggle_group)
+                row.menuRequested.connect(self._group_menu)
+                self.routes_box.insertWidget(self.routes_box.count() - 1, row)
+                if collapsed:
+                    continue
+                render(child, depth + 1)
+            for r in own.get(prefix, []):
+                row = RouteRow(r, running, hits=int(hits.get(r.get("name") or "", 0)),
+                               indent=depth)
+                row.edit.connect(self._edit_route)
+                row.remove.connect(self._remove_route)
+                row.copy.connect(self._copy_route)
+                row.trial.connect(self._trial_route)
+                self.route_rows.append(row)
+                self.routes_box.insertWidget(self.routes_box.count() - 1, row)
+
+        render("", 0)
         self.empty_label.setVisible(not routes)
         self.scroll.setVisible(bool(routes))
-        self.hint.setText(
-            i18n.tr("{n} 条路由").format(n=len(routes)) if self.tabs.current() == "local" else "")
+        groups = len({str(r.get("group") or "") for r in routes if r.get("group")})
+        if self.tabs.current() == "local":
+            self.hint.setText(
+                i18n.trf("{n} 条路由 · {g} 个分组", n=len(routes), g=groups) if groups
+                else i18n.trf("{n} 条路由", n=len(routes)))
 
-    def _add_route(self) -> None:
+    def _toggle_group(self, prefix: str) -> None:
+        if prefix in self._collapsed:
+            self._collapsed.discard(prefix)
+        else:
+            self._collapsed.add(prefix)
+        self._rebuild_tree()
+
+    def _group_menu(self, prefix: str, pos) -> None:
+        t = theme()
+        menu = Menu(self)
+        a_new = menu.addAction(icons.icon("plus", t.text, 14), i18n.tr("在这个分组里新建路由…"))
+        a_rename = menu.addAction(icons.icon("pencil", t.text, 14), i18n.tr("重命名分组…"))
+        a_del = menu.addAction(icons.icon("trash", t.text, 14), i18n.tr("删除分组"))
+        chosen = menu.exec(pos)
+        if chosen is a_new:
+            self._add_route(group=prefix)
+        elif chosen is a_rename:
+            dlg = TextPromptDialog(i18n.tr("重命名分组"), i18n.tr("分组名（用 / 分层）"),
+                                   prefix, parent=self)
+            if dlg.exec() != dlg.DialogCode.Accepted:
+                return
+            new = dlg.value().strip("/")
+            for r in self._routes():
+                g = str(r.get("group") or "")
+                if g == prefix or g.startswith(prefix + "/"):
+                    r["group"] = new + g[len(prefix):]
+            self.store.save()
+            self._rebuild_tree()
+        elif chosen is a_del:
+            left = [r for r in self._routes()
+                    if str(r.get("group") or "") == prefix
+                    or str(r.get("group") or "").startswith(prefix + "/")]
+            if left:
+                self.local_hint.setText(
+                    i18n.trf("分组「{g}」里还有 {n} 条路由，先把它们删掉再删分组。",
+                             g=prefix, n=len(left)))
+                return
+            self._collapsed.discard(prefix)
+            self._rebuild_tree()
+
+    # -------------------------------------------------- 路由增删改
+    def _add_route(self, group: Optional[str] = None) -> None:
         dlg = RouteDialog(self.store, None, self)
         if dlg.exec() != dlg.DialogCode.Accepted:
             return
-        self._cfg()["routes"].append(dlg.result_item)
+        item = dlg.result_item
+        item["group"] = group or ""
+        self._routes().append(item)
         self.store.save()
-        self._rebuild_routes()
+        self._rebuild_tree()
         self._restart_if_running()
+
+    def _new_group(self) -> None:
+        dlg = TextPromptDialog(i18n.tr("新建分组"), i18n.tr("分组名（用 / 分层）"),
+                               "", i18n.tr("例如：订单/支付，导入时也会自动按文件夹分组"),
+                               parent=self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        self._add_route(group=dlg.value().strip("/"))
 
     def _edit_route(self, item: Dict[str, Any]) -> None:
         dlg = RouteDialog(self.store, item, self)
         dlg.set_editing(item)
         if dlg.exec() != dlg.DialogCode.Accepted:
             return
-        routes = self._cfg()["routes"]
-        for i, r in enumerate(routes):
+        for i, r in enumerate(self._routes()):
             if r.get("id") == item.get("id"):
-                routes[i] = dlg.result_item
+                dlg.result_item["group"] = r.get("group") or ""
+                self._routes()[i] = dlg.result_item
                 break
         self.store.save()
-        self._rebuild_routes()
+        self._rebuild_tree()
         self._restart_if_running()
 
     def _remove_route(self, item: Dict[str, Any]) -> None:
-        routes = self._cfg()["routes"]
-        self.store.data["mock"]["routes"] = [r for r in routes if r.get("id") != item.get("id")]
+        inst = self._current()
+        inst["routes"] = [r for r in self._routes() if r.get("id") != item.get("id")]
         self.store.save()
-        self._rebuild_routes()
+        self._rebuild_tree()
         self._restart_if_running()
 
     def _copy_route(self, item: Dict[str, Any]) -> None:
         from PyQt6.QtGui import QGuiApplication
 
-        if not self.server.running:
-            self.local_hint.setText("先启动服务，才有地址可复制")
+        srv = self._srv()
+        if not srv.running:
+            self.local_hint.setText(i18n.tr("先启动服务，才有地址可复制"))
             return
-        QGuiApplication.clipboard().setText(self.server.url_for(item.get("path") or "/"))
+        lan = bool(self._current().get("lan"))
+        QGuiApplication.clipboard().setText(srv.url_for(item.get("path") or "/", lan=lan))
         self.local_hint.setText(i18n.trf("已复制 {path}", path=item.get("path")))
 
     def _trial_route(self, item: Dict[str, Any]) -> None:
-        if not self.server.running:
-            self.local_hint.setText("先启动服务，再试用这条路由")
+        srv = self._srv()
+        if not srv.running:
+            self.local_hint.setText(i18n.tr("先启动服务，再试用这条路由"))
             return
         self.trialRequested.emit((item.get("method") or "GET").upper(),
-                                 self.server.url_for(item.get("path") or "/"))
+                                 srv.url_for(item.get("path") or "/"))
         self.accept()
 
     def _copy_base(self) -> None:
         from PyQt6.QtGui import QGuiApplication
 
-        QGuiApplication.clipboard().setText(self.server.base if self.server.running
-                                            else self.base_label.text())
-        self.local_hint.setText("根地址已复制")
+        srv = self._srv()
+        QGuiApplication.clipboard().setText(srv.base if srv.running else self.base_label.text())
+        self.local_hint.setText(i18n.tr("根地址已复制"))
 
     def _on_fallback(self, on: bool) -> None:
         self._cfg()["fallback_echo"] = bool(on)
         self.store.save()
         self._restart_if_running()
 
-    def _on_auto(self, on: bool) -> None:
-        self._cfg()["auto_start"] = bool(on)
-        self.store.save()
-
     def _restart_if_running(self) -> None:
-        if self.server.running:
+        if self._srv().running:
             self._start()
             self._sync_local(rebuild=True)
+
+    def _show_qr(self) -> None:
+        LanQrDialog(self._srv(), self).exec()
+
+    # -------------------------------------------------- 导入 / AI
+    def _import_doc(self) -> None:
+        path, _flt = QFileDialog.getOpenFileName(
+            self, i18n.tr("导入 OpenAPI / Postman"), "",
+            "JSON (*.json);;所有文件 (*)")
+        if not path:
+            return
+        try:
+            text = open(path, "r", encoding="utf-8", errors="replace").read()
+            routes, kind = mock_import.routes_from_document(text)
+        except (OSError, ValueError) as exc:
+            self.local_hint.setText(i18n.trf("导入失败：{err}", err=exc))
+            return
+        added = 0
+        for r in routes:
+            r["id"] = _new_id("m")
+            r["group"] = r.get("group") or i18n.tr("导入")
+            self._routes().append(r)
+            added += 1
+        self.store.save()
+        self._rebuild_tree()
+        self._restart_if_running()
+        groups = len({r.get("group") for r in routes})
+        self.local_hint.setText(
+            i18n.trf("已从 {kind} 导入 {n} 条路由，按 {g} 个分组放好。", kind=kind,
+                     n=added, g=groups))
+
+    def _ai_generate(self) -> None:
+        dlg = MockAiDialog(self._routes(), self)
+        if dlg.exec() != dlg.DialogCode.Accepted or not dlg.result_routes:
+            return
+        for r in dlg.result_routes:
+            r["id"] = _new_id("m")
+            self._routes().append(r)
+        self.store.save()
+        self._rebuild_tree()
+        self._restart_if_running()
+        self.local_hint.setText(i18n.trf("AI 生成了 {n} 条路由，已经可以直接请求。",
+                                         n=len(dlg.result_routes)))
+
+    def _ai_cases(self) -> None:
+        if not self._routes():
+            self.local_hint.setText(i18n.tr("先有路由，AI 才能生成针对它们的用例。"))
+            return
+        dlg = MockAiDialog(self._routes(), self)
+        dlg.mode.set_current("cases", emit=True)
+        if dlg.exec() != dlg.DialogCode.Accepted or not dlg.result_cases:
+            return
+        CasesDialog(dlg.result_cases, self._srv().base, self).exec()
 
     # -------------------------------------------------- 公开接口页
     def _page_public(self) -> QWidget:
@@ -1209,15 +2042,13 @@ class MockDialog(GlassDialog):
         self.public_scroll.setWidget(holder)
         cl.addWidget(self.public_scroll)
         lay.addWidget(card, 1)
-
         return page
 
     def _on_tab(self, key: str) -> None:
         self.stack.setCurrentIndex({"local": 0, "public": 1, "logs": 2}.get(key, 0))
         if key == "local":
-            self._sync_local()
-            self.hint.setText(
-                i18n.tr("{n} 条路由").format(n=len(self._cfg().get("routes") or [])))
+            self._sync_local(rebuild=True)
+            self._self_check()
         elif key == "logs":
             self._refresh_logs(force=True)
             self.log_timer.start()
@@ -1315,7 +2146,7 @@ class MockDialog(GlassDialog):
         cl.addWidget(self.log_scroll)
         self.logs_empty = Label(
             i18n.tr("还没有请求。启动本地服务后，任何打到它的请求都会出现在这里 —— "
-                    "包括方法、路径、状态码、耗时，以及命中了哪条规则。"),
+                    "包括方法、路径、状态码、耗时、体积与来源 IP。"),
             11.2, t.text_faint)
         self.logs_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.logs_empty.setWordWrap(True)
@@ -1324,11 +2155,11 @@ class MockDialog(GlassDialog):
         return page
 
     def _clear_logs(self) -> None:
-        self.server.clear_logs()
+        self.hub.clear_logs()
         self._refresh_logs(force=True)
 
     def _refresh_logs(self, force: bool = False) -> None:
-        entries = list(getattr(self.server, "logs", []) or [])
+        entries = list(self.hub.logs)
         fp = (len(entries), entries[0].get("time") if entries else "",
               entries[0].get("path") if entries else "", entries[0].get("ms") if entries else 0)
         if not force and fp == self._log_fp:
@@ -1342,13 +2173,16 @@ class MockDialog(GlassDialog):
                 w.setParent(None)
                 w.deleteLater()
         self.log_rows.clear()
-        for entry in entries[:120]:
+        for entry in entries[:150]:
             row = LogRow(entry)
             self.log_rows.append(row)
             self.logs_box.insertWidget(self.logs_box.count() - 1, row)
         self.logs_empty.setVisible(not entries)
         self.log_scroll.setVisible(bool(entries))
         self.log_stats.setText(self._log_summary(entries))
+        if self.tabs.current() == "logs":
+            self.hint.setText(i18n.trf("{n} 条请求", n=len(entries)) if entries
+                              else i18n.tr("请求日志"))
 
     @staticmethod
     def _log_summary(entries: List[Dict[str, Any]]) -> str:
@@ -1364,16 +2198,21 @@ class MockDialog(GlassDialog):
     # -------------------------------------------------- 生命周期
     def showEvent(self, e):
         super().showEvent(e)
+        self._sync_instance_tabs()
         self._sync_local(rebuild=True)
+        self._self_check()
         self._refresh_logs(force=True)
         if self.tabs.current() == "logs":
             self.log_timer.start()
-        if len(self._cfg().get("routes") or []) == 0:
-            self._cfg()["routes"] = default_routes()
-            self._rebuild_routes()
 
     def closeEvent(self, e):
         self.log_timer.stop()
-        if self._owns_server:
-            self.server.stop()
+        chat = self._chat
+        if chat is not None and chat.isRunning():
+            try:
+                chat.cancel()
+            except Exception:      # noqa: BLE001
+                pass
+        # 服务故意不停：关掉面板后它还在后台跑，底部徽章仍然能点回来
+        self.stateChanged.emit()
         super().closeEvent(e)

@@ -290,6 +290,7 @@ class UrlBar(QWidget):
     codeRequested = pyqtSignal()
     moreRequested = pyqtSignal(object)
     mockRequested = pyqtSignal()
+    mockizeRequested = pyqtSignal()
     duplicateRequested = pyqtSignal()
     saveRequested = pyqtSignal()
 
@@ -327,6 +328,9 @@ class UrlBar(QWidget):
         self.send_btn.clicked.connect(self._on_send)
         self.save_btn = icon_button("download", "保存到集合  ⌘S", 30, 15)
         self.save_btn.clicked.connect(self.saveRequested.emit)
+        # 一键 Mock：把当前 Method / Path 与真实响应体直接变成一条 Mock 路由
+        self.mockize_btn = icon_button("layers", "一键 Mock：用当前请求生成 Mock 路由", 30, 15)
+        self.mockize_btn.clicked.connect(self.mockizeRequested.emit)
         self.code_btn = icon_button("code", "生成代码片段  ⌘⇧C", 30, 15)
         self.code_btn.clicked.connect(self.codeRequested.emit)
         self.more_btn = icon_button("more", "更多操作", 30, 15)
@@ -337,6 +341,7 @@ class UrlBar(QWidget):
         tl = QHBoxLayout(tools)
         tl.setContentsMargins(0, 0, 0, 0)
         tl.setSpacing(2)
+        tl.addWidget(self.mockize_btn)
         tl.addWidget(self.save_btn)
         tl.addWidget(self.code_btn)
         tl.addWidget(self.more_btn)
@@ -1319,6 +1324,7 @@ class RequestEditor(QWidget):
     copyCurlRequested = pyqtSignal()
     deleteRequested = pyqtSignal()
     mockRequested = pyqtSignal()
+    mockizeRequested = pyqtSignal()
     duplicateRequested = pyqtSignal()
     notify = pyqtSignal(str)            # 底部浮动提示
     aiSettingsRequested = pyqtSignal()  # 没配 Key：直接打开设置 → AI
@@ -1336,6 +1342,7 @@ class RequestEditor(QWidget):
         self.urlbar.saveRequested.connect(self.saveRequested.emit)
         self.urlbar.codeRequested.connect(self.codeRequested.emit)
         self.urlbar.mockRequested.connect(self.mockRequested.emit)
+        self.urlbar.mockizeRequested.connect(self.mockizeRequested.emit)
         self.urlbar.duplicateRequested.connect(self.duplicateRequested.emit)
         self.urlbar.moreRequested.connect(self._on_more)
         self.urlbar.methodChanged.connect(self._on_method)

@@ -1887,25 +1887,29 @@ def main() -> int:
         dlg.show()
         app.processEvents()
         cfg = w.store.data.setdefault("mock", {})
+        cfg.pop("instances", None)
         cfg["routes"] = default_routes()
-        dlg._rebuild_routes()
-        check("本地页列出默认路由", len(dlg.route_rows) == len(default_routes()),
+        dlg._cfg()
+        dlg._rebuild_tree()
+        check("本地页列出默认路由（分组树展开）",
+              len(dlg.route_rows) == len(default_routes()),
               str(len(dlg.route_rows)))
         dlg.port_edit.setText("0")
         dlg._start()
         app.processEvents()
-        check("从面板启动服务", w.mock.running, dlg.local_hint.text())
+        check("从面板启动服务", w.mock.is_running, dlg.local_hint.text())
         check("状态胶囊显示运行中", dlg.status_pill._text == "运行中", dlg.status_pill._text)
         try:
-            _urllib.urlopen(w.mock.url_for("/api/boom"), timeout=4)
+            _urllib.urlopen(dlg._srv().url_for("/api/boom"), timeout=4)
             boom = {}
         except _urlerr.HTTPError as exc:      # 这条路由故意是 500
             boom = _json.loads(exc.read().decode())
         check("面板里的路由真能访问", boom.get("error") == "internal_error", str(boom)[:40])
         dlg._stop()
-        check("从面板停止服务", not w.mock.running)
+        check("从面板停止服务", not w.mock.is_running)
         check("没启动时试用会被拦下", dlg._trial_route({"path": "/x"}) is None)
         dlg.close()
+        w.store.data["mock"].pop("instances", None)
         w.store.data["mock"]["routes"] = default_routes()
 
         # ---------- 代码高亮与左对齐
@@ -2020,7 +2024,10 @@ def main() -> int:
 
             with _urllib.urlopen(srv.url_for("/api/slow"), timeout=6):
                 pass
-            check("日志按路由名统计命中", srv.hits.get("示例 · 用户信息（动态）") == 2,
+            # 服务端是「先回响应、再记日志」，客户端返回时日志可能还差最后一步
+            import time as _time
+            _time.sleep(0.25)
+            check("日志按路由名统计命中", srv.hits.get("用户信息（动态）") == 2,
                   str(srv.hits))
             check("日志记下方法与状态", len(srv.logs) >= 5
                   and srv.logs[0]["method"] == "GET" and srv.logs[0]["status"] == 200,
@@ -2042,14 +2049,14 @@ def main() -> int:
         dlg._start()
         app.processEvents()
         check("启动后按钮变「停止服务」", dlg.start_btn.text() == "停止服务"
-              and dlg.server.running, dlg.start_btn.text())
+              and dlg._srv().running, dlg.start_btn.text())
         dlg.tabs.set_current("logs", emit=True)
         app.processEvents()
         check("日志页读到真实请求", len(dlg.log_rows) >= 1, str(len(dlg.log_rows)))
         dlg._stop()
         app.processEvents()
         check("停下后按钮回到「启动服务」", dlg.start_btn.text() == "启动服务"
-              and not dlg.server.running, dlg.start_btn.text())
+              and not dlg._srv().running, dlg.start_btn.text())
         dlg.close()
 
         # ---------- 表格 / 代码块排版
@@ -2078,6 +2085,101 @@ def main() -> int:
         tb.close()
         cb.close()
         wide.close()
+
+        # ---------- 分组树 / 多实例 / 导入 / 二维码 / 一键 Mock
+        from app import mock_ai, mock_import, qr
+        from app.mock_server import MockHub, mock_config
+
+        data = {"mock": {"port": 9001, "routes": default_routes()}}
+        cfg = mock_config(data)
+        check("老配置自动迁移成实例",
+              len(cfg["instances"]) == 1 and cfg["instances"][0]["port"] == 9001,
+              str([i.get("port") for i in cfg["instances"]]))
+        check("示例路由自动带分组",
+              any(str(r.get("group", "")).startswith("示例") for r in cfg["routes"]),
+              str([r.get("group") for r in cfg["routes"]]))
+
+        item_schema = {"type": "array", "items": {
+            "type": "object",
+            "properties": {"id": {"type": "integer"},
+                           "name": {"type": "string", "example": "猫"}}}}
+        spec = {
+            "openapi": "3.0.0",
+            "info": {"title": "demo", "version": "1"},
+            "paths": {
+                "/users": {"get": {
+                    "tags": ["用户"], "summary": "用户列表",
+                    "responses": {"200": {"content": {
+                        "application/json": {"schema": item_schema}}}}}},
+                "/users/{id}": {"delete": {
+                    "tags": ["用户"], "summary": "删除用户",
+                    "responses": {"204": {"description": "ok"}}}},
+            },
+        }
+        got, kind = mock_import.routes_from_document(_json.dumps(spec))
+        check("OpenAPI 全量导入并分组", len(got) == 2 and kind.startswith("OpenAPI")
+              and got[0]["group"] == "用户" and got[0]["path"] == "/users",
+              f"{len(got)} {[g['group'] for g in got]}")
+        check("OpenAPI schema 造出示例数据",
+              "猫" in got[0]["body"] or "'id'" in got[0]["body"] or '"id"' in got[0]["body"],
+              got[0]["body"][:40])
+        check("路径参数转成前缀通配", got[1]["path"] == "/users/*", got[1]["path"])
+
+        postman = {"info": {"name": "商城", "schema": "v2.1"},
+                   "item": [{"name": "登录", "item": [
+                       {"name": "账号登录", "request": {"method": "POST",
+                                                        "url": {"raw": "https://a.com/api/login?x=1"}},
+                        "response": [{"code": 200, "body": '{"token":"t"}'}]}]}]}
+        got2, kind2 = mock_import.routes_from_document(_json.dumps(postman))
+        check("Postman 文件夹变分组", len(got2) == 1 and kind2 == "Postman"
+              and got2[0]["group"] == "商城/登录" and got2[0]["path"] == "/api/login",
+              str(got2)[:80])
+        check("Postman 自带响应体被保留", "token" in got2[0]["body"], got2[0]["body"][:30])
+
+        route = mock_import.route_from_request("POST", "https://a.com/api/x?y=1", '{"a":1}')
+        check("一键 Mock 只取 path", route["path"] == "/api/x" and route["method"] == "POST"
+              and route["group"] == "一键 Mock", str(route)[:60])
+
+        code = qr.QrCode("http://192.168.1.5:8787")
+        check("二维码矩阵生成正确", code.size == 25 and code.get(0, 0)
+              and not code.get(1, 1) and code.get(2, 2) and not code.get(7, 0),
+              f"{code.size} {code.get(0, 0)} {code.get(1, 1)} {code.get(2, 2)}")
+        pm = qr.pixmap("http://192.168.1.5:8787", 120)
+        check("二维码能画成位图", not pm.isNull() and pm.width() >= 240, str(pm.width()))
+
+        hub = MockHub()
+        check("Hub 能管多个实例", hub.get("a") is not hub.get("b")
+              and len(hub.all()) == 2 and not hub.is_running)
+
+        cases = mock_ai.parse_cases(_json.dumps([{
+            "name": "正常登录", "method": "POST", "path": "/api/login",
+            "headers": {"Content-Type": "application/json"}, "body": '{"u":1}',
+            "expect_status": 200, "note": "断言 token"}]))
+        check("AI 用例解析成结构", len(cases) == 1 and cases[0]["expect_status"] == 200)
+        check("用例能转 cURL", "curl -X POST" in mock_ai.case_as_curl(cases[0], "http://h:1"),
+              mock_ai.case_as_curl(cases[0], "http://h:1")[:40])
+        ai_routes = mock_ai.parse_routes(_json.dumps([{
+            "name": "下单", "group": "订单/支付", "method": "post",
+            "path": "api/order", "status": 201, "body": {"id": 1}}]))
+        check("AI 路由解析并补全字段", ai_routes[0]["path"] == "/api/order"
+              and ai_routes[0]["method"] == "POST" and ai_routes[0]["status"] == 201,
+              str(ai_routes[0])[:60])
+
+        from app.cloud import snapshot_stats
+        stats = snapshot_stats(w.store.data)
+        counted = [0]
+
+        def _count(nodes):
+            for n in nodes or []:
+                if n.get("type") == "request":
+                    counted[0] += 1
+                _count(n.get("children"))
+
+        _count(w.store.data.get("collections") or [])
+        check("云同步统计的请求数与树一致", stats["requests"] == counted[0],
+              f"{stats['requests']}/{counted[0]}")
+        check("云同步统计带体积与摘要", stats["size"] > 0 and len(stats["sha"]) == 16,
+              str(stats)[:60])
         return 0
 
     def step31():

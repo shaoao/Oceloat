@@ -1,23 +1,25 @@
-"""本地 Mock 服务：在 127.0.0.1 上起一个真的 HTTP 服务，按你写的规则返回响应。
+"""本地 Mock 服务：在 127.0.0.1（或 0.0.0.0）上起一个真的 HTTP 服务，按规则返回响应。
 
 为什么要有它：
 - 「Mock 数据」如果只是把公开接口的地址填进地址栏，那算不上 Mock —— 断网、限流、
   字段改动都轮不到你控制；
-- 这里用标准库 `ThreadingHTTPServer` 起一个只监听本机的服务，路由、状态码、延迟、
-  响应体全都由你定，前端、单元测试、别的机器都能直接连；
-- 不引第三方依赖、不写临时文件、不联网，停掉就干净退出。
+- 这里用标准库 `ThreadingHTTPServer` 起一个服务，路由、状态码、延迟、
+  响应体全都由你定，前端、单元测试、手机都能直接连；
+- 不引第三方依赖、不写临时文件，停掉就干净退出。
 
 一条路由能做的事（都在 state.json 里，纯 JSON）：
-    {"id","name","method","path","status","content_type","body",
+    {"id","name","group","method","path","status","content_type","body",
      "delay","enabled","echo","rules":[...]}
 
+- **分组**：`group` 支持 `用户/登录` 这种斜杠层级，面板里渲染成树；
 - **延迟**：`delay` 毫秒后才响应，用来测 Loading、骨架屏、超时逻辑；
 - **动态数据**：响应体里写 `{{@name}}` `{{@id}}` `{{@uuid}}` `{{@now}}` 之类的占位符，
   每个请求现算一次，不会永远返回同一份死数据；
 - **条件规则**：`rules` 里按请求头 / 查询参数 / 请求体 / 方法匹配，
-  第一条命中的规则可以覆盖状态码、延迟与响应体（带 token 返回 200，不带返回 401）；
+  第一条命中的规则可以覆盖状态码、延迟与响应体；
 - **回显**：`echo=True` 把收到的请求原样返回，用来查「客户端到底发了什么」；
-- **请求日志**：最近 200 次请求的方法 / 路径 / 状态 / 耗时都记着，面板里能看。
+- **多实例**：一个进程里可以有多个 MockServer，各占一个端口（见 MockHub）；
+- **局域网**：`lan=True` 时监听 0.0.0.0，手机 / 别的电脑用局域网 IP 直连。
 """
 from __future__ import annotations
 
@@ -37,7 +39,7 @@ from urllib.parse import parse_qs, unquote_plus, urlsplit
 
 DEFAULT_PORT = 8787
 PING_PATH = "/__ocelot__/ping"
-LOG_LIMIT = 200
+LOG_LIMIT = 300
 ECHO_JSON = json.dumps({
     "ok": True,
     "message": "来自 Ocelot 本地 Mock 服务",
@@ -183,14 +185,44 @@ def render_placeholders(text: str) -> str:
 def route(name: str, method: str = "GET", path: str = "/api/hello", status: int = 200,
           body: str = ECHO_JSON, content_type: str = "application/json",
           delay: int = 0, echo: bool = False, enabled: bool = True,
-          rules: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+          rules: Optional[List[Dict[str, Any]]] = None,
+          group: str = "") -> Dict[str, Any]:
     return {
         "id": f"m{int(time.time() * 1000) % 10 ** 9}{len(name)}",
-        "name": name, "method": method.upper(), "path": path if path.startswith("/") else
+        "name": name, "group": group or "", "method": method.upper(),
+        "path": path if path.startswith("/") else
         "/" + path, "status": int(status), "content_type": content_type,
         "body": body, "delay": int(delay), "echo": bool(echo), "enabled": bool(enabled),
         "rules": list(rules or []),
     }
+
+
+def local_ips() -> List[str]:
+    """本机在局域网里的 IPv4 地址（用来生成二维码 / 展示可访问地址）。
+
+    先连一个外部地址拿到出口 IP（UDP connect 不会真的发包），再补上主机名解析
+    出来的其它网卡地址；都拿不到就返回空列表，界面只显示 localhost。
+    """
+    ips: List[str] = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        finally:
+            s.close()
+        if ip and not ip.startswith("127.") and ip != "0.0.0.0":
+            ips.append(ip)
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and ip not in ips:
+                ips.append(ip)
+    except OSError:
+        pass
+    return ips
 
 
 def rule(source: str = "header", key: str = "token", op: str = "eq", value: str = "",
@@ -204,19 +236,65 @@ def rule(source: str = "header", key: str = "token", op: str = "eq", value: str 
 def default_routes() -> List[Dict[str, Any]]:
     """首次打开时的几条示例：动态数据、鉴权规则、回显、延迟、错误码。"""
     return [
-        route("示例 · 用户信息（动态）", "GET", "/api/user", 200, PROFILE_JSON),
-        route("示例 · 鉴权规则", "GET", "/api/profile", 401,
+        route("用户信息（动态）", "GET", "/api/user", 200, PROFILE_JSON, group="示例/用户"),
+        route("鉴权规则", "GET", "/api/profile", 401,
               json.dumps({"code": 401, "message": "缺少 token"}, ensure_ascii=False, indent=2),
               rules=[rule("header", "token", "eq", "123", 200, 0, AUTH_RULE_BODY,
-                          "带 token=123 返回 VIP 数据")]),
-        route("示例 · 回显请求", "POST", "/api/echo", 200, "", echo=True),
-        route("示例 · 慢接口 2s", "GET", "/api/slow", 200,
+                          "带 token=123 返回 VIP 数据")], group="示例/用户"),
+        route("回显请求", "POST", "/api/echo", 200, "", echo=True, group="示例/调试"),
+        route("慢接口 2s", "GET", "/api/slow", 200,
               json.dumps({"ok": True, "note": "延迟 2 秒返回，用来测 Loading 与超时"},
-                         ensure_ascii=False, indent=2), delay=2000),
-        route("示例 · 服务异常", "GET", "/api/boom", 500,
+                         ensure_ascii=False, indent=2), delay=2000, group="示例/调试"),
+        route("服务异常", "GET", "/api/boom", 500,
               json.dumps({"error": "internal_error", "message": "手动制造的 500"},
-                         ensure_ascii=False, indent=2)),
+                         ensure_ascii=False, indent=2), group="示例/调试"),
     ]
+
+
+def mock_config(data: Dict[str, Any]) -> Dict[str, Any]:
+    """把 store.data["mock"] 归一化成「多实例 + 旧字段兼容」的形状。
+
+    - 老版本只有 port / routes / auto_start：迁移成一个 id=main 的实例；
+    - 新版本每个实例各自有 routes / port / lan，互不影响；
+    - `cfg["routes"]` / `cfg["port"]` 仍然指向第一个实例，旧代码不用改。
+    """
+    cfg = data.setdefault("mock", {})
+    cfg.setdefault("fallback_echo", False)
+    cfg.setdefault("auto_start", False)
+    if not cfg.get("instances"):
+        legacy = cfg.get("routes") or default_routes()
+        for r in legacy:
+            if not r.get("id"):
+                r["id"] = "m" + _uuid.uuid4().hex[:8]
+            if not r.get("group") and str(r.get("name") or "").startswith("示例"):
+                r["group"] = "示例"
+            r.setdefault("group", "")
+            r.setdefault("enabled", True)
+            r.setdefault("rules", [])
+        cfg["instances"] = [{
+            "id": "main",
+            "name": "默认实例",
+            "port": int(cfg.get("port") or DEFAULT_PORT),
+            "lan": False,
+            "auto_start": bool(cfg.get("auto_start", False)),
+            "routes": legacy,
+        }]
+    for inst in cfg["instances"]:
+        inst.setdefault("id", "main")
+        inst.setdefault("name", inst["id"])
+        inst.setdefault("port", DEFAULT_PORT)
+        inst.setdefault("lan", False)
+        inst.setdefault("auto_start", cfg.get("auto_start", False))
+        inst.setdefault("routes", [])
+        for r in inst["routes"]:
+            if not r.get("id"):
+                r["id"] = "m" + _uuid.uuid4().hex[:8]
+            r.setdefault("group", "")
+            r.setdefault("enabled", True)
+            r.setdefault("rules", [])
+    cfg["port"] = cfg["instances"][0].get("port", DEFAULT_PORT)
+    cfg["routes"] = cfg["instances"][0].get("routes", [])
+    return cfg
 
 
 def _match(table: Dict[Tuple[str, str], Dict[str, Any]], method: str,
@@ -386,12 +464,19 @@ class _Handler(BaseHTTPRequestHandler):
                  parse_qs(split.query, keep_blank_values=True).items()}
         headers = {k.lower(): v for k, v in self.headers.items()}
 
+        extra = {
+            "client": (self.client_address[0] if self.client_address else ""),
+            "query": split.query,
+            "ctype": headers.get("content-type", ""),
+        }
+
         if item is None and mock is not None and getattr(mock, "fallback_echo", False):
             status = 200
             payload = {"note": "没有匹配的规则，已回显请求", "method": self.command,
                        "path": self.path, "body": body_text}
             self._json(status, payload)
-            mock.log(self.command, self.path, status, started, "回显兜底")
+            mock.log(self.command, self.path, status, started, "回显兜底",
+                     size=len(json.dumps(payload, ensure_ascii=False).encode("utf-8")), **extra)
             return
         if item is None:
             status = 404
@@ -404,7 +489,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "routes": sorted(f"{m} {p}" for (m, p) in table),
             })
             if mock is not None:
-                mock.log(self.command, self.path, status, started, "未匹配")
+                mock.log(self.command, self.path, status, started, "未匹配",
+                         size=len(body_text.encode("utf-8")), **extra)
             return
 
         # ---- 条件规则：第一条命中的覆盖默认响应
@@ -446,7 +532,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "received_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             })
             if mock is not None:
-                mock.log(self.command, self.path, status, started, item.get("name") or "回显")
+                mock.log(self.command, self.path, status, started, item.get("name") or "回显",
+                         size=len(body_text.encode("utf-8")), **extra)
             return
 
         text = source.get("body") or ""
@@ -459,7 +546,8 @@ class _Handler(BaseHTTPRequestHandler):
                     "X-Ocelot-Rule": (hit_rule or {}).get("name") or ""})
         if mock is not None:
             mock.log(self.command, self.path, status, started, item.get("name") or "路由",
-                     (hit_rule or {}).get("name") or "")
+                     (hit_rule or {}).get("name") or "",
+                     size=len(text.encode("utf-8")), **extra)
 
     do_GET = _handle
     do_POST = _handle
@@ -506,16 +594,24 @@ def _dig(text: str, key: str) -> str:
 
 
 class MockServer:
-    """本机 Mock 服务。一个进程只需要一个实例（主窗口持有）。"""
+    """一个 Mock 服务实例。
 
-    def __init__(self) -> None:
+    一个进程可以有多个实例（MockHub 管着）：调试「订单服务 + 商品服务」这种
+    互相调用的场景时，8787 / 8788 各起一个，比来回改端口省事得多。
+    """
+
+    def __init__(self, instance: str = "main", name: str = "") -> None:
+        self.instance = instance or "main"
+        self.name = name or self.instance
         self._httpd: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self.port = 0
+        self.host = "127.0.0.1"
         self.table: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self.routes: List[Dict[str, Any]] = []
         self.fallback_echo = False
         self.hits: Dict[str, int] = {}
+        self.duplicates = 0
         self.logs: Deque[Dict[str, Any]] = deque(maxlen=LOG_LIMIT)
         self._lock = threading.Lock()
 
@@ -525,20 +621,38 @@ class MockServer:
         return self._httpd is not None
 
     @property
+    def lan(self) -> bool:
+        return self.host == "0.0.0.0"
+
+    @property
     def base(self) -> str:
         return f"http://127.0.0.1:{self.port}"
+
+    def lan_urls(self) -> List[str]:
+        """局域网里其它设备可用的地址；没开局域网监听时返回空列表。"""
+        if not self.lan or not self.port:
+            return []
+        return [f"http://{ip}:{self.port}" for ip in local_ips()]
+
+    def urls(self) -> List[str]:
+        return [self.base] + self.lan_urls()
 
     @property
     def requests(self) -> int:
         with self._lock:
             return len(self.logs)
 
-    def url_for(self, path: str) -> str:
+    def url_for(self, path: str, lan: bool = False) -> str:
         p = path if path.startswith("/") else "/" + str(path)
+        if lan:
+            nets = self.lan_urls()
+            if nets:
+                return nets[0] + p
         return self.base + p
 
     def log(self, method: str, path: str, status: int, started: float, route_name: str,
-            rule_name: str = "") -> None:
+            rule_name: str = "", client: str = "", query: str = "", size: int = 0,
+            ctype: str = "") -> None:
         """记一条请求日志；`hits` 按路由名统计命中次数，面板里显示「×N」。"""
         item = {
             "time": time.strftime("%H:%M:%S"),
@@ -548,6 +662,11 @@ class MockServer:
             "ms": int((time.perf_counter() - started) * 1000),
             "route": route_name,
             "rule": rule_name,
+            "client": client or "",
+            "query": query or "",
+            "size": int(size or 0),
+            "ctype": (ctype or "").split(";")[0],
+            "instance": self.instance,
         }
         with self._lock:
             self.logs.appendleft(item)
@@ -561,8 +680,9 @@ class MockServer:
 
     # -------------------------------------------------- 启停
     def start(self, routes: List[Dict[str, Any]], port: int = DEFAULT_PORT,
-              fallback_echo: bool = False) -> Tuple[bool, str]:
+              fallback_echo: bool = False, lan: bool = False) -> Tuple[bool, str]:
         self.stop()
+        self.host = "0.0.0.0" if lan else "127.0.0.1"
         self.routes = []
         for r in routes or []:
             item = dict(r)
@@ -575,8 +695,16 @@ class MockServer:
                     item["body"] = str(body)
             item["rules"] = [dict(x) for x in (item.get("rules") or [])]
             self.routes.append(item)
-        self.table = {(str(r.get("method") or "GET").upper(), str(r.get("path") or "/")): r
-                      for r in self.routes if r.get("enabled", True)}
+        self.table = {}
+        dup = 0
+        for r in self.routes:
+            if not r.get("enabled", True):
+                continue
+            key = (str(r.get("method") or "GET").upper(), str(r.get("path") or "/"))
+            if key in self.table:
+                dup += 1
+            self.table[key] = r
+        self.duplicates = dup
         self.fallback_echo = bool(fallback_echo)
         with self._lock:
             self.hits = {}
@@ -588,8 +716,11 @@ class MockServer:
             port = DEFAULT_PORT
 
         note = ""
+        if getattr(self, "duplicates", 0):
+            note = i18n.trf("有 {n} 条路由方法 + 路径重复，只保留了后面的那条",
+                            n=self.duplicates)
         try:
-            httpd = _MockHTTPServer(("127.0.0.1", max(0, port)), _Handler)
+            httpd = _MockHTTPServer((self.host, max(0, port)), _Handler)
         except OSError as exc:
             if not port:
                 return False, i18n.trf("启动失败：{err}", err=exc)
@@ -597,7 +728,7 @@ class MockServer:
             # 这时候最忌「默默换端口」，用户会以为 8787 是自己这个服务。
             other = self._probe_ocelot(port)
             try:
-                httpd = _MockHTTPServer(("127.0.0.1", 0), _Handler)
+                httpd = _MockHTTPServer((self.host, 0), _Handler)
             except OSError:
                 return False, i18n.trf("启动失败：{err}", err=exc)
             if other:
@@ -612,6 +743,10 @@ class MockServer:
         self.port = httpd.server_address[1]
         self._thread = threading.Thread(target=self._serve, name="ocelot-mock", daemon=True)
         self._thread.start()
+        if not note and self.lan:
+            nets = self.lan_urls()
+            if nets:
+                note = i18n.trf("已启动 · {url}（局域网 {lan}）", url=self.base, lan=nets[0])
         return True, note or i18n.trf("已启动 · {url}", url=self.base)
 
     @staticmethod
@@ -690,3 +825,71 @@ class MockServer:
                 return True
         except OSError:
             return False
+
+
+class MockHub:
+    """一组 MockServer：多实例启动时，「订单服务」「商品服务」各占一个端口。
+
+    UI 只和 Hub 打交道：按实例 id 取 server、统一看谁在跑、关窗时统一收掉。
+    """
+
+    def __init__(self) -> None:
+        self._servers: Dict[str, MockServer] = {}
+
+    def get(self, instance: str = "main", name: str = "") -> MockServer:
+        srv = self._servers.get(instance)
+        if srv is None:
+            srv = MockServer(instance, name)
+            self._servers[instance] = srv
+        elif name:
+            srv.name = name
+        return srv
+
+    def attach(self, srv: MockServer) -> MockServer:
+        """把一个已存在的 server 挂进来（兼容只传单个实例的旧调用方）。"""
+        self._servers[srv.instance or "main"] = srv
+        return srv
+
+    def all(self) -> List[MockServer]:
+        return list(self._servers.values())
+
+    def running(self) -> List[MockServer]:
+        return [s for s in self._servers.values() if s.running]
+
+    @property
+    def primary(self) -> MockServer:
+        return self.get("main")
+
+    @property
+    def is_running(self) -> bool:
+        return bool(self.running())
+
+    @property
+    def base(self) -> str:
+        srv = self._servers.get("main")
+        if srv is not None and srv.running:
+            return srv.base
+        for s in self._servers.values():
+            if s.running:
+                return s.base
+        return f"http://127.0.0.1:{DEFAULT_PORT}"
+
+    @property
+    def logs(self) -> List[Dict[str, Any]]:
+        """所有实例的日志合并，按时间倒序 —— 日志页要能一眼看全。"""
+        out: List[Dict[str, Any]] = []
+        for srv in self._servers.values():
+            out.extend(list(srv.logs))
+        out.sort(key=lambda e: e.get("time") or "", reverse=True)
+        return out
+
+    def clear_logs(self) -> None:
+        for srv in self._servers.values():
+            srv.clear_logs()
+
+    def stop_all(self) -> None:
+        for srv in self._servers.values():
+            try:
+                srv.stop()
+            except Exception:      # noqa: BLE001
+                pass

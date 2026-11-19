@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import (QEasingCurve, QPoint, QPointF, QRectF, QSize, Qt, QTimer,
@@ -1681,6 +1682,15 @@ class SettingsDialog(GlassDialog):
         self.cloud_auto = Switch(bool(s.get("cloud_auto", False)))
         self.cloud_auto.toggled.connect(lambda _v: self._save_cloud())
 
+        from .cloud import snapshot_stats, stats_line
+
+        self.cloud_local = Label(stats_line(snapshot_stats(self.store.data)), 10.4,
+                                 theme().text_dim, mono_font=True)
+        self.cloud_local.setWordWrap(True)
+        self.cloud_remote = Label(i18n.tr("云端：还没读取（点「测试连接」拉一次统计）"),
+                                  10.4, theme().text_faint, mono_font=True)
+        self.cloud_remote.setWordWrap(True)
+
         block = self._card(
             self._row("启用云同步", "把集合、环境变量与设置存到 Turso，多台机器共用同一份数据。",
                       self.cloud_enabled),
@@ -1690,6 +1700,10 @@ class SettingsDialog(GlassDialog):
                             self.cloud_token, mono_desc=True),
             self._row("连通性", "先测一下再上传：只跑一条 SELECT 1，不写入任何数据。",
                       HBox(test, 4, self.cloud_status, spacing=8)),
+            self._row_stack("本机快照", "即将上传的内容，实时统计，不是估算。",
+                            self.cloud_local, mono_desc=True),
+            self._row_stack("云端快照", "云端那一份的实际内容；读取失败或还没上传过时显示为空。",
+                            self.cloud_remote, mono_desc=True),
             self._row_stack("手动同步", "上传会覆盖云端快照；恢复会先用云端覆盖本机（自动备份为 state.json.bak）。",
                             HBox(up, down, 1, spacing=6)),
             self._row("退出时自动上传", "关闭窗口时把最新数据推上去，适合固定一台机器当主库。",
@@ -1712,6 +1726,28 @@ class SettingsDialog(GlassDialog):
         s["cloud_enabled"] = self.cloud_enabled.isChecked()
         s["cloud_auto"] = self.cloud_auto.isChecked()
         self.store.save()
+
+    def _remote_text(self, stats: dict) -> str:
+        from .cloud import stats_line
+
+        if not stats:
+            return i18n.tr("云端还没有统计数据（先上传一次）")
+        return stats_line(stats)
+
+    def _show_remote(self, stats: dict) -> None:
+        if not hasattr(self, "cloud_remote"):
+            return
+        text = self._remote_text(stats or {})
+        at = int((stats or {}).get("at") or 0)
+        if at:
+            text += " · " + time.strftime("%m-%d %H:%M", time.localtime(at))
+        self.cloud_remote.setText(text)
+
+    def _refresh_local_stats(self) -> None:
+        from .cloud import snapshot_stats, stats_line
+
+        if hasattr(self, "cloud_local"):
+            self.cloud_local.setText(stats_line(snapshot_stats(self.store.data)))
 
     def _cloud_busy(self, text: str) -> None:
         self.cloud_status.setText(text)
@@ -1749,12 +1785,18 @@ class SettingsDialog(GlassDialog):
 
         def run():
             ok, msg, _ms = client.test()
-            return ok, msg, None
+            if not ok:
+                return ok, msg, None
+            try:
+                return ok, msg, client.stats()
+            except Exception:      # noqa: BLE001 — 统计拿不到不影响连通性结论
+                return ok, msg, None
 
-        def done(ok, msg, _data):
+        def done(ok, msg, stats):
             if ok:
                 self.store.settings["cloud_verified"] = True
                 self.store.save()
+                self._show_remote(stats)
             self._cloud_say(ok, msg)
 
         self._spawn(run, done)
@@ -1772,6 +1814,9 @@ class SettingsDialog(GlassDialog):
 
         def done(ok, msg, _data):
             self._cloud_say(ok, msg if ok else i18n.trf("上传失败：{err}", err=msg))
+            if ok:
+                self._refresh_local_stats()
+                self._show_remote(getattr(client, "last_meta", {}))
 
         self._spawn(run, done)
 
@@ -1813,7 +1858,9 @@ class SettingsDialog(GlassDialog):
             self.store.data.setdefault("settings", {})
             self.store.settings.update({k: v for k, v in keep.items() if v is not None})
             self.store.save()
-            self._cloud_say(True, "已用云端数据覆盖本机")
+            self._refresh_local_stats()
+            self._cloud_say(True, i18n.trf("已用云端数据覆盖本机 · {line}",
+                                           line=self._remote_text(getattr(client, "last_meta", {}))))
             self.dataReloaded.emit()
 
     def _page_env(self) -> QWidget:
@@ -2710,13 +2757,18 @@ def _group_items(items: List[str]) -> List[tuple]:
 
 
 class WhatsNewPanel(QWidget):
-    """更新内容面板：版本分组 + 分类小标题 + 自动换行，可滚动。
+    """更新内容：按「分类 → 版本」两级排版。
 
-    默认只构造最近 10 个版本——更新日志有 60+ 版、每版十来条，一次全建成
-    QWidget 会让弹窗打开卡顿。切换范围时才重建，且只造看得见的那几版。
+    先给一段范围摘要（v 新 → v 旧 + 日期区间），再按新功能 / 改进 / 修复分节，
+    每节里按版本倒序列出条目。这样即使一次看 10 个版本，也能按类别横向对比，
+    而不是被十几个版本块切碎。
+
+    默认只构造最近 10 个版本：更新日志有 60+ 版、每版十来条，一次全建成
+    QWidget 会让弹窗打开卡顿；切换范围时才重建。
     """
 
     DEFAULT_LIMIT = 10
+    CATEGORY_ORDER = ("新功能", "改进", "修复")
 
     def __init__(self, parent=None, limit: int | None = None):
         super().__init__(parent)
@@ -2733,6 +2785,7 @@ class WhatsNewPanel(QWidget):
         self._limit = int(limit or self.DEFAULT_LIMIT)
         self._build()
 
+    # -------------------------------------------------- 构建
     def _build(self) -> None:
         """按当前范围重建内容：先丢弃旧 host，让旧 widget 立刻释放。"""
         old = self.scroll.takeWidget()
@@ -2740,13 +2793,133 @@ class WhatsNewPanel(QWidget):
             old.deleteLater()
         host = QWidget()
         host_lay = QVBoxLayout(host)
-        host_lay.setContentsMargins(4, 2, 12, 18)
-        host_lay.setSpacing(18)
-        for i, entry in enumerate(CHANGELOG[:max(1, self._limit)]):
-            host_lay.addWidget(self._entry(entry, latest=(i == 0)))
+        host_lay.setContentsMargins(2, 2, 14, 20)
+        host_lay.setSpacing(0)
+        entries = CHANGELOG[:max(1, self._limit)]
+        if entries:
+            host_lay.addWidget(self._range_header(entries))
+            host_lay.addSpacing(4)
+            buckets: Dict[str, List[Tuple[Dict[str, Any], List[str]]]] = {}
+            for entry in entries:
+                for name, items in _group_items(entry.get("items", [])):
+                    buckets.setdefault(name, []).append((entry, items))
+            order = [k for k in self.CATEGORY_ORDER if k in buckets]
+            order += [k for k in buckets if k not in order]
+            for name in order:
+                blocks = buckets[name]
+                total = sum(len(items) for _e, items in blocks)
+                host_lay.addWidget(self._section(name, total))
+                for entry, items in blocks:
+                    host_lay.addWidget(self._version_block(name, entry, items))
+                host_lay.addSpacing(10)
         host_lay.addStretch(1)
         self.scroll.setWidget(host)
 
+    @staticmethod
+    def _category_color(name: str) -> str:
+        t = theme()
+        return {"新功能": t.success, "改进": t.info, "修复": t.warning}.get(name, t.text_dim)
+
+    def _range_header(self, entries: List[Dict[str, Any]]) -> QWidget:
+        t = theme()
+        newest, oldest = entries[0], entries[-1]
+        pad = QWidget()
+        lay = QVBoxLayout(pad)
+        lay.setContentsMargins(2, 0, 2, 8)
+        lay.setSpacing(6)
+
+        chips = QWidget()
+        cl = QHBoxLayout(chips)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(8)
+        span = (f"v{newest.get('version', '')}" if newest is oldest
+                else f"v{newest.get('version', '')} → v{oldest.get('version', '')}")
+        chip = Label(span, 11.4, t.text, mono_font=True, weight=QFont.Weight.DemiBold)
+        chip.setStyleSheet(
+            f"color: {t.text}; background: {S(t.selected)}; border-radius: 5px;"
+            f" padding: 3px 8px;")
+        cl.addWidget(chip)
+        if newest.get("date") and oldest.get("date"):
+            date = (newest["date"] if newest is oldest
+                    else f"{oldest['date']} ~ {newest['date']}")
+            cl.addWidget(Label(date, 10.4, t.text_faint, mono_font=True))
+        cl.addStretch(1)
+        total = 0
+        for e in entries:
+            for _name, group in _group_items(e.get("items", [])):
+                total += len(group)
+        cl.addWidget(Label(i18n.trf("共 {n} 项", n=total), 10.2, t.text_faint))
+        lay.addWidget(chips)
+
+        # 一条细分隔线，把摘要和下面的分类内容分开
+        line = QWidget()
+        line.setFixedHeight(1)
+        line.setStyleSheet(f"background: {S(t.border)};")
+        lay.addWidget(line)
+        return pad
+
+    def _section(self, name: str, total: int) -> QWidget:
+        t = theme()
+        color = self._category_color(name)
+        row = QWidget()
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(2, 6, 2, 4)
+        rl.setSpacing(7)
+        dot = Label("●", 7.5, color)
+        dot.setFixedWidth(10)
+        dot.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        rl.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        rl.addWidget(Label(i18n.tr(name), 11.8, t.text,
+                           weight=QFont.Weight.DemiBold))
+        rl.addWidget(Label(i18n.trf("共 {n} 项", n=total), 10, t.text_faint, mono_font=True))
+        rl.addStretch(1)
+        return row
+
+    def _version_block(self, category: str, entry: Dict[str, Any],
+                       items: List[str]) -> QWidget:
+        t = theme()
+        color = self._category_color(category)
+        block = QWidget()
+        lay = QVBoxLayout(block)
+        lay.setContentsMargins(17, 0, 0, 8)
+        lay.setSpacing(3)
+
+        head = QWidget()
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(0, 2, 0, 3)
+        hl.setSpacing(8)
+        ver = Label(f"v{entry.get('version', '')}", 10.2, t.text_dim, mono_font=True,
+                    weight=QFont.Weight.DemiBold)
+        ver.setStyleSheet(
+            f"color: {t.text_dim}; background: {S(t.hover)}; border-radius: 4px;"
+            f" padding: 2px 6px;")
+        hl.addWidget(ver)
+        if entry.get("date"):
+            hl.addWidget(Label(entry["date"], 9.8, t.text_faint, mono_font=True))
+        hl.addStretch(1)
+        lay.addWidget(head)
+
+        for text in items:
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(7)
+            dot = Label("•", 11.5, color)
+            dot.setFixedWidth(8)
+            dot.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+            rl.addWidget(dot, 0, Qt.AlignmentFlag.AlignTop)
+            shown = text
+            for prefix in ("新功能：", "修复：", "改进：", "新功能:", "修复:", "改进:"):
+                if shown.startswith(prefix):
+                    shown = shown[len(prefix):]
+                    break
+            body = Label(i18n.tr(shown), 11.9, t.text_dim)
+            body.setWordWrap(True)
+            rl.addWidget(body, 1)
+            lay.addWidget(row)
+        return block
+
+    # -------------------------------------------------- 范围
     def set_limit(self, n: int) -> None:
         n = max(1, int(n))
         if n == self._limit:
@@ -2756,53 +2929,6 @@ class WhatsNewPanel(QWidget):
 
     def limit(self) -> int:
         return self._limit
-
-    def _entry(self, entry: Dict[str, Any], latest: bool = False) -> QWidget:
-        t = theme()
-        card = QWidget()
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(10)
-
-        ver = Label(f"v{entry.get('version', '')}", 13.5, t.text, mono_font=True,
-                    weight=QFont.Weight.DemiBold)
-        date = Label(entry.get("date", ""), 10.5, t.text_faint, mono_font=True)
-        head = HBox(ver, date, spacing=10)
-        if latest:
-            tag = Label(i18n.trf("当前版本 {v}", v=VERSION), 9.5, t.text_dim, mono_font=True)
-            tag.setStyleSheet(
-                f"color: {t.text_dim}; background: {S(t.hover)}; border-radius: 4px;"
-                f" padding: 2px 6px;")
-            head.layout().addStretch(1)
-            head.layout().addWidget(tag)
-        lay.addWidget(head)
-
-        group_colors = {"新功能": t.success, "改进": t.info, "修复": t.warning}
-        for name, items in _group_items(entry.get("items", [])):
-            color = group_colors.get(name, t.text_faint)
-            section = Label(f"{name} {len(items)}", 10, color,
-                            weight=QFont.Weight.DemiBold, spacing=0.6)
-            lay.addWidget(section)
-            for text in items:
-                row = QWidget()
-                rl = QHBoxLayout(row)
-                rl.setContentsMargins(0, 0, 0, 0)
-                rl.setSpacing(8)
-                dot = Label("•", 12, color)
-                dot.setFixedWidth(7)
-                dot.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
-                rl.addWidget(dot, 0, Qt.AlignmentFlag.AlignTop)
-                # 分组标题已标明类别，去掉条目里重复的前缀，读起来更干净
-                shown = text
-                for prefix in ("新功能：", "修复：", "改进：", "新功能:", "修复:", "改进:"):
-                    if shown.startswith(prefix):
-                        shown = shown[len(prefix):]
-                        break
-                body = Label(shown, 12, t.text_dim)
-                body.setWordWrap(True)
-                rl.addWidget(body, 1)
-                lay.addWidget(row)
-        return card
 
 
 RANGE_OPTIONS: Tuple[Tuple[int, str], ...] = (
@@ -2893,17 +3019,23 @@ class WhatsNewRangeButton(QWidget):
 
 class WhatsNewDialog(GlassDialog):
     def __init__(self, parent=None):
-        super().__init__(parent, 620, 560, "更新内容")
+        super().__init__(parent, 660, 600, "更新内容")
+        t = theme()
+        self.panel = WhatsNewPanel()
+        # 范围选择器挂在标题栏右上角：它是「看多少」的控制项，不该占正文的地方
+        self.range_btn = WhatsNewRangeButton(self.panel.limit(), self)
+        self.range_btn.changed.connect(self._on_range)
+        hl = self.header.layout()
+        hl.insertWidget(hl.count() - 1, self.range_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        hl.insertSpacing(hl.count() - 2, 6)
+
         lay = QVBoxLayout(self.body)
         lay.setContentsMargins(20, 8, 14, 16)
-        lay.setSpacing(10)
+        lay.setSpacing(8)
 
-        self.panel = WhatsNewPanel()
-        self.range_btn = WhatsNewRangeButton(self.panel.limit(), self)
-        self.range_btn.changed.connect(self.panel.set_limit)
-        top = HBox(1, self.range_btn, spacing=8)
-        top.layout().setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(top)
+        self.subtitle = Label("", 10.4, t.text_faint, mono_font=True)
+        lay.addWidget(self.subtitle)
+        self._sync_subtitle()
 
         lay.addWidget(self.panel, 1)
         ok = Button("关闭", None, kind="primary", height=28, padding=20, font_size=12)
@@ -2911,6 +3043,15 @@ class WhatsNewDialog(GlassDialog):
         foot = HBox(1, ok, spacing=8)
         foot.layout().setContentsMargins(4, 0, 6, 0)
         lay.addWidget(foot)
+
+    def _on_range(self, n: int) -> None:
+        self.panel.set_limit(n)
+        self._sync_subtitle()
+
+    def _sync_subtitle(self) -> None:
+        n = self.panel.limit()
+        text = i18n.tr("最近 {n} 个版本").format(n=n) if n > 1 else i18n.tr("上次更新以来")
+        self.subtitle.setText(f"{i18n.trf('版本 v{v}', v=VERSION)} · {text}")
 
 
 # ---------------------------------------------------------------- 命令面板
@@ -3484,7 +3625,12 @@ class TransferRow(QWidget):
             p.drawRoundedRect(r, 8, 8)
         enabled = self.isEnabled()
         col = t.danger if self._danger else (t.text_dim if enabled else t.text_faint)
-        if self._icon.startswith("source:"):
+        if self._icon == "brand":
+            # 自家的 Ocelot：用应用标识的线稿，跟标题栏同一个形状
+            from .brand import mark_pixmap
+
+            p.drawPixmap(QPointF(11, (self.height() - 20) / 2), mark_pixmap(20, col, 1.0))
+        elif self._icon.startswith("source:"):
             # 第三方来源：透明底品牌剪影，统一 19px、随主题着色
             pm = icons.source_pixmap(self._icon[7:], col, 19)
             p.drawPixmap(QPointF(11, (self.height() - 19) / 2), pm)
@@ -3844,7 +3990,7 @@ class TransferDialog(GlassDialog):
 
     @staticmethod
     def _source_icon(key: str) -> str:
-        return {"ocelot": "grid", "postman": "source:postman", "apifox": "source:apifox",
+        return {"ocelot": "brand", "postman": "source:postman", "apifox": "source:apifox",
                 "hoppscotch": "source:hoppscotch", "insomnia": "source:insomnia",
                 "openapi": "source:openapi", "har": "table"}.get(key, "file")
 
@@ -4134,7 +4280,7 @@ class TransferDialog(GlassDialog):
         lay.setSpacing(2)
         self.export_rows = []
         for key, title, desc in self._export_targets:
-            row = TransferRow("grid" if key == "ocelot" else
+            row = TransferRow("brand" if key == "ocelot" else
                               ("code" if key.startswith("openapi") else "download"),
                               title, desc)
             row.clicked.connect(lambda k=key: self._do_export(k))
