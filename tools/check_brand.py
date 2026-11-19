@@ -1,4 +1,4 @@
-"""v1.0.65 品牌标识专项自测。
+"""v1.0.66 品牌标识专项自测。
 
 覆盖：细线几何（尖耳 / 圆颊 / 窄下颌，额顶一阶连续、下颌不是平底、侧壁不直）、
 五官（竖椭圆眼 / 倒三角鼻 / 两颗豹斑）与按尺寸分级、位图真的画出了东西、
@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.65", VERSION == "1.0.65", VERSION)
-check("更新内容是 1.0.65", CHANGELOG[0]["version"] == "1.0.65")
+check("版本 1.0.66", VERSION == "1.0.66", VERSION)
+check("更新内容是 1.0.66", CHANGELOG[0]["version"] == "1.0.66")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -337,7 +337,7 @@ check("更新内容写了线条加粗", any("4.2%" in x for x in ALL_ITEMS))
 
 # ---------------------------------------------------------------- 1.0.65 新增
 print("\n[1.0.65 新增]")
-check("状态栏只在 Mock 运行时出现", "self.status_wrap.setVisible(on)" in _mw_src
+check("状态栏胶囊只在 Mock 运行时出现", "badge.setVisible(on)" in _mw_src
       and "self._status_tick.stop()" in _mw_src)
 check("右下角不再有版本号", "v{VERSION}" not in _mw_src)
 check("AI 用例按钮已并入 AI 生成", "AI 用例" not in _mock_src
@@ -348,6 +348,26 @@ check("日志增量刷新", "_log_keys" in _mock_src and "def _rebuild_log_rows"
 check("自绘行缓存字体与图标", "_FONTS" in _mock_src and "_PIX" in _mock_src)
 check("更新内容写了状态栏收起", any("状态栏" in x for x in ALL_ITEMS))
 check("更新内容写了日志增量", any("增量插入" in x for x in ALL_ITEMS))
+
+# ---------------------------------------------------------------- 1.0.66 新增
+print("\n[1.0.66 新增]")
+check("状态栏横线去掉", "wl.addWidget(Divider())" not in _mw_src
+      and "横线不要" in _mw_src)
+check("状态栏常占高度", "bar.setFixedHeight(28)" in _mw_src
+      and "self.status_wrap = bar" in _mw_src)
+check("空路由不隐藏滚动区", "self.scroll.setVisible(bool(routes))" not in _mock_src)
+check("macOS 原生菜单模块存在", (ROOT / "app" / "app_menu.py").exists())
+_main_src = (ROOT / "main.py").read_text(encoding="utf-8")
+_menu_src = (ROOT / "app" / "app_menu.py").read_text(encoding="utf-8")
+check("macOS 才装原生菜单", "sys.platform != \"darwin\"" in _menu_src
+      and "install_app_menu(app, window)" in _main_src)
+check("原生菜单有关于 / 设置 / 退出", all(
+    x in _menu_src for x in ("关于 Ocelot", "设置…", "退出 Ocelot",
+                             "AboutRole", "PreferencesRole",
+                             "QuitRole")))
+check("原生菜单保住引用", "window._native_menubar = bar" in _menu_src)
+check("更新内容写了横线去掉", any("横线去掉" in x for x in ALL_ITEMS))
+check("更新内容写了原生菜单", any("原生应用菜单" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

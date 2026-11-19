@@ -1,5 +1,18 @@
 # What's Changed
 
+## v1.0.66 — 2026-11-20
+
+**Fixed**
+- Removed the separator line above the status bar — the badge now floats cleanly in the bottom-right corner.
+- The status bar keeps its 28px slot at all times. Starting/stopping a mock only toggles the badge, so the sidebar and content area no longer jump up and down.
+- Fixed the stretched row spacing in the Mock center after creating a second instance: the scroll area (which carries `stretch=1`) was being hidden when there were no routes, so Qt spread the leftover height across the other rows — about 89px per row.
+
+**Added**
+- **macOS native app menu** (click the app name at the top-left): About Ocelot, Settings…, Environment Variables…, Quit Ocelot. Only the basics — enough to find settings without cluttering the bar.
+
+**Verified**
+- Full smoke suite: 679 checks pass; brand suite: 116 checks pass.
+
 ## v1.0.65 — 2026-11-20
 
 **Changed**

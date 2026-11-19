@@ -113,6 +113,11 @@ def main() -> int:
 
     window = MainWindow(store)
     window.safe_mode = crashed
+    # macOS 顶部原生应用菜单：关于 / 设置 / 环境变量 / 退出。
+    # 只在 macOS 装，失败也不影响启动（menubar 引用挂在 window 上保活）。
+    from app.app_menu import install_app_menu
+
+    install_app_menu(app, window)
     window.show()
     window.raise_()
     window.activateWindow()  # 从 IDE 运行面板启动时也能到最前

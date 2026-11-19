@@ -889,16 +889,12 @@ class MainWindow(QWidget):
         self.response.show_empty()
 
     def _build_statusbar(self) -> QWidget:
-        """底部一条 28px 的状态栏：只有 Mock 真在跑的时候才出现，胶囊贴右下角。
+        """底部 28px 状态栏：横线不要，胶囊贴右下角。
 
-        服务没开就整条收起来（连分隔线一起），内容区白白多出 28px；
-        开着的时候点徽章一秒回到 Mock 中心，不用为了看一眼端口重开面板。
+        这一条**永远占着高度**：启动 / 停止只是切换徽章的显隐，侧栏和内容区
+        的位置一动不动。以前整条 hide 掉会让内容区突然长高 28px、侧栏跟着跳，
+        视图一抖很难受。没有分隔线，视觉上就是「徽章浮在右下角」。
         """
-        wrap = QWidget()
-        wl = QVBoxLayout(wrap)
-        wl.setContentsMargins(0, 0, 0, 0)
-        wl.setSpacing(0)
-        wl.addWidget(Divider())
         bar = QWidget()
         bar.setFixedHeight(28)
         lay = QHBoxLayout(bar)
@@ -908,29 +904,31 @@ class MainWindow(QWidget):
         self.mock_badge = MockBadge(self.mock)
         self.mock_badge.clicked.connect(self.open_mock)
         lay.addWidget(self.mock_badge, 0, Qt.AlignmentFlag.AlignVCenter)
-        wl.addWidget(bar)
-        self.status_wrap = wrap
+        self.status_wrap = bar
         self._status_on = False
-        wrap.setVisible(False)
-        # 徽章状态由定时器兜底刷新；没在跑时定时器是停的，不白转
+        # 没跑就只藏胶囊，28px 空位保留；定时器也停掉，不白转
+        self.mock_badge.setVisible(False)
         self._status_tick = QTimer(self)
         self._status_tick.setInterval(1800)
         self._status_tick.timeout.connect(self._refresh_mock_badge)
-        return wrap
+        return bar
 
     def _refresh_mock_badge(self) -> None:
         badge = getattr(self, "mock_badge", None)
         if badge is None:
             return
-        badge.refresh()
         on = bool(self.mock.is_running)
         if on != self._status_on:
             self._status_on = on
-            self.status_wrap.setVisible(on)
+            badge.setVisible(on)
+            self.status_wrap.update()
             if on:
+                badge.refresh()
                 self._status_tick.start()
             else:
                 self._status_tick.stop()
+        elif on:
+            badge.refresh()
 
     def _build_titlebar(self) -> QWidget:
         bar = TitleBar(self)

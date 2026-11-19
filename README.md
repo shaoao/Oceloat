@@ -134,6 +134,7 @@ app/mock_panel.py     Mock 中心界面（分组树、状态、日志、二维�
 app/mock_import.py    OpenAPI / Postman 转 Mock 路由
 app/mock_ai.py        Mock 的 AI 提示词与结果清洗
 app/qr.py             纯标准库二维码（局域网调试地址用）
+app/app_menu.py       macOS 顶部原生应用菜单（关于 / 设置 / 退出）
 app/markdown_view.py  Markdown 渲染，表格和代码块是自己画的控件
 app/doc_window.py     接口文档窗口
 app/theme.py          颜色、字体、全局样式

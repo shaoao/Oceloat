@@ -1874,7 +1874,9 @@ class MockDialog(GlassDialog):
 
         render("", 0)
         self.empty_label.setVisible(not routes)
-        self.scroll.setVisible(bool(routes))
+        # 不要隐藏 scroll：它带 stretch=1，一旦 hide，剩余高度就会被上面几行
+        # 均分（每行撑到 89px），行距突然变松 —— 新建实例切过去时就很明显。
+        # 空路由时让它留着当空白填充，只藏空状态提示本身。
         groups = len({str(r.get("group") or "") for r in routes if r.get("group")})
         if self.tabs.current() == "local":
             self.hint.setText(

@@ -19,9 +19,22 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.65"
+VERSION = "1.0.66"
 
 CHANGELOG = [
+    {
+        "version": "1.0.66",
+        "date": "2026-11-20",
+        "items": [
+            "底部状态栏的那条横线去掉了：只留右下角的 Mock 胶囊，干净很多",
+            "状态栏改成永远占着那 28px，启动 / 停止只切胶囊显隐，侧栏和内容区不会再跟着上下跳；"
+            "没开服务时同样看不到胶囊，但布局保持原样",
+            "修掉新建实例后 Mock 中心行距被拉大的问题：空路由时不再隐藏带伸缩的滚动区，"
+            "否则剩余高度会被上面几行均分，每行撑成 89px，看着特别松",
+            "macOS 顶部加了原生应用菜单（点左上角应用名）：关于 Ocelot、设置…、环境变量…、退出 Ocelot，"
+            "只放基础的几项，设置和关于都能直接找到",
+        ],
+    },
     {
         "version": "1.0.65",
         "date": "2026-11-20",
