@@ -19,9 +19,25 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.59"
+VERSION = "1.0.60"
 
 CHANGELOG = [
+    {
+        "version": "1.0.60",
+        "date": "2026-11-19",
+        "items": [
+            "标识换成剪影：一只站立的豹猫，整块实心、朝右、尾巴从身后扬起收成细弧，"
+            "参照 magpie 那类图标的做法——不描边，用背景色切出结构",
+            "负空间只留两处：腹部一道拱形开口、眼睛一颗圆点；头贴着肩不悬空，"
+            "后腿髋部一块圆、前腿细、脚掌小圆，前低后高",
+            "悬浮动画为剪影重做：整枚上浮 1%、放大 3.5%，尾巴绕尾根向上轻甩 4°，"
+            "眼睛那颗负空间里亮起一点光——像猫睁开眼；移开 640ms 全部缓收",
+            "小尺寸重新校对：16px 仍能看出耳朵、腿和尾巴，21px 标题栏不再糊成一坨",
+            "Dock 图标沿用白底圆角方块，里面换成正黑剪影，深浅桌面都干净",
+            "SVG 资产改成填充路径导出（fill-rule: evenodd），和应用里是同一个形",
+            "自测通过",
+        ],
+    },
     {
         "version": "1.0.59",
         "date": "2026-11-19",

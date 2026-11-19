@@ -1,5 +1,18 @@
 # What's Changed
 
+## v1.0.60 — 2026-11-19
+
+**Changed**
+- **The mark is now a solid silhouette**: a standing ocelot facing right, tail sweeping up behind into a fine arc. Built the way magpie's icon is built — one solid mass, with the background cut out to describe structure, instead of stroked line art.
+- Only two negative spaces, both structural: an arch under the belly and a round eye. The head sits on the shoulder with no gap; round haunch, slim front leg, small round paws, low in front and high at the back.
+- **Hover animation rebuilt for a solid mark**: the mark lifts 1% and scales 3.5%, the tail swings 4° around its root, and a point of light blooms inside the eye's cut-out — like the cat opening its eye. Everything eases back in 640ms on leave.
+- Re-checked at small sizes: ears, legs and tail still read at 16px, and the 21px title bar no longer smears.
+- The dock icon keeps the white rounded square, now with a near-black silhouette inside.
+- Exported SVG assets are filled paths now (fill-rule: evenodd), so the asset and the app are the same shape.
+
+**Verified**
+- Targeted and full smoke checks pass.
+
 ## v1.0.59 — 2026-11-19
 
 **Changed**
