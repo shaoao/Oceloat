@@ -865,6 +865,9 @@ class MainWindow(QWidget):
         self.stack.addWidget(self.welcome)
         self.stack.addWidget(self.workspace)
         cl.addWidget(self.stack, 1)
+        # Mock 状态条只属于右半侧：放内容区底部，侧栏（新建请求那一列）
+        # 的高度和位置永远不变。服务停了整条收起，恢复成原来的样子。
+        cl.addWidget(self._build_statusbar())
 
         self.split = SideSplitter(Qt.Orientation.Horizontal)
         self.split.setObjectName("SideSplit")
@@ -878,7 +881,6 @@ class MainWindow(QWidget):
         self.split.splitterMoved.connect(self._on_sidebar_dragged)
         body_lay.addWidget(self.split, 1)
         root_lay.addWidget(body, 1)
-        root_lay.addWidget(self._build_statusbar())
 
         self.toast = Toast(self.root)
         # 挂在主窗口本身（不是内容容器）：命令面板要盖在背景模糊遮罩之上，
@@ -889,11 +891,11 @@ class MainWindow(QWidget):
         self.response.show_empty()
 
     def _build_statusbar(self) -> QWidget:
-        """底部 28px 状态栏：横线不要，胶囊贴右下角。
+        """Mock 状态条：只在服务运行时出现，且只在右半侧（内容区底部）。
 
-        这一条**永远占着高度**：启动 / 停止只是切换徽章的显隐，侧栏和内容区
-        的位置一动不动。以前整条 hide 掉会让内容区突然长高 28px、侧栏跟着跳，
-        视图一抖很难受。没有分隔线，视觉上就是「徽章浮在右下角」。
+        放在 content 的布局里而不是 root —— 侧栏那半边完全不受影响。
+        没有分隔线，视觉上就是「胶囊浮在右下角」。服务停了整条收起，
+        内容区立刻恢复原来的高度，不留空条。
         """
         bar = QWidget()
         bar.setFixedHeight(28)
@@ -906,8 +908,8 @@ class MainWindow(QWidget):
         lay.addWidget(self.mock_badge, 0, Qt.AlignmentFlag.AlignVCenter)
         self.status_wrap = bar
         self._status_on = False
-        # 没跑就只藏胶囊，28px 空位保留；定时器也停掉，不白转
-        self.mock_badge.setVisible(False)
+        # 整条初始收起；没在跑时定时器也停着，不白转
+        bar.setVisible(False)
         self._status_tick = QTimer(self)
         self._status_tick.setInterval(1800)
         self._status_tick.timeout.connect(self._refresh_mock_badge)
@@ -920,8 +922,8 @@ class MainWindow(QWidget):
         on = bool(self.mock.is_running)
         if on != self._status_on:
             self._status_on = on
-            badge.setVisible(on)
-            self.status_wrap.update()
+            # 整条一起显隐：关掉 Mock 后右半侧立刻恢复原样，不留空条。
+            self.status_wrap.setVisible(on)
             if on:
                 badge.refresh()
                 self._status_tick.start()

@@ -19,9 +19,20 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.66"
+VERSION = "1.0.67"
 
 CHANGELOG = [
+    {
+        "version": "1.0.67",
+        "date": "2026-11-20",
+        "items": [
+            "Mock 状态条挪到右半侧（内容区底部）：侧栏「新建请求」那一列的位置和高度完全不动，"
+            "不再被状态条顶上去；左侧区域保持原样",
+            "关掉 Mock 服务后状态条整条收起，右半侧立刻恢复成原来的布局，不再留一条 28px 空位",
+            "macOS 顶部原生菜单去掉「环境变量…」这一项：右上角已经有环境选择器，"
+            "菜单里只留关于 / 设置 / 退出，够用就行",
+        ],
+    },
     {
         "version": "1.0.66",
         "date": "2026-11-20",

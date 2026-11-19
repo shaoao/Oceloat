@@ -1,5 +1,15 @@
 # What's Changed
 
+## v1.0.67 — 2026-11-20
+
+**Fixed**
+- The Mock status strip now lives at the bottom of the **right pane only**. The sidebar — including the "New Request" row — stays exactly where it was; nothing on the left half shifts.
+- Stopping the mock collapses the whole strip again, so the right pane immediately returns to its original height with no leftover 28px gap.
+- Removed "Environment Variables…" from the macOS app menu; the environment selector in the title bar already covers it, so the menu now holds only About / Settings / Quit.
+
+**Verified**
+- Full smoke suite: 679 checks pass; brand suite: 121 checks pass.
+
 ## v1.0.66 — 2026-11-20
 
 **Fixed**

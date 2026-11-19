@@ -1,4 +1,4 @@
-"""v1.0.66 品牌标识专项自测。
+"""v1.0.67 品牌标识专项自测。
 
 覆盖：细线几何（尖耳 / 圆颊 / 窄下颌，额顶一阶连续、下颌不是平底、侧壁不直）、
 五官（竖椭圆眼 / 倒三角鼻 / 两颗豹斑）与按尺寸分级、位图真的画出了东西、
@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.66", VERSION == "1.0.66", VERSION)
-check("更新内容是 1.0.66", CHANGELOG[0]["version"] == "1.0.66")
+check("版本 1.0.67", VERSION == "1.0.67", VERSION)
+check("更新内容是 1.0.67", CHANGELOG[0]["version"] == "1.0.67")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -337,7 +337,7 @@ check("更新内容写了线条加粗", any("4.2%" in x for x in ALL_ITEMS))
 
 # ---------------------------------------------------------------- 1.0.65 新增
 print("\n[1.0.65 新增]")
-check("状态栏胶囊只在 Mock 运行时出现", "badge.setVisible(on)" in _mw_src
+check("状态栏胶囊只在 Mock 运行时出现", "self.status_wrap.setVisible(on)" in _mw_src
       and "self._status_tick.stop()" in _mw_src)
 check("右下角不再有版本号", "v{VERSION}" not in _mw_src)
 check("AI 用例按钮已并入 AI 生成", "AI 用例" not in _mock_src
@@ -352,8 +352,8 @@ check("更新内容写了日志增量", any("增量插入" in x for x in ALL_ITE
 # ---------------------------------------------------------------- 1.0.66 新增
 print("\n[1.0.66 新增]")
 check("状态栏横线去掉", "wl.addWidget(Divider())" not in _mw_src
-      and "横线不要" in _mw_src)
-check("状态栏常占高度", "bar.setFixedHeight(28)" in _mw_src
+      and "没有分隔线" in _mw_src)
+check("状态栏有固定高度", "bar.setFixedHeight(28)" in _mw_src
       and "self.status_wrap = bar" in _mw_src)
 check("空路由不隐藏滚动区", "self.scroll.setVisible(bool(routes))" not in _mock_src)
 check("macOS 原生菜单模块存在", (ROOT / "app" / "app_menu.py").exists())
@@ -368,6 +368,18 @@ check("原生菜单有关于 / 设置 / 退出", all(
 check("原生菜单保住引用", "window._native_menubar = bar" in _menu_src)
 check("更新内容写了横线去掉", any("横线去掉" in x for x in ALL_ITEMS))
 check("更新内容写了原生菜单", any("原生应用菜单" in x for x in ALL_ITEMS))
+
+# ---------------------------------------------------------------- 1.0.67 新增
+print("\n[1.0.67 新增]")
+check("状态条只挂在右半侧内容区", "cl.addWidget(self._build_statusbar())" in _mw_src
+      and "root_lay.addWidget(self._build_statusbar())" not in _mw_src)
+check("停止后整条收起恢复布局", "self.status_wrap.setVisible(on)" in _mw_src
+      and "bar.setVisible(False)" in _mw_src)
+check("侧栏不被状态条挤压", "cl.addWidget(self.stack, 1)\n        # Mock 状态条只属于右半侧" in _mw_src)
+check("macOS 菜单去掉环境变量项", "环境变量…" not in _menu_src
+      and "show_envs()" not in _menu_src)
+check("更新内容写了右半侧与恢复", any("右半侧" in x for x in ALL_ITEMS)
+      and any("整条收起" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

@@ -1,4 +1,4 @@
-"""macOS 屏幕顶部的原生应用菜单：关于 / 设置 / 环境变量 / 退出。
+"""macOS 屏幕顶部的原生应用菜单：关于 / 设置 / 退出。
 
 只在 macOS 上装。QMenuBar 不挂 parent —— 在 macOS 上它就是全局菜单栏，
 第一个菜单自动变成粗体的应用菜单；带 MenuRole 的动作会被系统放到该去的
@@ -34,12 +34,6 @@ def build_app_menu(window: Any) -> Tuple[QMenuBar, Dict[str, QAction]]:
     prefs.setMenuRole(QAction.MenuRole.PreferencesRole)
     prefs.triggered.connect(lambda: window.show_settings())
     acts["settings"] = prefs
-
-    menu.addSeparator()
-
-    env = menu.addAction("环境变量…")
-    env.triggered.connect(lambda: window.show_envs())
-    acts["env"] = env
 
     menu.addSeparator()
 
