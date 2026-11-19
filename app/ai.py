@@ -442,7 +442,7 @@ class AnalysisCache:
     """有限容量的分析结果缓存：LRU 淘汰 + TTL 过期 + 显式清空。"""
 
     MAX = 8          # 最多留 8 份分析（每份 1~2KB，内存占用可忽略但有硬上限）
-    TTL = 30 * 60    # 30 分钟没人看就当过期，避免「一直存着」
+    TTL = 8 * 60     # 8 分钟没人看就当过期，避免「一直存着」
 
     def __init__(self) -> None:
         self._data: "OrderedDict[str, tuple]" = OrderedDict()

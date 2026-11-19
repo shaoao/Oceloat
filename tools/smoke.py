@@ -3569,6 +3569,28 @@ def main() -> int:
         check("SIO ACK 模板英文", _i18n.trf("等待 ACK · {id}", id=2) == "Awaiting ACK · 2")
         _i18n.set_language(old_lang, notify=False)
 
+        # --- 资源管理器：菜单入口 + 能建能刷 + 维护动作
+        from app import resmon as _resmon
+        menu, acts = w._settings_menu()
+        labels = [a.text() for a in menu.actions()]
+        check("设置菜单有资源管理器", any("资源管理器" in x for x in labels), str(labels))
+        check("菜单动作名可点", "resources" in acts)
+        _dlg = _resmon.ResourceDialog(w.store, w, analysis_cache=w._analysis_cache,
+                                      tabs_count=len(w.tabs_data))
+        _dlg.resize(1080, 800)
+        _dlg.show()
+        app.processEvents()
+        check("资源管理器能构建", _dlg.tile_mem.value.text() not in ("", "—"),
+              _dlg.tile_mem.value.text())
+        check("资源管理器六项资产", len(_dlg.asset_stats) == 6)
+        check("资源管理器显示健康分", _dlg.health_ring._center.isdigit(),
+              _dlg.health_ring._center)
+        check("资源管理器内存趋势有采样", len(_dlg._samples) >= 1)
+        _dlg._act_cache()
+        check("清空分析缓存后长度为 0", len(w._analysis_cache) == 0)
+        _dlg.done(0)
+        check("关窗后停止采样", not _dlg._timer.isActive())
+
         return 0
 
     def finish():

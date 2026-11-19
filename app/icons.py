@@ -16,6 +16,7 @@ from PyQt6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
+    QPixmapCache,
     QPolygonF,
 )
 
@@ -562,3 +563,16 @@ def pixmap(name: str, color: str = "#ECECEF", size: int = 16, width: float = 1.6
     pm.setDevicePixelRatio(dpr)
     _pm_cache[key] = pm
     return pm
+
+
+def clear_cache() -> int:
+    """清空图标缓存，返回被丢弃的条目数。
+
+    图标都是按需重建的：清掉之后下一次绘制会重新生成，界面不会出现空白，
+    但这一批 QPixmap 立刻变成可回收对象。资源管理器里的「释放内存」用它。
+    """
+    n = len(_cache) + len(_pm_cache)
+    _cache.clear()
+    _pm_cache.clear()
+    QPixmapCache.clear()
+    return n

@@ -618,7 +618,7 @@ class MainWindow(QWidget):
 
         self.mock = MockServer()
         # AI 响应分析结果缓存：同一页签 + 同一响应再看一次直接显示，不再烧 token。
-        # LRU 上限 + 30 分钟过期 + 关窗清空，绝不会一直占着内存。
+        # LRU 上限 + 8 分钟过期 + 关窗清空，绝不会一直占着内存。
         from . import ai as _ai
         self._analysis_cache = _ai.AnalysisCache()
         self._shortcuts: List[QShortcut] = []
@@ -849,6 +849,7 @@ class MainWindow(QWidget):
         acts: Dict[str, Any] = {}
         acts["settings"] = menu.addAction(icons.icon("gear", t.text, 14), "设置…")
         acts["env"] = menu.addAction(icons.icon("globe", t.text, 14), "环境变量…")
+        acts["resources"] = menu.addAction(icons.icon("grid", t.text, 14), "资源管理器…")
         acts["cloud"] = menu.addAction(icons.icon("cloud", t.text, 14), "云同步…")
         menu.addSeparator()
         acts["mock"] = menu.addAction(icons.icon("grid", t.text, 14), "Mock 服务…")
@@ -863,6 +864,7 @@ class MainWindow(QWidget):
         menu, acts = self._settings_menu()
         a_settings = acts["settings"]
         a_env = acts["env"]
+        a_resources = acts["resources"]
         a_cloud = acts["cloud"]
         a_mock = acts["mock"]
         a_curl = acts["curl"]
@@ -874,6 +876,8 @@ class MainWindow(QWidget):
             self.show_settings()
         elif chosen is a_env:
             self.show_envs()
+        elif chosen is a_resources:
+            self.open_resources()
         elif chosen is a_cloud:
             self.show_settings(page="cloud")
         elif chosen is a_mock:
@@ -2207,6 +2211,23 @@ class MainWindow(QWidget):
         dlg.uiScaleChanged.connect(self._on_scale_applied)
         dlg.settingsChanged.connect(self._on_settings_applied)
         dlg.exec()
+
+    def open_resources(self) -> None:
+        """打开资源管理器：内存 / 存储 / 运行时看板 + 维护动作。"""
+        from .resmon import ResourceDialog
+
+        dlg = ResourceDialog(self.store, self,
+                             analysis_cache=self._analysis_cache,
+                             tabs_count=len(self.tabs_data),
+                             on_data_changed=self._on_resources_changed)
+        dlg.exec()
+
+    def _on_resources_changed(self) -> None:
+        """资源管理器里清过数据：侧栏与历史列表要立刻反映真实状态。"""
+        self.sidebar.refresh()
+        refresh = getattr(self.sidebar, "refresh_history", None)
+        if callable(refresh):
+            refresh()
 
     def _on_settings_applied(self) -> None:
         self.response.set_stale_notice(

@@ -1681,3 +1681,117 @@ _EN.update({
     "缓存 {n} 分钟后自动过期；点「重新分析」可刷新":
         "Cached result expires after {n} minutes; click Analyze again to refresh",
 })
+
+# v1.0.57：资源管理器
+_EN.update({
+    "资源管理器": "Resource Manager",
+    "资源管理器…": "Resource Manager…",
+    "重新采集全部指标  ⌘R": "Re-collect all metrics  ⌘R",
+    "指标已刷新": "Metrics refreshed",
+
+    # 指标卡
+    "进程内存": "Process memory",
+    "峰值 {v}": "Peak {v}",
+    "系统内存": "System memory",
+    "应用数据": "App data",
+    "运行时": "Runtime",
+    "读取中…": "Reading…",
+    "无法读取系统内存": "System memory unavailable",
+    "已用 {used} / {total}": "{used} used / {total}",
+    "整机 {total}": "System total {total}",
+
+    # 分节
+    "内存构成": "Memory composition",
+    "存储构成": "Storage composition",
+    "内存趋势": "Memory trend",
+    "健康度": "Health",
+    "数据资产": "Data assets",
+    "对象分布": "Object distribution",
+    "Ocelot 进程": "Ocelot process",
+    "其它应用": "Other apps",
+    "可用内存": "Available",
+    "健康分": "Score",
+
+    # 存储分类
+    "状态文件": "State file",
+    "自动备份": "Auto backups",
+    "运行日志": "Logs",
+    "其它文件": "Other files",
+    "{n} 个文件": "{n} files",
+    "{files} 个文件 · 状态 {state}": "{files} files · state {state}",
+    "应用数据 {size}": "App data {size}",
+    "数据目录 {path}": "Data folder {path}",
+    "磁盘剩余 {free}（{pct}%）· 数据目录 {path}":
+        "Disk free {free} ({pct}%) · data folder {path}",
+
+    # 趋势
+    "近 {n} 分钟": "Last {n} min",
+    "近 {m} 分钟": "Last {m} min",
+    "刚开始采样": "Sampling started",
+    " · 现在 {now} · 最低 {lo} · 平均 {avg} · 最高 {hi}":
+        " · now {now} · min {lo} · avg {avg} · max {hi}",
+    "现在 {now} · 最低 {lo} · 平均 {avg} · 最高 {hi}":
+        "Now {now} · min {lo} · avg {avg} · max {hi}",
+    "采样中…": "Sampling…",
+
+    # 磁盘
+    "磁盘": "Disk",
+    "剩余 {free}（{pct}%）": "{free} free ({pct}%)",
+    "已用 {used} · 可用 {free} · 数据目录 {path}":
+        "Used {used} · free {free} · data folder {path}",
+
+    # 资产 / 对象
+    "标签页": "Tabs",
+    "请求数": "Requests",
+    "集合数": "Collections",
+    "历史记录": "History",
+    "环境数": "Envs",
+    "共 {n} 个请求": "{n} requests in total",
+    "{n} 个对象 · {k} 种类型": "{n} objects · {k} types",
+    "线程 {t} · 控件 {w} · 缓存 {c}":
+        "{t} threads · {w} widgets · {c} cached",
+
+    # 健康提示
+    "系统内存 {pct}%，其它应用会变慢":
+        "System memory {pct}% — other apps will slow down",
+    "系统内存 {pct}%，余量不多":
+        "System memory {pct}% — little headroom",
+    "系统内存 {pct}%，压力正常":
+        "System memory {pct}% — healthy",
+    "应用数据 {size}，建议清理历史":
+        "App data {size} — clear history",
+    "应用数据 {size}，偏大但无害":
+        "App data {size} — large but harmless",
+    "历史 {n} 条，接近上限 {limit}":
+        "History {n} entries, near the {limit} limit",
+    "回收站 {n} 项过期，可清理":
+        "{n} expired trash items can be purged",
+    "分析缓存 {n} 份，占用很少":
+        "{n} analyses cached — negligible memory",
+    "未发现问题，状态良好":
+        "Nothing needs attention — all good",
+
+    # 维护
+    "维护": "Maintenance",
+    "释放内存": "Free memory",
+    "回收 Python 堆 + 图标 / 图片缓存":
+        "Collect the Python heap and drop icon / pixmap caches",
+    "清空分析缓存": "Clear analysis cache",
+    "丢掉本轮已生成的 AI 分析结果": "Drop AI analyses cached in this session",
+    "清理过期回收站": "Purge expired trash",
+    "只清理超过保留天数的条目": "Only removes items past the retention window",
+    "清理旧备份": "Clean old backups",
+    "删除 7 天前的 state.json 自动备份":
+        "Delete state.json backups older than 7 days",
+    "已释放 {v}": "Freed {v}",
+    "已整理堆内存，回收 {n} 个缓存条目":
+        "Heap compacted, {n} cached items dropped",
+    "内存已经很干净，无需释放": "Memory is already clean",
+    "没有可清理的分析缓存": "No analysis cache to clear",
+    "已清空 {n} 份分析缓存": "Cleared {n} cached analyses",
+    "分析缓存本来就是空的": "The analysis cache is already empty",
+    "已清理 {n} 项过期记录": "Purged {n} expired items",
+    "没有过期的回收站条目": "No expired trash items",
+    "已删除 {n} 个旧备份 · {v}": "Removed {n} old backups · {v}",
+    "没有超过 7 天的备份": "No backups older than 7 days",
+})

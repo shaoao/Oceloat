@@ -35,14 +35,16 @@ def check(name, ok, detail=""):
 
 
 # ---------------------------------------------------------------- 版本 / 更新内容
-check("版本号递进到 1.0.56", VERSION == "1.0.56", VERSION)
-check("更新内容顶部是 1.0.56", CHANGELOG[0]["version"] == "1.0.56")
-check("更新内容写了引用块与圆点",
-      any("引用块" in x and "圆点" in x for x in CHANGELOG[0]["items"]))
-check("更新内容写了英文动态文案修复",
-      any("英文" in x and "拼接" in x for x in CHANGELOG[0]["items"]))
-check("上一版仍记录缓存与内存清理",
-      any("缓存" in x and "内存" in x for x in CHANGELOG[1]["items"]))
+check("版本号递进到 1.0.57", VERSION == "1.0.57", VERSION)
+check("更新内容顶部是 1.0.57", CHANGELOG[0]["version"] == "1.0.57")
+check("更新内容写了资源管理器",
+      any("资源管理器" in x for x in CHANGELOG[0]["items"]))
+check("更新内容写了 8 分钟过期",
+      any("8 分钟" in x for x in CHANGELOG[0]["items"]))
+check("上一版仍记录引用块与圆点",
+      any("引用块" in x and "圆点" in x for x in CHANGELOG[1]["items"]))
+check("上一版仍记录英文动态文案修复",
+      any("英文" in x and "拼接" in x for x in CHANGELOG[1]["items"]))
 
 # ---------------------------------------------------------------- 分析结果缓存
 cache = ai_mod.AnalysisCache()
@@ -141,6 +143,7 @@ dlg = AiAnswerDialog("AI 响应分析", "美化 · GET https://api.test")
 dlg.set_result("## 结论\n成功", cached=True)
 tip = dlg.state.toolTip()
 check("来自缓存悬浮显示过期分钟数", str(ai_mod.AnalysisCache.TTL // 60) in tip, tip)
+check("分析缓存 8 分钟过期", ai_mod.AnalysisCache.TTL == 8 * 60, str(ai_mod.AnalysisCache.TTL))
 check("悬浮提示有「重新分析」指引", "重新分析" in tip, tip)
 dlg.close()
 

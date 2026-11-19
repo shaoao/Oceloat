@@ -1,5 +1,21 @@
 # What's Changed
 
+## v1.0.57 — 2026-11-19
+
+**Added**
+- **Resource Manager** (settings menu, top-right): a real dashboard for memory, storage and runtime, fully bilingual and theme-aware.
+- Memory: resident size read straight from libproc (no `ps` subprocess, works in restricted environments), peak, whole-machine pressure, and a 2-second sampler that draws the last three minutes with min / avg / max.
+- Storage: app data split into state file / auto backups / logs / other, with proportion bars and per-group sizes, plus disk free space. The data folder path lives in a tooltip so it does not eat the layout.
+- Runtime and assets: top 5 object types, threads, widgets, allocated blocks, and six counters for requests, collections, history, trash, environments and tabs.
+- Maintenance strip: free memory (GC + icon / pixmap caches), clear analysis cache, purge expired trash, remove backups older than 7 days — each reports how much was released.
+- Health score: weighted from system memory pressure, app data size, history volume and expired trash, with up to three actionable hints.
+
+**Changed**
+- AI analysis cache now expires after **8 minutes** instead of 30; the "Cached" tooltip follows the real value.
+
+**Verified**
+- Targeted and full smoke checks pass.
+
 ## v1.0.56 — 2026-11-19
 
 **Fixed**
