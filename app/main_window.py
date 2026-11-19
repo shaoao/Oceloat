@@ -526,7 +526,7 @@ class WelcomeView(QWidget):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(title)
         col.addSpacing(7)
-        sub = Label("接口调试、Mock、脚本与协作，一个窗口全搞定", 12.5, theme().text_dim)
+        sub = Label("接口调试、Mock 服务、接口文档，离线可用", 12.5, theme().text_dim)
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(sub)
         col.addSpacing(34)
@@ -704,7 +704,6 @@ class MainWindow(QWidget):
         self.setMouseTracking(True)
         self.setMinimumSize(1020, 660)
         self.resize(1320, 840)
-        self._margin = 8
 
         set_animations(bool(store.settings.get("animations", True))
                        and not os.environ.get("OCELOT_NO_ANIM"))
@@ -763,7 +762,7 @@ class MainWindow(QWidget):
     # -------------------------------------------------- 构建
     def _build(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(self._margin, self._margin, self._margin, self._margin)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
         self.root = CardRoot()
@@ -1019,85 +1018,79 @@ class MainWindow(QWidget):
 
     # -------------------------------------------------- 窗口绘制 / 交互
     CARD_RADIUS = 12
+    # 边缘拖拽热区。卡片铺满整窗后没有透明留白了，热区按视觉边距给。
+    EDGE_HIT = 5
 
     def card_margin(self) -> int:
-        """当前该留多少阴影留白。每次都现算，不缓存——全屏 / 最大化
-        切换时 changeEvent 未必先于 resize 到达，缓存的 _margin 会短暂过期，
-        窗口边缘就露出一圈没重绘的透明边（用户说的「一圈线」）。
+        """卡片四周的留白，固定为 0。
+
+        老版本在窗口外留 8px 画投影，靠窗口透明度把投影合成到桌面上。
+        但 macOS 从最大化 / 全屏退回来之后会把这个窗口重新标记成不透明，
+        那 8px 立刻变成一圈白底方框 —— 圆角还在、外面多了个方块。
+        现在卡片铺满整个窗口，圆角交给窗口遮罩裁，投不投影都不影响观感。
         """
-        return 0 if self.isMaximized() else self._margin
+        return 0
 
     def card_rect(self) -> QRect:
-        """窗口卡片（去掉四周阴影留白）在自身坐标里的矩形。
-
-        背景遮罩按这块区域铺，才能和窗口的圆角、边框严丝合缝对齐。
-        """
-        m = self.card_margin()
-        if m == 0:
-            return self.rect()
-        return self.rect().adjusted(m, m, -m, -m)
+        """卡片在窗口自身坐标里的矩形（卡片铺满，所以就是 rect）。"""
+        return self.rect()
 
     def card_radius(self) -> int:
-        return 0 if self.isMaximized() else self.CARD_RADIUS
+        return 0 if (self.isMaximized() or self.isFullScreen()) else self.CARD_RADIUS
 
     def _round_corners(self) -> None:
-        """把内容层裁成圆角。
+        """把顶层窗口裁成圆角。
 
-        窗口自己是按圆角画的，但里面的侧栏 / 内容区都是矩形，会盖在圆角上，
-        四个角看起来就成了直角。这里给内容容器加一层圆角遮罩，让子控件收在弧线内。
-        遮罩边沿的锯齿在「卡片和内容同色」的前提下看不出来。
+        侧栏、内容区都是矩形，会盖住窗口自己画的圆角，四个角看着就是直角。
+        这里给窗口本身加圆角遮罩：子控件收在弧线内，系统那层背景也一起被裁掉，
+        窗口即使被系统改成不透明，也不会露出一块方形底板。
+        最大化 / 全屏时清掉，铺满整屏。
         """
-        root = getattr(self, "root", None)
-        if root is None:
+        if not getattr(self, "root", None):
             return
-        if self.isMaximized():
-            if getattr(self, "_mask_size", None) is not None:
-                self._mask_size = None
-                root.clearMask()
+        if self.isMaximized() or self.isFullScreen():
+            # 不讲条件地清一次：最大化时若还挂着圆角遮罩，屏幕四角会被啃掉一块
+            self._mask_size = None
+            if not self.mask().isEmpty():
+                self.clearMask()
+            if not self.root.mask().isEmpty():
+                self.root.clearMask()
             return
-        w, h = root.width(), root.height()
+        w, h = self.width(), self.height()
         if w < 32 or h < 32:
             return
         if getattr(self, "_mask_size", None) == (w, h):
             return
         self._mask_size = (w, h)
         path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, w, h), 12, 12)
-        root.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        path.addRoundedRect(QRectF(0, 0, w, h), self.CARD_RADIUS, self.CARD_RADIUS)
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        self.root.clearMask()
 
     def paintEvent(self, _e):
         t = theme()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        # 先整窗刷成透明：无边框透明窗口在全屏 / 最大化来回切换后，边缘那 8px
-        # 会留下上一次的像素，看起来像一圈半透明的线。每次重绘先清干净再画。
+        # 先整窗刷成透明，再画卡片：来回切全屏时边缘不会留下上一次的像素。
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
         p.fillRect(self.rect(), Qt.GlobalColor.transparent)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-        m = self.card_margin()
-        if m == 0:
-            # 最大化 / 全屏：铺满、不画圆角和阴影，也不要留任何透明缝。
+        radius = self.card_radius()
+        if radius == 0:
+            # 最大化 / 全屏：铺满、不画圆角，也不留透明缝。
             p.setPen(Qt.PenStyle.NoPen)
             p.fillRect(self.rect(), C(t.window))
             p.end()
             return
-        card = QRectF(self.rect()).adjusted(m, m, -m, -m)
-        # 外扩阴影：多层圆角矩形近似
-        for i in range(m, 0, -1):
-            alpha = int(26 * (1 - (i - 1) / max(1, m)) ** 2)
-            c = QColor(0, 0, 0, alpha if t.is_dark else alpha)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(c)
-            p.drawRoundedRect(card.adjusted(-i, -i + 1, i, i + 2), 12 + i, 12 + i)
-        # 画卡片本体时把描边笔收掉：之前那圈 border_strong 在浅色桌面上
-        # 看着就是「一圈透明的线」，卡片靠阴影和底色已经足够分明。
-        p.setPen(Qt.PenStyle.NoPen)
+        # 圆心内缩半像素，1px 描边才不会被裁掉一半
+        card = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(C(t.border), 1))
         p.setBrush(C(t.window))
-        p.drawRoundedRect(card, 12, 12)
+        p.drawRoundedRect(card, radius - 0.5, radius - 0.5)
         p.end()
 
     def _edge(self, pos: QPoint) -> Qt.Edge:
-        m = self._margin + 2
+        m = self.EDGE_HIT
         edges = Qt.Edge(0)
         if pos.x() <= m:
             edges |= Qt.Edge.LeftEdge
@@ -1140,17 +1133,13 @@ class MainWindow(QWidget):
         super().mousePressEvent(e)
 
     def mouseDoubleClickEvent(self, e):
-        if e.position().y() < 46 + self._margin:
+        if e.position().y() < 46:
             self.showMaximized() if not self.isMaximized() else self.showNormal()
 
     def changeEvent(self, e):
         super().changeEvent(e)
         if e.type() == QEvent.Type.WindowStateChange:
-            self._margin = 0 if self.isMaximized() else 8
-            lay = self.layout()
-            if lay is not None:
-                lay.setContentsMargins(self._margin, self._margin, self._margin, self._margin)
-            # 尺寸缓存清掉，强制按新状态重裁圆角；否则还原后还戴着全屏时清掉的 mask
+            # 尺寸缓存清掉，强制按新状态重裁圆角；否则还原后还戴着全屏时清掉的遮罩
             self._mask_size = None
             self._round_corners()
             self.update()

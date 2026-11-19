@@ -200,7 +200,7 @@ _EN: Dict[str, str] = {
 
     # 顶栏 / 菜单
     # 欢迎页
-    "接口调试、Mock、脚本与协作，一个窗口全搞定": "Debug APIs, mock servers, scripts and sync — all in one window",
+    "接口调试、Mock 服务、接口文档，离线可用": "Debug requests, run mock servers, write API docs — offline.",
     "从空白标签页开始": "Start from a blank tab", "打开命令面板": "Open Command Palette",
     "搜索请求或快速执行命令": "Search requests or run a command quickly",
     "配置环境变量": "Configure Environments", "用 {{变量}} 在环境间切换": "Switch environments with {{variables}}",

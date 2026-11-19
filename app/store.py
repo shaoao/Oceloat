@@ -19,9 +19,22 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.68"
+VERSION = "1.0.69"
 
 CHANGELOG = [
+    {
+        "version": "1.0.69",
+        "date": "2026-11-20",
+        "items": [
+            "修掉窗口「放大再缩小后变成方形透明块」的问题：卡片以前在四周留了 8px 画投影，"
+            "macOS 从最大化 / 全屏退出后会把这个窗口重新标记成不透明，那 8px 就成了白底方框。"
+            "现在卡片直接铺满窗口，圆角改由窗口遮罩裁出来，系统透不透明都不影响观感",
+            "窗口边缘换成 1px 细描边，代替原来那圈投影，浅色壁纸上也能看清边界",
+            "欢迎页简介改成「接口调试、Mock 服务、接口文档，离线可用」："
+            "原来那句「一个窗口全搞定」并不准确，这软件本来就有多个窗口",
+            "README 又精简了一轮：去掉堆砌的功能清单，改成讲清楚「为什么用它」和几件具体的事，篇幅短一半",
+        ],
+    },
     {
         "version": "1.0.68",
         "date": "2026-11-20",

@@ -2292,11 +2292,14 @@ def main() -> int:
         from app.store import VERSION as _V
         from app.store import new_request
 
-        # 1) 内容层必须被裁成圆角，否则四个角是直角
-        check("内容层有圆角遮罩", not w.root.mask().isEmpty(),
-              str(w.root.mask().boundingRect()))
-        check("遮罩尺寸跟内容层一致", w.root.mask().boundingRect().size() == w.root.size(),
-              f"{w.root.mask().boundingRect().size()} vs {w.root.size()}")
+        # 1) 窗口本身必须被裁成圆角：卡片铺满整窗，圆角只能由遮罩给出
+        check("窗口有圆角遮罩", not w.mask().isEmpty(),
+              str(w.mask().boundingRect()))
+        check("遮罩尺寸跟窗口一致", w.mask().boundingRect().size() == w.size(),
+              f"{w.mask().boundingRect().size()} vs {w.size()}")
+        # 卡片不再留透明留白：macOS 从最大化退回后会把它变成一圈白底方框
+        check("卡片不留投影留白", w.card_margin() == 0 and w.card_rect() == w.rect(),
+              f"{w.card_margin()} / {w.card_rect()}")
 
         # 2) 树选中行不该在缩进格上涂一块底色
         tree = JsonTree()

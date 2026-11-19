@@ -1,5 +1,19 @@
 # What's Changed
 
+## v1.0.69 — 2026-11-20
+
+**Fixed**
+- Fixed the window turning into a square, translucent-looking block after leaving maximize/fullscreen. The card used to keep 8px of transparent padding for a drop shadow; macOS re-flags the window as opaque when it comes back from fullscreen, so that padding showed up as a white rectangle around the rounded card. The card now fills the whole window and the corners are cut by a window mask, so the result is the same whether the compositor keeps the window translucent or not.
+- The rounded-corner mask is now always cleared while maximized (it previously could linger and clip the screen corners).
+- Replaced the drop shadow with a 1px hairline edge, so the window still reads clearly on a light wallpaper.
+
+**Changed**
+- Welcome tagline now reads "接口调试、Mock 服务、接口文档，离线可用". The old line promised everything in one window, which was not accurate — the app has several windows.
+- README trimmed to roughly half its length: what it is, how to install, the three things it does well, and a short reference section. Removed the feature-list padding.
+
+**Verified**
+- Smoke suite: 680 checks pass. Brand suite: 137 checks pass.
+
 ## v1.0.68 — 2026-11-20
 
 **Fixed**
