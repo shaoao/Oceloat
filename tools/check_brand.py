@@ -1,4 +1,4 @@
-"""v1.0.70 品牌标识专项自测。
+"""v1.0.71 品牌标识专项自测。
 
 覆盖：细线几何（尖耳 / 圆颊 / 窄下颌，额顶一阶连续、下颌不是平底、侧壁不直）、
 五官（竖椭圆眼 / 倒三角鼻 / 两颗豹斑）与按尺寸分级、位图真的画出了东西、
@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.70", VERSION == "1.0.70", VERSION)
-check("更新内容是 1.0.70", CHANGELOG[0]["version"] == "1.0.70")
+check("版本 1.0.71", VERSION == "1.0.71", VERSION)
+check("更新内容是 1.0.71", CHANGELOG[0]["version"] == "1.0.71")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -435,6 +435,33 @@ check("应用图标能用于打包", (ROOT / "docs" / "Ocelot.icns").exists()
 check("更新内容写了打包", any("打包" in x for x in ALL_ITEMS))
 check("更新内容写了体积与启动", any("62MB" in x for x in ALL_ITEMS)
       and any("0.6 秒" in x for x in ALL_ITEMS))
+
+# ---------------------------------------------------------------- 1.0.71 新增
+print("\n[1.0.71 新增]")
+_res = (ROOT / "app" / "resmon.py").read_text(encoding="utf-8")
+_trim = (ROOT / "app" / "memtrim.py").read_text(encoding="utf-8")
+_dlg_src = (ROOT / "app" / "dialogs.py").read_text(encoding="utf-8")
+check("资源管理器不再测内存", "process_memory" not in _res and "health_status" not in _res)
+check("文件管理有面包屑与筛选", "def _rebuild_crumbs" in _res and "i18n.placeholder" in _res)
+check("文件列表支持三列排序", "class SortHeader" in _res and '"size"' in _res
+      and '"time"' in _res)
+check("删除走系统废纸篓", "osascript" in _res and ".trash" in _res)
+check("有新建 / 重命名 / 删除", all(x in _res for x in
+      ("def _act_new_folder", "def _act_rename", "def _delete")))
+check("定时回收支持 macOS 与 Linux",
+      "malloc_zone_pressure_relief" in _trim and "malloc_trim" in _trim)
+check("回收只清可再生的缓存", "icons.clear_cache" in _trim and "gc.collect()" in _trim)
+check("AutoTrim 跟随设置启停", "def apply" in _trim and "auto_trim_min" in _trim)
+check("主窗口持有一个 AutoTrim", "self._auto_trim = AutoTrim(self.store, self)" in _mw_src)
+check("设置页有开关与间隔", "自动释放内存" in _dlg_src and "trim_seg" in _dlg_src)
+check("设置默认开启自动回收", '"auto_trim": True' in (ROOT / "app" / "store.py")
+      .read_text(encoding="utf-8"))
+check("i18n 登记了文件管理文案",
+      "Show in Finder" in (ROOT / "app" / "i18n.py").read_text(encoding="utf-8")
+      and "Automatic memory cleanup" in
+      (ROOT / "app" / "i18n.py").read_text(encoding="utf-8"))
+check("更新内容写了定时回收", any("自动释放内存" in x for x in ALL_ITEMS))
+check("更新内容写了文件管理", any("资源管理器彻底改成文件管理" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

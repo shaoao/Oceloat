@@ -19,9 +19,24 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.70"
+VERSION = "1.0.71"
 
 CHANGELOG = [
+    {
+        "version": "1.0.71",
+        "date": "2026-11-20",
+        "items": [
+            "新增「自动释放内存」：每隔一段时间在后台回收一次闲置内存 —— 清两轮 GC、"
+            "丢掉可再生的图标缓存，再让分配器把空闲页真正还给系统。默认 15 分钟一次，"
+            "在「设置 → 通用」里可以关掉或改成 5 / 30 分钟",
+            "资源管理器彻底改成文件管理：原来那块内存看板、健康分、趋势线全部删掉，"
+            "腾出来的地方给了真正能干活的界面 —— 面包屑导航、按名称 / 大小 / 时间排序、"
+            "筛选框、双击打开、在 Finder 中显示、新建文件夹、重命名、删除",
+            "删除走系统废纸篓，误删还能捡回来；文件夹在列表里永远排在文件前面",
+            "顶部只留一行占用概览：应用数据多大、几类文件各占多少、磁盘还剩多少，"
+            "旁边的「清理旧文件」一次清掉过期回收站、7 天前的自动备份和 AI 分析缓存",
+        ],
+    },
     {
         "version": "1.0.70",
         "date": "2026-11-20",
@@ -1399,6 +1414,9 @@ def _sample_state() -> Dict[str, Any]:
             "restore_session": True,
             "animations": True,
             "glass_all": False,
+            # 后台定时回收内存：默认开，15 分钟一次（见 app/memtrim.py）
+            "auto_trim": True,
+            "auto_trim_min": 15,
             "sidebar_width": 268,
             "sidebar_visible": True,
             "split_ratio": 0.46,

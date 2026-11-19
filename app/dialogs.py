@@ -1211,6 +1211,28 @@ class SettingsDialog(GlassDialog):
             self._row("请求已修改提醒", "改动请求后提示「下面是上一次的响应」，可随时关掉。",
                       self.stale_notice),
         )
+        # 自动回收内存：以前在资源管理器里是一块看板 + 一颗按钮，看的人多、
+        # 点的人少。改成默认在后台悄悄做，这里只留开关和间隔。
+        self.auto_trim = Switch(bool(s.get("auto_trim", True)))
+        self.auto_trim.toggled.connect(self._on_auto_trim)
+        minutes = max(5, min(30, int(s.get("auto_trim_min", 15) or 15)))
+        minutes = min((5, 15, 30), key=lambda x: abs(x - minutes))
+        self.trim_seg = SegmentedTabs([("5", "5 分钟"), ("15", "15 分钟"), ("30", "30 分钟")],
+                                      style="pill", height=26, font_size=11.5, pad_h=12)
+        self.trim_seg.set_current(str(minutes), emit=False)
+        self.trim_seg.changed.connect(self._on_trim_min)
+        self.trim_now = Button("立即释放", "broom", kind="subtle", height=27, padding=11,
+                               font_size=11.6, icon_size=12)
+        self.trim_now.clicked.connect(self._trim_now)
+        self.trim_note = Label(self._trim_note_text(), 10.6, theme().text_faint)
+        trim_card = self._card(
+            self._row("自动释放内存", "在后台定期回收闲置内存，把空闲页还给系统；"
+                      "只清可再生的缓存，不影响正在做的事。", self.auto_trim),
+            self._row("回收间隔", "太短没必要，太长又看不出效果；15 分钟适合大多数人。",
+                      self.trim_seg),
+            self._row("手动回收", "现在就想收一次，点这里。", self.trim_now,
+                      desc_label=self.trim_note),
+        )
         # 快捷键独立成页，这里只留一个入口 —— 键位表太长，塞在通用页里只会被挤扁
         jump = Button("去设置", "keyboard", kind="subtle", height=27, padding=11,
                       font_size=11.6, icon_size=12)
@@ -1219,7 +1241,55 @@ class SettingsDialog(GlassDialog):
             self._row("快捷键", "发送、搜索、切换标签等键位都可以改，也能整组恢复默认。",
                       jump),
         )
-        return self._page_shell("通用", "启动行为与编辑习惯。", block, keys_card)
+        return self._page_shell("通用", "启动行为与编辑习惯。", block, trim_card, keys_card)
+
+    # -------------------------------------------------- 自动回收内存
+    def _trim_note_text(self) -> str:
+        from . import memtrim
+
+        last = memtrim.last_report()
+        if not float(last.get("at") or 0):
+            return i18n.tr("本次启动还没回收过")
+        span = max(0.0, time.time() - float(last.get("at") or 0))
+        if span < 90:
+            when = i18n.tr("刚刚")
+        elif span < 3600:
+            when = i18n.trf("{n} 分钟前", n=int(span // 60))
+        else:
+            when = i18n.trf("{n} 小时前", n=int(span // 3600))
+        freed = int(last.get("freed") or 0)
+        if freed < 256 * 1024:
+            # 大多数时候本来就没什么可回收的，写「释放 0 B」只会让人怀疑没生效
+            return i18n.trf("上次整理完 · {when}", when=when)
+        from .cloud import fmt_size
+
+        return i18n.trf("上次释放 {size} · {when}", size=fmt_size(freed), when=when)
+
+    def _on_auto_trim(self, on: bool) -> None:
+        self.store.settings["auto_trim"] = bool(on)
+        self.trim_seg.setEnabled(bool(on))
+        self.trim_now.setEnabled(True)
+        self._save()
+
+    def _on_trim_min(self, key: str) -> None:
+        try:
+            self.store.settings["auto_trim_min"] = max(5, int(key))
+        except (TypeError, ValueError):
+            return
+        self._save()
+
+    def _trim_now(self) -> None:
+        from . import memtrim
+
+        self.trim_now.set_busy(True)
+        report = memtrim.trim()
+        self.trim_now.set_busy(False)
+        self.trim_now.spin_once(520)
+        self.trim_note.setText(self._trim_note_text())
+        freed = report.get("freed") or 0
+        self.trim_note.setStyleSheet(
+            f"color: {theme().success if freed > 256 * 1024 else theme().text_faint};"
+            " background: transparent;")
 
     def _goto_shortcuts(self) -> None:
         self.nav.set_key("shortcuts")
@@ -2372,7 +2442,8 @@ class SettingsDialog(GlassDialog):
         for attr, key in (("redirect", "follow_redirects"), ("verify", "verify_ssl"),
                           ("auto_name", "auto_name"), ("restore_session", "restore_session"),
                           ("stale_notice", "stale_notice"),
-                          ("glass_switch", "glass_all"), ("trash_enabled", "trash_enabled")):
+                          ("glass_switch", "glass_all"), ("trash_enabled", "trash_enabled"),
+                          ("auto_trim", "auto_trim")):
             wdg = getattr(self, attr, None)
             if wdg is not None:
                 s[key] = wdg.isChecked()

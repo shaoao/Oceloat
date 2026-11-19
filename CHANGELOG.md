@@ -1,5 +1,18 @@
 # What's Changed
 
+## v1.0.71 — 2026-11-20
+
+**Added**
+- Automatic memory cleanup: every 15 minutes the app collects the Python heap, drops the rebuildable icon cache and asks the allocator to return free pages to the OS (`malloc_zone_pressure_relief` on macOS, `malloc_trim` on Linux). Off by default would be wrong here — it is on, with a switch and a 5 / 15 / 30 minute interval under Settings → General, plus a "clean up now" button.
+
+**Changed**
+- The resource manager is now a file manager instead of a metrics dashboard. Process memory, system memory, the health score and the trend chart are gone; in their place: breadcrumb navigation, sorting by name / size / modified, a filter box, double-click to open, reveal in Finder, new folder, rename, and delete.
+- Deleting moves items to the system trash rather than unlinking them, so a misclick is recoverable. Folders always sort above files.
+- The top of the window is a single line of storage facts — app data size, breakdown by file kind, free disk — next to "Clean old files", which purges expired trash, backups older than 7 days and cached analyses.
+
+**Verified**
+- Smoke suite: 695 checks. Brand suite: 160 checks. Packaged-bundle self-test: 6/6.
+
 ## v1.0.70 — 2026-11-20
 
 **Added**

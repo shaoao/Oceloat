@@ -717,6 +717,11 @@ class MainWindow(QWidget):
         _install_ctx(QApplication.instance())
         self._build()
         self._install_shortcuts()
+        # 定时回收：默认 15 分钟一次，设置里可关或改间隔。放在主窗口里，
+        # 跟窗口同寿命，退出即停表，不留后台唤醒。
+        from .memtrim import AutoTrim
+
+        self._auto_trim = AutoTrim(self.store, self)
         self._restore_session()
         QTimer.singleShot(400, self._auto_start_mock)
         i18n.set_language(store.settings.get("language", "zh"), notify=False)
@@ -2442,7 +2447,7 @@ class MainWindow(QWidget):
         dlg.exec()
 
     def open_resources(self) -> None:
-        """打开资源管理器：内存 / 存储 / 运行时看板 + 维护动作。"""
+        """打开资源管理器：应用数据目录的文件管理（浏览 / 打开 / 重命名 / 删除）。"""
         from .resmon import ResourceDialog
 
         dlg = ResourceDialog(self.store, self,
@@ -2461,6 +2466,10 @@ class MainWindow(QWidget):
     def _on_settings_applied(self) -> None:
         self.response.set_stale_notice(
             bool(self.store.settings.get("stale_notice", True)))
+        # 自动回收的开关 / 间隔改了，立刻按新设置重排定时器
+        trim = getattr(self, "_auto_trim", None)
+        if trim is not None:
+            trim.apply()
 
     def _ai_explain_response(self) -> None:
         """分析当前响应页：命中缓存直接显示，否则按页签喂证据并流式输出。"""

@@ -1821,3 +1821,81 @@ _EN.update({
     "已删除 {n} 个旧备份 · {v}": "Removed {n} old backups · {v}",
     "没有超过 7 天的备份": "No backups older than 7 days",
 })
+
+# v1.0.71：资源管理器改成文件管理 + 定时回收内存
+_EN.update({
+    # 概览
+    "{n} 个文件": "{n} files",
+    "清理旧文件": "Clean old files",
+    "清掉过期回收站、7 天前的自动备份与 AI 分析缓存":
+        "Purge expired trash, backups older than 7 days and cached analyses",
+    "数据目录": "Data folder",
+
+    # 文件列表
+    "名称": "Name",
+    "大小": "Size",
+    "修改时间": "Modified",
+    "筛选文件…": "Filter files…",
+    "返回上级  ⌫": "Up one level  ⌫",
+    "重新读一遍目录  ⌘R": "Read the folder again  ⌘R",
+    "已刷新": "Refreshed",
+    "共 {n} 项": "{n} items",
+    "已选 {name} · {size}": "Selected {name} · {size}",
+    "没有匹配的文件": "No matching files",
+    "这个文件夹是空的": "This folder is empty",
+    "文件夹": "folder",
+    "文件": "file",
+
+    # 操作
+    "在 Finder 中显示": "Show in Finder",
+    "在系统文件管理器里定位当前目录": "Reveal the current folder in your file manager",
+    "已在 Finder 中显示": "Revealed in Finder",
+    "打不开系统文件管理器": "Could not open the file manager",
+    "新建文件夹": "New folder",
+    "在建当前目录下建一个文件夹": "Create a folder here",
+    "在当前目录下建一个文件夹": "Create a folder here",
+    "文件夹名称": "Folder name",
+    "建在当前目录下": "Created inside the current folder",
+    "已新建 {name}": "Created {name}",
+    "建不了：{why}": "Could not create: {why}",
+    "重命名": "Rename",
+    "重命名选中项  ↩": "Rename the selected item  ↩",
+    "新名称": "New name",
+    "已改名为 {name}": "Renamed to {name}",
+    "改不了：{why}": "Could not rename: {why}",
+    "同名文件已存在": "A file with that name already exists",
+    "删除": "Delete",
+    "移到系统废纸篓  ⌫": "Move to the system trash  ⌫",
+    "删除到废纸篓": "Move to trash",
+    "把{what}「{name}」移到废纸篓？还能从系统废纸篓捡回来。":
+        "Move {what} “{name}” to the trash? You can still restore it from there.",
+    "移到废纸篓": "Move to trash",
+    "已删除 {name}": "Deleted {name}",
+    "删不掉：{why}": "Could not delete: {why}",
+    "打开": "Open",
+    "复制路径": "Copy path",
+    "已复制路径": "Path copied",
+    "这个文件没有默认打开方式": "No default app for this file",
+    "已用默认方式打开 {name}": "Opened {name} with the default app",
+
+    # 定时回收
+    "自动释放内存": "Automatic memory cleanup",
+    "在后台定期回收闲置内存，把空闲页还给系统；只清可再生的缓存，不影响正在做的事。":
+        "Periodically hands idle memory back to the system. Only cache that can be "
+        "rebuilt is dropped, so nothing you are doing is affected.",
+    "回收间隔": "Interval",
+    "太短没必要，太长又看不出效果；15 分钟适合大多数人。":
+        "Too often is pointless, too rare is invisible — 15 minutes suits most people.",
+    "手动回收": "Run it now",
+    "现在就想收一次，点这里。": "Run one pass right now.",
+    "立即释放": "Clean up now",
+    "本次启动还没回收过": "Not run yet this session",
+    "上次释放 {size} · {when}": "Last pass freed {size} · {when}",
+    "上次整理完 · {when}": "Last pass done · {when}",
+    "刚刚": "just now",
+    "{n} 分钟前": "{n} min ago",
+    "{n} 小时前": "{n} h ago",
+    "5 分钟": "5 min",
+    "15 分钟": "15 min",
+    "30 分钟": "30 min",
+})

@@ -3674,7 +3674,7 @@ def main() -> int:
         check("SIO ACK 模板英文", _i18n.trf("等待 ACK · {id}", id=2) == "Awaiting ACK · 2")
         _i18n.set_language(old_lang, notify=False)
 
-        # --- 资源管理器：菜单入口 + 能建能刷 + 维护动作
+        # --- 资源管理器：菜单入口 + 文件浏览 + 维护动作
         from app import resmon as _resmon
         menu, acts = w._settings_menu()
         labels = [a.text() for a in menu.actions()]
@@ -3684,19 +3684,77 @@ def main() -> int:
                                       tabs_count=len(w.tabs_data))
         _dlg.show()
         app.processEvents()
-        check("资源管理器能构建", _dlg.mem_value.text() not in ("", "—"),
-              _dlg.mem_value.text())
-        check("资源管理器窗口更小", _dlg.width() <= 760 and _dlg.height() <= 520,
+        check("资源管理器能构建", _dlg.total_label.text() not in ("", "—"),
+              _dlg.total_label.text())
+        check("资源管理器窗口更适合浏览",
+              640 <= _dlg.width() <= 980 and 480 <= _dlg.height() <= 700,
               f"{_dlg.width()}x{_dlg.height()}")
-        check("资源管理器三块内容", len(_dlg.storage_cells) == 4
-              and len(_dlg.health_hints) == 2)
-        check("资源管理器显示健康分", _dlg.health_ring._center.isdigit(),
-              _dlg.health_ring._center)
-        check("资源管理器内存趋势有采样", len(_dlg._samples) >= 1)
+        check("内存看板已移除", not hasattr(_dlg, "mem_value")
+              and not hasattr(_dlg, "health_ring"))
+        check("顶部有占用概览", len(_dlg._legend) == 4 and _dlg.bar._segs != [])
+        check("列表读到了数据目录", _dlg.browser.path == _resmon.app_root())
+        check("底部状态默认显示总数", "项" in _dlg.status.text() or _dlg.status.text() == "",
+              _dlg.status.text())
+
+        # 文件操作：拿临时目录试，不碰真实数据
+        _tmp = Path(tempfile.mkdtemp(prefix="ocelot-files-"))
+        (_tmp / "b.txt").write_text("hello", encoding="utf-8")
+        (_tmp / "a.txt").write_text("hi", encoding="utf-8")
+        (_tmp / "sub").mkdir()
+        (_tmp / "sub" / "c.txt").write_text("c", encoding="utf-8")
+        _dlg.browser.set_path(_tmp)
+        _dlg.browser.reload()
+        app.processEvents()
+        names = [r.path.name for r in _dlg.browser._rows]
+        check("目录排在文件前面", names[0] == "sub", str(names))
+        check("按名称升序", names[1:] == ["a.txt", "b.txt"], str(names))
+        _dlg.browser._on_sort("size", True)
+        check("切换到按大小倒序", _dlg.browser.header.key == "size"
+              and _dlg.browser.header.reverse and _dlg.browser._rows[0].path.name == "sub",
+              str([r.path.name for r in _dlg.browser._rows]))
+        _dlg.browser.filter.setText("a.t")
+        app.processEvents()
+        check("筛选框生效",
+              [r.path.name for r in _dlg.browser._rows] == ["a.txt"],
+              str([r.path.name for r in _dlg.browser._rows]))
+        _dlg.browser.filter.setText("")
+        app.processEvents()
+        _dlg.browser.set_path(_tmp / "sub")
+        check("能进入子目录", _dlg.browser.path == _tmp / "sub")
+        _dlg.browser.go_up()
+        check("能返回上级", _dlg.browser.path == _tmp)
+        _row = next(r for r in _dlg.browser._rows if r.path.name == "a.txt")
+        _dlg.browser._select(_row.path)
+        app.processEvents()
+        check("选中后按钮可用", _dlg.delete_btn.isEnabled() and _dlg.rename_btn.isEnabled())
+        check("状态栏显示选中项", "a.txt" in _dlg.status.text(), _dlg.status.text())
+        check("文件大小读得对", _row.size_bytes == 2, str(_row.size_bytes))
+
         _dlg._act_clean()
-        check("一键清理后缓存为 0", len(w._analysis_cache) == 0)
+        check("清理旧文件后缓存为 0", len(w._analysis_cache) == 0)
+
+        # --- 定时回收内存
+        from app import memtrim as _memtrim
+        _rep = _memtrim.trim()
+        check("回收返回报告", "freed" in _rep and _rep["at"] > 0, str(_rep))
+        check("默认 15 分钟一次", w._auto_trim.interval_ms() == 900_000,
+              str(w._auto_trim.interval_ms()))
+        check("定时器在跑", w._auto_trim.is_active())
+        w.store.settings["auto_trim"] = False
+        w._auto_trim.apply()
+        check("关掉后不再唤醒", not w._auto_trim.is_active())
+        w.store.settings["auto_trim"] = True
+        w.store.settings["auto_trim_min"] = 5
+        w._auto_trim.apply()
+        check("间隔跟随设置", w._auto_trim.interval_ms() == 300_000,
+              str(w._auto_trim.interval_ms()))
+        w.store.settings["auto_trim_min"] = 15
+        w._auto_trim.apply()
+
         _dlg.done(0)
-        check("关窗后停止采样", not _dlg._timer.isActive())
+        check("关窗后停止刷新", not _dlg._timer.isActive())
+        import shutil as _shutil
+        _shutil.rmtree(_tmp, ignore_errors=True)
 
         return 0
 

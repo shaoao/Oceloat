@@ -17,7 +17,7 @@ python3 main.py
 
 Python 3.10+，PyQt6 6.5+。macOS 上也可以双击 `启动 Ocelot.command`。第一次打开自带几条示例请求，点一下就能发。
 
-不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.70.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
+不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.71.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
 
 ## 发请求
 
@@ -56,6 +56,14 @@ WebSocket 和 Socket.IO 是独立的请求类型，有整页界面：文本 / JS
 
 ![接口文档](docs/shot-doc.png)
 
+## 文件和占用
+
+设置菜单里的「资源管理器」是个文件管理器，不是仪表盘：进目录、按名称 / 大小 / 时间排序、筛选、双击打开、在 Finder 中显示、新建文件夹、重命名，删除走系统废纸篓，删错了还能捡回来。
+
+顶部一行说清应用数据占多少、哪类文件占多少、磁盘还剩多少。旁边那颗「清理旧文件」清的是过期回收站、7 天前的自动备份和 AI 分析缓存 —— 都是删了不丢数据的东西。
+
+内存不在这儿看。程序默认每 15 分钟在后台收一次：跑两轮 GC、丢掉可再生的图标缓存，再让分配器把空闲页真正还给系统。「设置 → 通用」里能关掉、改成 5 或 30 分钟，也能立刻来一次。
+
 ## 其他
 
 - 命令面板 ⌘K：搜请求、切环境、跑命令
@@ -90,7 +98,7 @@ WebSocket 和 Socket.IO 是独立的请求类型，有整页界面：文本 / JS
 代码在 `app/` 下，一个功能一个文件，界面全部用 QPainter 画，不引图片资源。
 
 ```bash
-python3 tools/smoke.py        # 680 项自测，会真起 HTTP / WebSocket 服务
+python3 tools/smoke.py        # 695 项自测，会真起 HTTP / WebSocket 服务
 python3 tools/check_brand.py  # 标识、版本与打包配方检查
 python3 tools/readme_shots.py # 重新生成上文截图
 python3 tools/build_app.py    # 打包成 Ocelot.app + dmg（约 62MB / 27MB）
