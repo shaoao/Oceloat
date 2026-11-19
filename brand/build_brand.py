@@ -1,8 +1,7 @@
-"""生成 Ocelot 的剪影标识资产（SVG）。
+"""生成 Ocelot 的线条标识资产（SVG）。
 
 几何直接取自应用本体 `app/brand.py`，保证「应用里看到的」和「导出的资产」
-是同一个形——不再有第二份手抄的坐标。剪影是填充路径（fill-rule: evenodd），
-腹部与眼睛两处负空间由子路径自然挖开。
+是同一条曲线——不再有第二份手抄的坐标。
 
 输出：主标（浅色 / 深色 / 实心）、应用图标（白底 / 深底）、横向组合、字标。
 文字仍用 QPainterPath 转成真实路径，SVG 不依赖安装字体。
@@ -20,6 +19,8 @@ from PyQt6.QtGui import QGuiApplication, QPainterPath, QTransform  # noqa: E402
 
 OUT = Path(__file__).resolve().parent
 APP = None
+
+SW = 4.3          # 与 app/brand.py 的 4.5% 线宽对齐（96 画布 → 4.32）
 
 
 def _d(path: QPainterPath, scale: float = 1.0) -> str:
@@ -47,14 +48,25 @@ def _d(path: QPainterPath, scale: float = 1.0) -> str:
     return " ".join(out)
 
 
-def mark_d() -> str:
-    from app.brand import mark_path
-    return _d(mark_path())
+def head_d() -> str:
+    from app.brand import outline
+    return _d(outline())
 
 
-def mark(color: str = "#111111") -> str:
-    return f'<path d="{mark_d()}" fill="{color}" fill-rule="evenodd"/>'
+def spots() -> tuple[tuple[float, float, float], ...]:
+    from app.brand import DOTS
+    return DOTS
 
+
+def mark(color: str = "#111111", sw: float = SW, with_spots: bool = True) -> str:
+    out = (
+        f'<path d="{head_d()}" fill="none" stroke="{color}" stroke-width="{sw:.2f}" '
+        f'stroke-linecap="round" stroke-linejoin="round"/>'
+    )
+    if with_spots:
+        for x, y, r in spots():
+            out += f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{r:.2f}" fill="{color}"/>'
+    return out
 
 
 # ---------------------------------------------------------------- 文字 → 路径
@@ -101,19 +113,20 @@ def build() -> None:
     global APP
     APP = QGuiApplication.instance() or QGuiApplication(sys.argv)
 
-    # 主标：深色用于浅底，反白用于深底
+    # 主标：深色用于浅底，反白用于深底；实心版留给极小尺寸
     (OUT / "ocelot-mark.svg").write_text(svg(96, 96, mark("#111111")), "utf-8")
     (OUT / "ocelot-mark-inverse.svg").write_text(svg(96, 96, mark("#F2F2F5")), "utf-8")
-    (OUT / "ocelot-mark-solid.svg").write_text(svg(96, 96, mark("#111111")), "utf-8")
+    (OUT / "ocelot-mark-solid.svg").write_text(
+        svg(96, 96, f'<path d="{head_d()}" fill="#111111"/>'), "utf-8")
 
-    # 应用图标：白底 + 近黑剪影（与应用内 Dock 图标一致），另出深底反白一版
+    # 应用图标：白底 + 近黑细线（与应用内 Dock 图标一致），另出深底反白一版
     S, pad, radius = 1024, 208, 232
     size = S - pad * 2
     for name, bg, fg in (("ocelot-icon.svg", "#FFFFFF", "#14141A"),
                          ("ocelot-icon-light.svg", "#14141A", "#F2F2F5")):
         body = (f'<rect width="{S}" height="{S}" rx="{radius}" fill="{bg}"/>'
                 f'<g transform="translate({pad} {pad}) scale({size / 96:.4f})">'
-                f'{mark(fg)}</g>')
+                f'{mark(fg, SW * 96 / size)}</g>')
         (OUT / name).write_text(svg(S, S, body), "utf-8")
 
     # 横向组合：标 + 字（深浅两版）
@@ -123,7 +136,7 @@ def build() -> None:
     for name, fg in (("ocelot-lockup.svg", "#111111"),
                      ("ocelot-lockup-inverse.svg", "#F2F2F5")):
         body = (f'<g transform="translate(0 {(h - mark_px) / 2:.1f}) '
-                f'scale({mark_px / 96:.4f})">{mark(fg)}</g>'
+                f'scale({mark_px / 96:.4f})">{mark(fg, SW * 96 / mark_px)}</g>'
                 f'<g transform="translate({mark_px + gap} {h / 2 - wh / 2:.2f})">'
                 f'<path d="{d}" fill="{fg}"/></g>')
         (OUT / name).write_text(svg(mark_px + gap + word_px, h, body), "utf-8")

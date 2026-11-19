@@ -1,11 +1,13 @@
-"""v1.0.60 品牌标识专项自测。
+"""v1.0.61 品牌标识专项自测。
 
-覆盖：剪影几何（头身相连、腹部与眼睛是真的负空间、尾巴伸到身后）、
-位图真的画出了东西、白底应用图标、悬浮动画（睁眼 + 甩尾 + 上浮）、
-五处接线（标题栏 / 欢迎页 / 关于页 / 响应空状态 / 窗口图标）、主题色随主题变化。
+覆盖：细线几何（尖耳 / 圆颊 / 窄下颌，额顶一阶连续、下颌不是平底、侧壁不直）、
+位图真的画出了东西、白底应用图标、墨线描出动画真的在推进（而不是一次点亮）、
+笔尖拖影与斑点柔光的时机、悬停写完会轻轻回位、五处接线（标题栏 / 欢迎页 /
+关于页 / 响应空状态 / 窗口图标）、主题色随主题变化。
 """
 from __future__ import annotations
 
+import math
 import os
 import sys
 import tempfile
@@ -62,24 +64,50 @@ def wait(ms: int) -> None:
 print("\n[几何]")
 path = brand.outline()
 bounds = path.boundingRect()
-whole = brand.mark_path()
-wb = whole.boundingRect()
 check("画布 96 单位", brand.BOX == 96.0, str(brand.BOX))
-check("主体是一条闭合填充路径", path.elementCount() > 40, str(path.elementCount()))
-check("主体有负空间（多段子路径）", len(path.toSubpathPolygons()) >= 2,
-      str(len(path.toSubpathPolygons())))
-check("整枚标识留在画布内",
-      4 < wb.left() and wb.right() < 92 and 6 < wb.top() and wb.bottom() < 92, str(wb))
-check("标识接近满画布（宽 60~84）", 60 <= wb.width() <= 84, str(wb.width()))
-check("高度 70~84", 70 <= wb.height() <= 84, str(wb.height()))
-check("尾巴伸到身体左侧", brand.tail_path().boundingRect().left() < bounds.left() - 4,
-      f"{brand.tail_path().boundingRect().left():.1f} vs {bounds.left():.1f}")
-check("腹部是真的挖空", not path.contains(QPointF(50.0, 74.0)))
-check("眼睛是真的挖空", not path.contains(QPointF(brand.EYE[0], brand.EYE[1])),
-      str(brand.EYE))
-check("头部连着身体（不悬空）", path.contains(QPointF(64.0, 44.0)))
-check("后腿与身体相连", path.contains(QPointF(33.0, 64.0)))
-check("尾巴根部埋进身体", path.contains(QPointF(33.0, 56.0)))
+check("轮廓是一笔闭合", path.elementCount() > 8, str(path.elementCount()))
+check("轮廓左右对称",
+      abs((bounds.left() - 48.0) + (bounds.right() - 48.0)) < 0.5, str(bounds))
+check("耳朵到下颌的高度对得上", 64 <= bounds.height() <= 70, str(bounds.height()))
+check("轮廓长度合理", 200 < path.length() < 300, str(path.length()))
+check("线宽只占 4% 左右", brand.STROKE_PX <= 0.045, str(brand.STROKE_PX))
+
+
+def heading(u0: float, u1: float) -> float:
+    a = path.pointAtPercent(u0)
+    b = path.pointAtPercent(u1)
+    return math.atan2(b.y() - a.y(), b.x() - a.x())
+
+
+# 额顶：左右两段在 u=0.5（x=48）处相接，接缝两侧的切线必须是同一方向
+left_ang = heading(0.492, 0.4995)
+right_ang = heading(0.5005, 0.508)
+_diff = abs((right_ang - left_ang + math.pi) % (2 * math.pi) - math.pi)
+check("额顶没有折角（切线连续）", _diff < 0.12,
+      f"{math.degrees(_diff):.1f}°")
+
+# 下颌：闭合点上下的切线连续 → 底是圆弧收口，不是「平底 + 突然转角」
+_b0 = heading(0.980, 0.9994)
+_b1 = heading(0.0006, 0.020)
+_bd = abs((_b1 - _b0 + math.pi) % (2 * math.pi) - math.pi)
+check("下颌是圆弧收口，不是平底", _bd < 0.16, f"{math.degrees(_bd):.1f}°")
+check("下颌比脸颊窄（收进去）",
+      abs(path.pointAtPercent(0.06).x() - 48.0) < (bounds.width() / 2) * 0.78,
+      f"{abs(path.pointAtPercent(0.06).x() - 48.0):.1f}")
+
+# 两块斑的墨线时机必须贴它们在轮廓上的真实位置
+from app.brand import DOT_U  # noqa: E402
+
+for (x, y, _r), u in zip(brand.DOTS, DOT_U):
+    near = min((abs(path.pointAtPercent(i / 400.0).x() - x)
+                + abs(path.pointAtPercent(i / 400.0).y() - y), i / 400.0)
+               for i in range(401))
+    check(f"斑点 ({x:.0f},{y:.0f}) 的亮起时机跟着笔尖", abs(near[1] - u) < 0.10,
+          f"{u:.2f} vs {near[1]:.2f}")
+check("两块斑在脸内部",
+      all(abs(x - 48.0) < 24 and 30 < y < 72 for x, y, _r in brand.DOTS),
+      str(brand.DOTS))
+check("两块斑一大一小", brand.DOTS[0][2] > brand.DOTS[1][2], str(brand.DOTS))
 check("标识带静息呼吸", hasattr(brand.BrandMark(48), "_breathe"))
 
 # ---------------------------------------------------------------- 位图
@@ -108,59 +136,36 @@ check("图标四角透明", _pm.pixelColor(1, 1).alpha() < 40,
 print("\n[动画]")
 
 
-def render(t: float, side: int = 200) -> QPixmap:
-    pm = QPixmap(side, side)
+def bright_ratio(t: float) -> float:
+    """把 t 时刻的标识画出来，统计「亮到接近主题文字色」的像素占比。"""
+    pm = QPixmap(200, 200)
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    brand._paint_mark(p, float(side), QColor("#7A7A84"), QColor("#F2F2F5"), t, 0.0)
+    brand._paint_mark(p, 200.0, QColor("#7A7A84"), QColor("#F2F2F5"), t, 0.0)
     p.end()
-    return pm
+    img = pm.toImage()
+    hit = total = 0
+    for y in range(0, img.height(), 2):
+        for x in range(0, img.width(), 2):
+            c = img.pixelColor(x, y)
+            if c.alpha() > 60:
+                total += 1
+                if c.lightness() > 185:
+                    hit += 1
+    return hit / max(total, 1)
 
 
-def at(img: QPixmap, x: float, y: float, t: float, side: int = 200):
-    k = side / brand.BOX * 0.94 * (1.0 + 0.035 * t)
-    px = side / 2.0 + (x - brand.CENTER) * k
-    py = side / 2.0 - side * 0.010 * t + (y - brand.VIEW_CY) * k
-    return img.toImage().pixelColor(int(round(px)), int(round(py)))
-
-
-img0, img1 = render(0.0), render(1.0)
-c0 = at(img0, brand.EYE[0], brand.EYE[1], 0.0)
-c1 = at(img1, brand.EYE[0], brand.EYE[1], 1.0)
-check("静止时眼睛是空的", c0.alpha() < 70, f"alpha={c0.alpha()}")
-check("悬浮时眼睛亮起来", c1.alpha() > 200 and c1.lightness() > 200,
-      f"alpha={c1.alpha()} L={c1.lightness()}")
-
-def left_diff(a: QPixmap, b: QPixmap, side: int = 200) -> int:
-    """左侧（尾巴独占的区域）两帧之间有多少像素变了。"""
-    ia, ib = a.toImage(), b.toImage()
-    k = side / brand.BOX * 0.94
-    x0 = int(side / 2.0 + (5.0 - brand.CENTER) * k)
-    x1 = int(side / 2.0 + (30.0 - brand.CENTER) * k)
-    y0 = int(side / 2.0 + (12.0 - brand.VIEW_CY) * k)
-    y1 = int(side / 2.0 + (62.0 - brand.VIEW_CY) * k)
-    n = 0
-    for py in range(max(0, y0), min(side, y1)):
-        for px in range(max(0, x0), min(side, x1)):
-            if abs(ia.pixelColor(px, py).alpha() - ib.pixelColor(px, py).alpha()) > 60:
-                n += 1
-    return n
-
-
-check("尾巴在左侧有实体", at(img0, 14.7, 38.2, 0.0).alpha() > 120,
-      f"alpha={at(img0, 14.7, 38.2, 0.0).alpha()}")
-check("悬浮时尾巴甩动（左侧像素变化）", left_diff(img0, img1) > 120,
-      str(left_diff(img0, img1)))
-
-body0 = at(img0, 48.0, 55.0, 0.0)
-body1 = at(img1, 48.0, 55.0, 1.0)
-check("主体始终是实心的", body0.alpha() > 240 and body1.alpha() > 240,
-      f"{body0.alpha()} / {body1.alpha()}")
-check("甩尾是绕尾根的旋转",
-      "p.rotate(swing)" in (ROOT / "app" / "brand.py").read_text(encoding="utf-8"))
-check("眼睛光点是 out-back bloom",
-      "_out_back(_clamp(t * 1.25))" in (ROOT / "app" / "brand.py").read_text(encoding="utf-8"))
+r0, r3, r6, r9 = bright_ratio(0.0), bright_ratio(0.3), bright_ratio(0.6), bright_ratio(1.0)
+check("静止时没有一条亮线", r0 < 0.06, f"{r0:.3f}")
+check("动画前半段只亮了一小段", 0.05 < r3 < 0.55, f"{r3:.3f}")
+check("中段比前段更亮", r6 > r3 + 0.05, f"{r6:.3f} vs {r3:.3f}")
+check("写完时整条线都亮", r9 > 0.85, f"{r9:.3f}")
+_src = (ROOT / "app" / "brand.py").read_text(encoding="utf-8")
+check("虚线单位按笔宽换算", "units = length / max(width" in _src)
+check("笔尖带拖尾（书写有速度感）", "尾迹" in _src)
+check("斑点亮起是柔光，不是描圈", "柔光" in _src)
+check("悬停写完会轻轻回位", "self._run(0.88" in _src)
 
 mark = brand.BrandMark(21)
 mark.show()
@@ -231,11 +236,13 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.60", VERSION == "1.0.60", VERSION)
-check("更新内容是 1.0.60", CHANGELOG[0]["version"] == "1.0.60")
-check("更新内容写了剪影标识", any("剪影" in x for x in CHANGELOG[0]["items"]))
-check("更新内容写了悬浮动画",
-      any("尾巴" in x or "睁眼" in x for x in CHANGELOG[0]["items"]))
+check("版本 1.0.61", VERSION == "1.0.61", VERSION)
+check("更新内容是 1.0.61", CHANGELOG[0]["version"] == "1.0.61")
+check("更新内容写了品牌标识", any("标识" in x for x in CHANGELOG[0]["items"]))
+check("更新内容写了墨线动画",
+      any("墨线" in x or "描出" in x for x in CHANGELOG[0]["items"]))
+check("更新内容写了白底图标",
+      any("白底" in x for x in CHANGELOG[0]["items"]))
 mw_src = (ROOT / "app" / "main_window.py").read_text(encoding="utf-8")
 check("主窗口导入了 BrandMark", "from .brand import BrandMark" in mw_src)
 check("启动时设置应用图标", "app.setWindowIcon" in (ROOT / "main.py").read_text(encoding="utf-8"))
