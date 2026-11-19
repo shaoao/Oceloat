@@ -41,7 +41,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import i18n, icons
+from . import brand as brand_mod, i18n, icons
 from .anim import animations_on as _animations_on, running as _anim_running, stop as _anim_stop
 from .i18n import tr as _tr
 from .theme import C, S, font, mono, px, theme
@@ -1472,29 +1472,44 @@ class EmptyState(QWidget):
     """空状态：环形图标 + 标题 + 副标题 + 快捷键提示。"""
 
     def __init__(self, icon_name: str = "send", title: str = "", subtitle: str = "",
-                 hint: str = "", parent=None):
+                 hint: str = "", parent=None, brand_mark: bool = False):
         super().__init__(parent)
         self._icon = icon_name
         self._title = title
         self._subtitle = subtitle
         self._hint = hint
+        # 品牌位：用线条标识代替「圆环 + 图标」，进页面时自己描一遍
+        self._brand = brand_mark
+        self.mark = None
+        if brand_mark:
+            self.mark = brand_mod.BrandMark(px(56), self, autoplay=True,
+                                            token="text_faint", hover_token="text")
+            self.setMouseTracking(True)
 
     def set_text(self, title: str, subtitle: str = "", hint: str = "") -> None:
         self._title, self._subtitle, self._hint = title, subtitle, hint
         self.update()
+
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        if self.mark is not None:
+            cx, cy = self.width() / 2, self.height() / 2 - px(14)
+            side = self.mark.width()
+            self.mark.move(int(cx - side / 2), int(cy - px(58) - side / 2 + px(27)))
 
     def paintEvent(self, _e):
         t = theme()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         cx, cy = self.width() / 2, self.height() / 2 - px(14)
-        # 圆环（尺寸都跟着界面字号走，150% 时不会和下面的文字叠在一起）
-        ring = QRectF(cx - px(27), cy - px(62), px(54), px(54))
-        p.setPen(QPen(C(t.border_strong), 1))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(ring)
-        pm = icons.pixmap(self._icon, t.text_faint, px(22), 1.5)
-        p.drawPixmap(QPointF(cx - px(11), cy - px(62) + px(16)), pm)
+        if not self._brand:
+            # 圆环（尺寸都跟着界面字号走，150% 时不会和下面的文字叠在一起）
+            ring = QRectF(cx - px(27), cy - px(62), px(54), px(54))
+            p.setPen(QPen(C(t.border_strong), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(ring)
+            pm = icons.pixmap(self._icon, t.text_faint, px(22), 1.5)
+            p.drawPixmap(QPointF(cx - px(11), cy - px(62) + px(16)), pm)
         p.setFont(font(13.5, QFont.Weight.DemiBold))
         p.setPen(C(t.text_dim))
         p.drawText(QRectF(cx - px(200), cy + px(2), px(400), px(22)),

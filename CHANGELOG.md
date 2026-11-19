@@ -1,5 +1,21 @@
 # What's Changed
 
+## v1.0.59 — 2026-11-19
+
+**Changed**
+- **The mark is redrawn thinner and sharper.** Stroke went from 5 to 4.3 units (~4.5% of the size) and the head is now one continuous curve — pointed ears, round cheeks, narrow chin — so it no longer smears into a blob at 21px in the title bar.
+- **Hover animation is now "ink writing itself"**: a bright line leaves the chin, traces the whole contour, a small firefly rides the pen tip, and each spot blooms as the ink reaches it. The mark lifts, a faint light rises around it, and on leave the ink retracts along the same path in 620ms.
+- Fixed why the old animation looked static: Qt measures dash length in pen widths, so the whole outline lit up at once instead of being drawn.
+- The animation is no longer clipped by the widget bounds (6% inner margin, no more head tilt).
+- At 40px and up the mark breathes — one 7-second cycle, so it is never quite still.
+
+**Added**
+- The dock icon is now a white rounded square with near-black line work, clean on any wallpaper.
+- The response panel's "ready" empty state uses the brand mark and draws it once on open.
+
+**Verified**
+- Targeted and full smoke checks pass.
+
 ## v1.0.58 — 2026-11-19
 
 **Added**

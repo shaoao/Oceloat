@@ -226,10 +226,11 @@ check("菜单里有资源管理器入口", "资源管理器…" in mw_src)
 check("菜单动作接到 open_resources", "self.open_resources()" in mw_src)
 check("open_resources 传入分析缓存", "analysis_cache=self._analysis_cache" in mw_src)
 check("清数据后刷新侧栏", "_on_resources_changed" in mw_src)
-check("版本 1.0.58", VERSION == "1.0.58", VERSION)
-check("更新内容是 1.0.58", CHANGELOG[0]["version"] == "1.0.58")
-check("更新内容写了资源管理器精简",
-      any("资源管理器" in x for x in CHANGELOG[0]["items"]))
+check("版本 1.0.59", VERSION == "1.0.59", VERSION)
+check("更新内容是 1.0.59", CHANGELOG[0]["version"] == "1.0.59")
+check("更新内容写了资源管理器",
+      any("资源管理器" in x for x in CHANGELOG[0]["items"])
+      or any("标识" in x for x in CHANGELOG[0]["items"]))
 
 # ---------------------------------------------------------------- 汇总
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")

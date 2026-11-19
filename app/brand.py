@@ -1,14 +1,20 @@
-"""Ocelot 品牌标识：豹猫头线条标。
+"""Ocelot 品牌标识：豹猫头线条标（细线版）。
 
-几何与 `brand/ocelot-mark.svg` 完全一致（96 单位画布、5 单位描边、无五官、
-左脸大斑 + 下颌小斑），这里用 QPainterPath 重新构建，好处是：
+设计意图是「一笔细线」：96 单位画布上只用一条 ~4 单位的线勾出头部，
+尖耳、圆颊、窄下颌，脸里落两小块斑（左颊大、下颌小，刻意不对称，
+避免读成一张脸）。线一定要细——细才有呼吸感，粗了就成了剪影。
 
-* 任意尺寸矢量渲染，不依赖 QtSvg，也不吃位图内存；
-* 颜色跟着主题走（深色下偏白、浅色下偏黑），切换主题不用换资源；
-* 可以在标题栏 / 关于页做「描边沿着轮廓自己画一遍」的悬浮动画。
+对外四样东西：
 
-对外三样东西：`mark_pixmap()` 出位图、`app_icon()` 出 QIcon、
-`BrandMark` 是带悬浮动画的控件。
+* `outline()`     —— 轮廓路径（闭合，一笔）；
+* `mark_pixmap()` —— 任意尺寸位图，2x 设备像素，Retina 下不糊；
+* `app_icon()`    —— Dock 图标，白底 + 深色线条；
+* `BrandMark`     —— 带「墨线描出 / 萤火绕行 / 静息呼吸」的控件。
+
+鼠标移上去时不是简单变个色，而是：一条亮线从下颌左侧出发，沿着轮廓
+一路把整条线重新「写」一遍，笔尖是一颗小小的萤火，写完后萤火淡去、
+线条稳稳停在最亮的状态，整枚标识轻轻上浮，周围浮起一层极淡的光。
+移开时这条墨线再原路收回去（不是淡出，是「收笔」）。
 """
 from __future__ import annotations
 
@@ -25,39 +31,73 @@ from PyQt6.QtCore import (
     QTimer,
     QVariantAnimation,
 )
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PyQt6.QtGui import (
+    QColor,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QRadialGradient,
+)
 from PyQt6.QtWidgets import QWidget
 
 from .theme import C, theme
 
 # ---------------------------------------------------------------- 几何
-BOX = 96.0                      # 设计画布
-CX, CY, R = 48.0, 52.0, 27.0    # 脸部圆：圆心、半径
-EAR_L, EAR_R = (23.0, 11.0), (73.0, 11.0)
-CROWN_L, CROWN_R = (38.77, 26.63), (57.23, 26.63)
-CHEEK_L, CHEEK_R = (28.58, 33.24), (67.42, 33.24)
-DOTS = ((40.0, 45.0, 3.6), (55.5, 58.0, 2.5))
-STROKE = 5.0                    # 描边宽度（画布单位）
-VIEW_CY = 45.0                  # 内容视觉中心（耳朵比下颌高，重心偏上）
+BOX = 96.0                       # 设计画布
+CENTER = 48.0                    # 画布横轴中心
+STROKE_PX = 0.045                # 描边 ≈ 尺寸的 4.5%（细线，小尺寸靠下限兜底）
+MIN_STROKE_PX = 1.05             # 小尺寸兜底，别细到消失
+DOTS = ((37.6, 47.4, 2.35), (54.4, 62.2, 1.65))   # 左颊大斑 / 下颌小斑
+VIEW_CY = 50.8                   # 内容视觉中心（耳朵高，重心略偏上）
 
 
 @lru_cache(maxsize=1)
 def outline() -> QPainterPath:
-    """头部轮廓：额顶浅弧 → 双耳 → 脸颊 → 下颌，一笔闭合。"""
-    face = QRectF(CX - R, CY - R, 2 * R, 2 * R)
-    path = QPainterPath(QPointF(*CHEEK_L))
-    path.lineTo(*EAR_L)                 # 左耳外沿
-    path.lineTo(*CROWN_L)               # 左耳内沿
-    path.arcTo(face, 110.0, -40.0)      # 额顶浅弧，落到右耳内侧
-    path.lineTo(*EAR_R)                 # 右耳尖
-    path.lineTo(*CHEEK_R)               # 右耳内沿
-    path.arcTo(face, 44.0, -134.0)      # 右脸 → 下颌
-    path.arcTo(face, -90.0, -134.0)     # 下颌 → 左脸，回到起点
+    """头部轮廓：下颌中 → 左颊 → 左耳 → 额顶 → 右耳 → 右颊 → 回到下颌。
+
+    全部用三次贝塞尔，曲线连续、没有折角；双耳外沿略内收，收尾是尖的，
+    脖颈两侧（耳根到颊）留一段长而平稳的弧，这是「细线优雅」的关键。
+    """
+    path = QPainterPath(QPointF(48.0, 84.2))
+    # 下颌 → 左颈
+    path.cubicTo(42.2, 85.0, 37.6, 82.8, 33.6, 79.7)
+    # 左颊（最宽处）
+    path.cubicTo(28.3, 76.3, 21.2, 68.0, 21.2, 57.0)
+    # 左耳根
+    path.cubicTo(21.2, 48.6, 21.8, 43.4, 22.6, 39.6)
+    # 左耳外沿 → 耳尖（收得很干净，一小截几乎垂直）
+    path.cubicTo(22.0, 33.0, 22.4, 24.0, 23.0, 17.0)
+    # 耳尖 → 左耳内沿：离开尖点时角度大一点，耳朵才立得起来
+    path.cubicTo(26.0, 24.0, 32.0, 30.0, 41.5, 30.2)
+    # 额头：两耳之间一段很浅、很稳的弧
+    path.cubicTo(42.5, 30.3, 45.0, 31.2, 48.0, 30.0)
+    path.cubicTo(51.0, 31.2, 53.5, 30.3, 54.5, 30.2)
+    # 右耳内沿 → 耳尖
+    path.cubicTo(64.0, 30.0, 70.0, 24.0, 73.0, 17.0)
+    # 耳尖 → 右耳根
+    path.cubicTo(73.6, 24.0, 74.0, 33.0, 73.4, 39.6)
+    # 右颊
+    path.cubicTo(74.2, 43.4, 74.8, 48.6, 74.8, 57.0)
+    path.cubicTo(74.8, 68.0, 67.7, 76.3, 62.4, 79.7)
+    path.cubicTo(58.4, 82.8, 53.8, 85.0, 48.0, 84.2)
     path.closeSubpath()
     return path
 
 
-def mark_pixmap(size: int, color: QColor | str, stroke_min: float = 1.15) -> QPixmap:
+def _stroke_px(side: float) -> float:
+    """线宽跟着尺寸走：大图细、小图略加，但整体永远偏细。"""
+    return max(MIN_STROKE_PX, side * STROKE_PX)
+
+
+def _alpha(color: QColor, a: float) -> QColor:
+    c = QColor(color)
+    c.setAlphaF(max(0.0, min(1.0, a)))
+    return c
+
+
+def mark_pixmap(size: int, color: QColor | str, opacity: float = 1.0) -> QPixmap:
     """把标识渲染成 size×size 的位图（2x 设备像素，Retina 下不糊）。"""
     size = max(4, int(size))
     ratio = 2
@@ -66,96 +106,150 @@ def mark_pixmap(size: int, color: QColor | str, stroke_min: float = 1.15) -> QPi
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    _paint_mark(p, float(size), C(color), C(color), 0.0, 0.0, 1.0, stroke_min)
+    p.setOpacity(max(0.0, min(1.0, opacity)))
+    _paint_mark(p, float(size), C(color), C(color), 0.0, 0.0)
     p.end()
     return pm
 
 
 def app_icon() -> QIcon:
-    """应用图标：Dock / 任务栏用。深色底上画浅色线，浅色底上画深色线。"""
+    """应用图标：白底圆角方块 + 近黑细线，Dock 里在任何壁纸上都干净。"""
     icon = QIcon()
-    light = QColor("#F2F2F5")
-    for size in (16, 20, 24, 32, 40, 48, 64, 128, 256, 512):
-        bg = QPixmap(size * 2, size * 2)
-        bg.setDevicePixelRatio(2)
-        bg.fill(Qt.GlobalColor.transparent)
-        p = QPainter(bg)
+    ink = QColor("#14141A")
+    for size in (16, 20, 24, 32, 40, 48, 64, 128, 256, 512, 1024):
+        pm = QPixmap(size * 2, size * 2)
+        pm.setDevicePixelRatio(2)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        body = QRectF(0, 0, size, size).adjusted(size * 0.035, size * 0.035,
+                                                 -size * 0.035, -size * 0.035)
+        radius = size * 0.225
         p.setPen(Qt.PenStyle.NoPen)
-        # 圆角方块底：深色主题下用近黑，浅色主题下用近白
-        body = QColor("#17171A")
-        p.setBrush(body)
-        r = QRectF(0, 0, size, size).adjusted(size * 0.04, size * 0.04,
-                                              -size * 0.04, -size * 0.04)
-        p.drawRoundedRect(r, size * 0.24, size * 0.24)
-        p.translate(size / 2, size / 2)
-        p.scale(0.78, 0.78)
-        p.translate(-size / 2, -size / 2)
-        _paint_mark(p, float(size), light, light, 1.0, 0.0, 1.0, 0.9)
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawRoundedRect(body, radius, radius)
+        # 一圈极淡的边：纯白图标放在浅色桌面上也有边界
+        edge = QPen(_alpha(QColor("#0A0A0F"), 0.10), max(0.8, size * 0.008))
+        p.setPen(edge)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(body, radius, radius)
+        # 线条落在白底中央，留出 30% 的呼吸边距
+        side = size * 0.78
+        p.translate(size / 2, size / 2 + size * 0.005)
+        p.translate(-side / 2, -side / 2)
+        _paint_mark(p, side, ink, ink, 0.0, 0.0)
         p.end()
-        icon.addPixmap(bg)
+        icon.addPixmap(pm)
     return icon
 
 
 def _paint_mark(p: QPainter, side: float, base: QColor, hot: QColor,
-                t: float, rotate: float, scale: float,
-                stroke_min: float = 1.15) -> None:
-    """在 side×side 的方框里画标识。t=悬浮进度（0 静止，1 完全点亮）。"""
+                t: float, breath: float = 0.0) -> None:
+    """在 side×side 的方框里画标识。
+
+    t       —— 悬浮进度（0 安静，1 完全点亮并收笔完成）
+    breath  —— 静息呼吸（-1..1），只做大尺寸下的极轻微缩放
+    """
     if side < 3 or side > 4096:
         return
-    # 内容比画布窄（左右各留 20 单位），按内容高度铺满，避免小尺寸下图太小
-    k = side / BOX * 1.12
-    width = STROKE / max(k, 1e-6)
-    if width * k < stroke_min:
-        width = stroke_min / k
+
+    k = side / BOX
+    # 留 6% 边距：缩放 / 光晕不会被控件边界切掉（之前动画被「盖住」就是这个）
+    k *= 0.94 * (1.0 + 0.012 * breath) * (1.0 + 0.045 * t)
 
     p.save()
-    p.translate(side / 2.0, side / 2.0)
-    if rotate:
-        p.rotate(rotate)
-    p.scale(k * scale, k * scale)
-    p.translate(-CX, -VIEW_CY)
+    p.translate(side / 2.0, side / 2.0 - side * 0.012 * t)
+    p.scale(k, k)
+    p.translate(-CENTER, -VIEW_CY)
 
-    pen = QPen(base, width * (0.92 + 0.08 * t))
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    width_px = _stroke_px(side)
+    # 深色线条落在浅底上会显胖，光学上要收一点，白底图标也靠这条
+    if base.lightnessF() < 0.5:
+        width_px *= 0.88
+    width = width_px / max(k, 1e-6)
     path = outline()
 
-    # 底下一层：静止时就是它，淡淡的、安静的一条线
-    p.setPen(pen)
+    # 1) 光晕：悬浮时笔尖周围浮起一层极淡的白（深色）/ 黑（浅色），
+    #    只在中心附近，不外扩成「发光胶囊」，保持克制
+    if t > 0.02:
+        g = QRadialGradient(QPointF(CENTER, VIEW_CY), 52.0)
+        g.setColorAt(0.0, _alpha(hot, 0.055 * t))
+        g.setColorAt(0.62, _alpha(hot, 0.02 * t))
+        g.setColorAt(1.0, _alpha(hot, 0.0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(g)
+        p.drawEllipse(QPointF(CENTER, VIEW_CY), 52.0, 52.0)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+    # 2) 底下的安静细线
+    base_pen = QPen(base, width)
+    base_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    base_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(base_pen)
     p.setBrush(Qt.BrushStyle.NoBrush)
     p.drawPath(path)
 
-    # 悬浮层：同样的路径，用虚线偏移把描边「重新画一遍」，颜色更亮
-    if t > 0.002:
-        progress = min(1.0, t / 0.78)
+    # 3) 墨线：用虚线偏移把整条轮廓从起点写到终点；笔尖是一颗萤火
+    if t > 0.004:
         length = max(path.length(), 1.0)
-        glow = QPen(hot, width * 1.16)
-        glow.setCapStyle(Qt.PenCapStyle.RoundCap)
-        glow.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        glow.setDashPattern([length, length])
-        glow.setDashOffset(length * (1.0 - progress))
-        p.setPen(glow)
-        p.setOpacity(min(1.0, 0.35 + 0.65 * progress))
+        progress = min(1.0, t / 0.80)
+        ink = QPen(_alpha(hot, 0.55 + 0.45 * min(1.0, t / 0.55)), width * 1.04)
+        ink.setCapStyle(Qt.PenCapStyle.RoundCap)
+        ink.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        # 注意：Qt 的虚线长度/偏移都以「笔宽」为单位，所以要先除以 width，
+        # 否则整条线会被一次点亮（之前动画「看不见在动」就是这个坑）
+        units = length / max(width, 1e-6)
+        ink.setDashPattern([units, units])
+        ink.setDashOffset(units * (1.0 - progress))
+        p.setPen(ink)
         p.drawPath(path)
+
+        # 笔尖萤火：走到哪亮到哪，写完就淡掉，不留一个多余的圆点
+        if progress < 0.985:
+            tip = path.pointAtPercent(max(0.0, min(1.0, progress)))
+            fade = math.sin(math.pi * min(1.0, progress)) ** 0.5
+            r = max(0.9, width_px * 0.60)
+            halo = QRadialGradient(tip, r * 3.2)
+            halo.setColorAt(0.0, _alpha(hot, 0.26 * fade))
+            halo.setColorAt(0.45, _alpha(hot, 0.10 * fade))
+            halo.setColorAt(1.0, _alpha(hot, 0.0))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(halo)
+            p.drawEllipse(tip, r * 3.2, r * 3.2)
+            p.setBrush(hot)
+            p.drawEllipse(tip, r, r)
+
+    # 4) 两块斑：墨线走到哪、哪块斑就晕开——不是一起亮，而是一个个被点到
+    progress = min(1.0, t / 0.80)
+    min_dot = 0.95 / max(k, 1e-6)
+    for (cx, cy, r), u in zip(DOTS, (0.40, 0.63)):
+        local = _clamp((progress - u) / 0.16)
+        bloom = _out_back(local)
+        radius = max(r * (1.0 + 0.26 * bloom), min_dot)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(_mix(base, hot, local))
+        p.setOpacity(0.45 + 0.55 * max(local, 0.0))
+        p.drawEllipse(QPointF(cx, cy), radius, radius)
         p.setOpacity(1.0)
 
-    # 两块斑：静止时安静地待着，悬浮时带一点回弹地弹出来
-    min_dot = 0.95 / max(k, 1e-6)          # 小尺寸下别把斑缩没了
-    for cx, cy, r in DOTS:
-        grow = 1.0 + 0.24 * _out_back(_clamp((t - 0.28) / 0.55))
-        radius = max(r * (0.88 + 0.12 * t) * grow, min_dot)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(hot if t > 0.5 else base)
-        p.drawEllipse(QPointF(cx, cy), radius, radius)
     p.restore()
+
+
+def _mix(a: QColor, b: QColor, t: float) -> QColor:
+    t = _clamp(t)
+    return QColor(
+        int(a.red() + (b.red() - a.red()) * t),
+        int(a.green() + (b.green() - a.green()) * t),
+        int(a.blue() + (b.blue() - a.blue()) * t),
+        int(a.alpha() + (b.alpha() - a.alpha()) * t),
+    )
 
 
 def _clamp(v: float) -> float:
     return 0.0 if v < 0 else (1.0 if v > 1 else v)
 
 
-def _out_back(v: float, s: float = 1.70158) -> float:
+def _out_back(v: float, s: float = 1.40158) -> float:
     v -= 1.0
     return v * v * ((s + 1) * v + s) + 1.0
 
@@ -166,9 +260,11 @@ def _out_back(v: float, s: float = 1.70158) -> float:
 class BrandMark(QWidget):
     """带悬浮动画的品牌标识。
 
-    静止：一条安静的线条标。鼠标悬浮：轮廓沿起点到终点重新点亮一遍，
-    整体轻轻上浮放大，两块斑带回弹弹出；移开再原路收回去。
-    `autoplay=True` 时首次显示会自己完整演一遍（关于页用）。
+    静止：一条安静的细线标，大尺寸下自己极慢地呼吸（7 秒一个来回）。
+    悬浮：亮线从下颌出发，沿轮廓把整条线重写一遍，笔尖带萤火；整枚标识
+    上浮 1.2%、放大 4.5%，写完萤火淡去，停在最亮的状态。
+    移开：墨线原路收回到起点，620ms 缓收，不闪不跳。
+    `autoplay=True` 时首次显示会自己演一遍（欢迎页 / 关于页 / 空状态用）。
     """
 
     def __init__(self, size: int = 20, parent: Optional[QWidget] = None,
@@ -180,6 +276,8 @@ class BrandMark(QWidget):
         self._autoplay = autoplay
         self._played = False
         self._t = 0.0
+        self._breath = 0.0
+        self._breathe = size >= 40          # 小图标不呼吸，免得像哆嗦
         self.setFixedSize(QSize(size, size))
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
@@ -191,12 +289,21 @@ class BrandMark(QWidget):
         self._anim.setEndValue(1.0)
         self._anim.valueChanged.connect(self._on_value)
 
+        # 呼吸：80ms 一跳，只在大尺寸下开，开销可以忽略
+        self._btimer = QTimer(self)
+        self._btimer.setInterval(80)
+        self._btimer.timeout.connect(self._on_breath)
+
     # -------------------------------------------------- 动画
     def _on_value(self, value) -> None:
         try:
             self._t = float(value)
         except (TypeError, ValueError):
             return
+        self.update()
+
+    def _on_breath(self) -> None:
+        self._breath += 0.08
         self.update()
 
     def _run(self, target: float, duration: int,
@@ -215,31 +322,34 @@ class BrandMark(QWidget):
             self._anim.finished.connect(then)
         self._anim.start()
 
-    def play_once(self, hold: int = 160) -> None:
-        """完整演一遍再回到静止状态。"""
-        self._run(1.0, 560, QEasingCurve.Type.OutCubic,
+    def play_once(self, hold: int = 320) -> None:
+        """完整演一遍再回到静止状态。慢一点，别赶。"""
+        self._run(1.0, 900, QEasingCurve.Type.InOutQuart,
                   then=lambda: QTimer.singleShot(hold, self._settle))
 
     def _settle(self) -> None:
-        self._run(0.0, 420, QEasingCurve.Type.InOutCubic)
+        self._run(0.0, 620, QEasingCurve.Type.InOutCubic)
 
     # -------------------------------------------------- 事件
     def enterEvent(self, e):  # noqa: N802
-        self._run(1.0, 560, QEasingCurve.Type.OutCubic)
+        self._run(1.0, 860, QEasingCurve.Type.InOutQuart)
         super().enterEvent(e)
 
     def leaveEvent(self, e):  # noqa: N802
-        self._run(0.0, 340, QEasingCurve.Type.InOutCubic)
+        self._run(0.0, 620, QEasingCurve.Type.InOutCubic)
         super().leaveEvent(e)
 
     def showEvent(self, e):  # noqa: N802
         super().showEvent(e)
+        if self._breathe and not self._btimer.isActive():
+            self._btimer.start()
         if self._autoplay and not self._played:
             self._played = True
-            QTimer.singleShot(140, self.play_once)
+            QTimer.singleShot(180, self.play_once)
 
     def hideEvent(self, e):  # noqa: N802
         self._anim.stop()
+        self._btimer.stop()
         self._t = 0.0
         super().hideEvent(e)
 
@@ -251,8 +361,6 @@ class BrandMark(QWidget):
         side = float(min(self.width(), self.height()))
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        ease = self._t
-        scale = 1.0 + 0.075 * math.sin(math.pi * ease)
-        rotate = -7.0 * math.sin(math.pi * ease)
-        _paint_mark(p, side, base, hot, ease, rotate, scale)
+        breath = math.sin(self._breath) if self._breathe else 0.0
+        _paint_mark(p, side, base, hot, self._t, breath)
         p.end()

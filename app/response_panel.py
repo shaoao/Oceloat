@@ -548,7 +548,8 @@ class ResponsePanel(QWidget):
         cl.addWidget(self.body_stack, 1)
 
         # ---------- 空 / 加载 / 错误
-        self.empty = EmptyState("send", "准备就绪", "填写请求地址后发送，响应会显示在这里", "⌘ ↵ 发送")
+        self.empty = EmptyState("send", "准备就绪", "填写请求地址后发送，响应会显示在这里",
+                                "⌘ ↵ 发送", brand_mark=True)
         self.loading = QWidget()
         ll = QVBoxLayout(self.loading)
         ll.setContentsMargins(24, 24, 24, 24)
