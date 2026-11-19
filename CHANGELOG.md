@@ -1,5 +1,25 @@
 # What's Changed
 
+## v1.0.54 — 2026-11-19
+
+**Fixed**
+- AI no longer calls a successful HTTP 200 response an "error code" just because the body contains `code: 1`. Business codes are interpreted from `msg` / `data` / `success`, not from the number alone.
+- AI-renamed requests now update the collection node and matching history entries, so the sidebar shows the new name immediately.
+- Global fix for IME composition: placeholder text is hidden while candidate words are being composed and restored afterwards, for every text input.
+
+**Added**
+- "AI response analysis" dialog: streaming Markdown output with fade-in animation and spinner, copy and re-analyze buttons, and an entry on the response tab row.
+- Tab-aware analysis: pretty / tree / raw / headers / cookies / console / preview / diff / extract / timeline / network error each get their own evidence and focus points.
+- Stale-response notice now has a close (x) button and "Never remind me" (persisted in settings).
+
+**Changed**
+- API docs code sample is collapsed by default; expand with the chevron.
+- Removed AI script writing from pre/post script pages and removed DeepSeek from AI settings (GLM only).
+- Rewrote all prompts for data generation, response analysis, docs and naming to be evidence-based and specific.
+
+**Verified**
+- 654 smoke checks plus 57 targeted checks pass.
+
 ## v1.0.53 — 2026-11-19
 
 **Added**

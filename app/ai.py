@@ -36,15 +36,6 @@ MODELS: List[Dict[str, Any]] = [
      "desc": "最严谨，但慢，适合绕的问题", "free": True},
 ]
 
-# DeepSeek 与 GLM 共用同一套 OpenAI 兼容协议，区别只在 base 与模型名。
-# 每个服务商可以带自己的模型表（没有就回落到 MODELS），加服务商 = 加一段配置。
-DEEPSEEK_MODELS: List[Dict[str, Any]] = [
-    {"id": "deepseek-chat", "label": "DeepSeek-V3", "badge": "通用",
-     "desc": "默认 · 快，写代码与生成数据都稳"},
-    {"id": "deepseek-reasoner", "label": "DeepSeek-R1", "badge": "推理",
-     "desc": "先想再答，复杂问题更准，略慢"},
-]
-
 PROVIDERS: Dict[str, Dict[str, Any]] = {
     "glm": {
         "name": "智谱 GLM",
@@ -53,14 +44,6 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         "doc": "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
         "key_hint": "在智谱开放平台「API Keys」里创建，形如 xxxxxxxx.yyyyyyyy",
         "models": MODELS,
-    },
-    "deepseek": {
-        "name": "DeepSeek",
-        "base": "https://api.deepseek.com/v1",
-        "default_model": "deepseek-chat",
-        "doc": "https://platform.deepseek.com/api_keys",
-        "key_hint": "在 DeepSeek 控制台「API Keys」里创建，形如 sk-xxxxxxxx",
-        "models": DEEPSEEK_MODELS,
     },
 }
 
@@ -77,14 +60,11 @@ def config(store: Any = None) -> Dict[str, Any]:
     raw = dict((store.settings.get("ai") if store else {}) or {})
     provider = raw.get("provider") or "glm"
     preset = PROVIDERS.get(provider) or PROVIDERS["glm"]
-    # Key 按服务商分开存：GLM 与 DeepSeek 的 Key 格式不同，来回切不该互相覆盖。
-    # api_key 是 1.0.51 的旧字段，保留作 glm 的兼容读。
+    # 只保留智谱一家：provider / key_by_provider 是旧版本遗留，读一次保证老配置不丢。
     keys = raw.get("key_by_provider") or {}
-    api_key = str(keys.get(provider) or "").strip()
-    if not api_key and provider == "glm":
-        api_key = (raw.get("api_key") or "").strip()
+    api_key = str(keys.get("glm") or "").strip() or (raw.get("api_key") or "").strip()
     return {
-        "provider": provider if provider in PROVIDERS else "glm",
+        "provider": "glm",
         "provider_name": preset["name"],
         "base": (raw.get("base_url") or "").strip().rstrip("/") or preset["base"],
         "model": (raw.get("model") or "").strip() or preset["default_model"],
@@ -97,8 +77,8 @@ def config(store: Any = None) -> Dict[str, Any]:
 
 def models_for(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """当前服务商的模型 + 用户自加的模型，去重保序。"""
-    preset = PROVIDERS.get(cfg.get("provider") or "glm") or PROVIDERS["glm"]
-    base = preset.get("models") or MODELS
+    preset = PROVIDERS["glm"]
+    base = MODELS
     out = [dict(m) for m in base]
     seen = {m["id"] for m in out}
     for m in cfg.get("custom_models") or []:
@@ -276,17 +256,15 @@ def _text_from_json(raw: str) -> str:
 # ---------------------------------------------------------------- 提示词
 
 _SYS_JSON = (
-    "你是 API 调试工具的测试数据生成器。"
-    "根据给定的字段名生成一份真实、合理、可直接发送的 JSON 对象。"
-    "要求：键名与给定字段完全一致；值类型符合字段语义（id 用数字或短字符串，"
-    "时间用 ISO8601，邮箱/手机号/地址/URL 要像真的）；不要嵌套多余层级；"
-    "只输出 JSON 本身，不要解释、不要 markdown 代码块。"
-)
-
-_SYS_ERROR = (
-    "你是 API 调试助手。用户会给你一次失败的 HTTP 请求信息。"
-    "用简体中文简明解释失败原因，再给出 1-3 条可执行的修复建议。"
-    "总长度不超过 150 字，不要客套、不要重复请求内容，直接说结论。"
+    "你是 API 调试工具里的测试数据生成器。用户会给出字段名、接口上下文和可选要求。"
+    "产出一份可直接发送的 JSON：\n"
+    "1. 键名严格照抄给定字段，顺序一致；不新增字段、不漏字段；\n"
+    "2. 值要像这个接口真实会收到的数据：根据字段名和 URL 语义推断业务含义"
+    "（user_id 用短数字，created_at 用 ISO8601，email/phone/url 符合格式且彼此一致，"
+    "金额是正数两位小数，状态值用接口语义里合理的枚举）；\n"
+    "3. 字段之间有逻辑关系时保持一致（例如 start_at 早于 end_at，姓名与邮箱对应）；\n"
+    "4. 不确定语义的字段用简短、类型正确的占位值，不要写「测试」「test123」这类敷衍值；\n"
+    "5. 只输出 JSON 本身，不要解释、不要 Markdown 围栏。"
 )
 
 
@@ -307,74 +285,115 @@ def messages_for_json(keys: List[str], method: str = "GET", url: str = "",
             {"role": "user", "content": "\n".join(parts)}]
 
 
-def messages_for_error(method: str, url: str, status: int = 0, detail: str = "",
-                       body: str = "") -> List[Dict[str, str]]:
-    parts = [f"请求：{method.upper()} {url or '(未知地址)'}"]
-    parts.append(f"结果：{('HTTP ' + str(status)) if status else '请求没有拿到响应'}")
-    if detail.strip():
-        parts.append("错误信息：" + detail.strip()[:600])
-    if body.strip():
-        parts.append("响应内容（截断）：\n" + body.strip()[:1200])
-    return [{"role": "system", "content": _SYS_ERROR},
-            {"role": "user", "content": "\n".join(parts)}]
-
-
-# 脚本生成：把可用 API 写死在提示词里，模型没有空间「自由发挥」，
-# 也只能产出这个沙箱里真正能跑的东西（没有 require / fetch / import）。
-_SYS_SCRIPT = (
-    "你是 API 调试工具里的 JavaScript 脚本助手，负责写「{where}」里的代码。"
-    "默认把用户的话当成代码需求：直接写一段能跑的 JavaScript 去完成它。\n"
-    "输出规则：\n"
-    "1. 只输出 JavaScript 代码本身 —— 不要 Markdown 代码块标记、不要解释段落；\n"
-    "2. 优先用下面列出的运行时 API；沙箱里没有 require / import / fetch / DOM / setTimeout，"
-    "遇到这类思路就用等价写法绕过去，而不是拒绝写；\n"
-    "3. 需求说得不完整就按最合理的理解补全，不要反问、不要说「做不到」；\n"
-    "4. 需要输出信息就用 console.log，代码保持简短可读。\n"
-    "可用 API：\n{api}"
+# ---------------------------------------------------------------- 响应分析
+# 按当前页签切换关注点：同一份响应在「响应头」和「时间线」里该说的话完全不同。
+_SYS_ANALYZE_BASE = (
+    "你是资深 API 调试专家，正在帮用户分析刚刚发出的一次请求。"
+    "用户给你的是原始事实，你只基于事实下结论，不许脑补接口文档里没有的约定。\n"
+    "铁律：\n"
+    "- HTTP 状态码是传输层结果；2xx 就是成功，绝不因为响应体里出现 code:1 就说「返回错误码」。"
+    "业务 code 必须结合 msg / message / success / data 等字段的语义判断："
+    "msg 是祝福语、data 有内容、success 不为 false 时，code:1 很可能是成功约定；"
+    "只有 msg 明确是错误或 data 为空且 success=false 才判为业务失败。\n"
+    "- 先给结论，再给证据：每个判断都点出具体字段名和值，不要说「建议查看文档」这类空话。\n"
+    "- 没发现异常就直说「未发现异常」，并指出哪些字段支撑这个判断；不为了凑字数制造问题。\n"
+    "输出格式（简体中文 Markdown，不要一级标题）：\n"
+    "## 结论\n两句话以内：这次请求到底成没成功、当前页里最值得注意的一点。\n"
+    "## 详细解读\n分点写，按给定关注点逐项分析，引用具体字段 / 头部 / 数值，4-8 条。\n"
+    "## 建议\n只写和证据直接相关的可执行动作，1-3 条；没有问题就写「无需调整」。"
 )
 
-_API_PRE = (
-    "req.url / req.method / req.headers / req.params / req.body / req.cookies\n"
-    "req.setHeader(name, value) / req.getHeader(name) / req.removeHeader(name)\n"
-    "req.setParam(name, value) / req.removeParam(name) / req.setBody(text)\n"
-    "req.json()\n"
-    "pw.env.get(name) / pw.env.set(name, value) / pw.env.unset(name) / pw.env.has(name)\n"
-    "pw.env.resolve(\"{{token}}\") / pw.env.toObject()\n"
-    "console.log / info / warn / error\n"
-    "test(name, function () { ... })"
-)
+_TAB_FOCUS = {
+    "pretty": "关注点：响应体的业务语义、字段是否自洽、数据是否完整、异常值或类型不一致。"
+              "解释 code/msg/data 的实际含义，指出哪些字段能证明成功或失败。",
+    "tree": "关注点：JSON 树形结构。指出层级是否过深、数组元素是否同构、"
+            "哪些字段有嵌套价值、是否存在空值或类型漂移。",
+    "raw": "关注点：原始报文。检查编码、BOM、换行、Content-Type 与实际内容是否匹配，"
+           "是否有被截断或转义异常，正文首几行的结构特征。",
+    "headers": "关注点：响应头。逐项解释关键头部（Content-Type / Cache-Control / ETag / "
+               "Set-Cookie / CORS / Content-Encoding / Location / Server），"
+               "指出缓存、安全、跨域或压缩方面值得注意的配置。",
+    "cookies": "关注点：Cookies。逐个分析名称、作用域、Path、 expires/max-age、Secure、"
+               "HttpOnly、SameSite，指出会话安全与过期风险。",
+    "console": "关注点：脚本控制台。按日志 and 断言逐条分析：前置脚本是否改到请求、"
+               "后置脚本提取了什么变量、哪些断言失败、错误堆栈指向哪一行；给出修法。",
+    "preview": "关注点：预览。判断响应类型能不能被正确渲染，"
+               "说明当前内容适合什么预览方式；若是媒体，指出格式、大小与加载风险。",
+    "diff": "关注点：与基准响应的差异。逐项列出新增 / 删除 / 值变化的字段，"
+            "判断哪些变化是正常波动、哪些可能是回归，指出影响范围。",
+    "extract": "关注点：JSON 路径提取。评估给定路径是否指向正确的值、类型是否符合预期、"
+               "路径是否脆弱（依赖数组下标等），给出更稳的写法建议。",
+    "timeline": "关注点：时间线。分析状态码变化、耗时趋势与离群点，"
+                "结合耗时判断是否有变慢趋势或抖动，指出最可疑的一次请求。",
+    "error": "关注点：请求没有拿到正常响应。区分 DNS / 连接 / TLS / 超时 / 代理 / "
+             "本地脚本异常，按证据给出最可能的原因与 1-3 步排查动作。",
+}
 
-_API_POST = (
-    "res.status / res.statusText / res.time / res.body / res.headers\n"
-    "res.getHeader(name) / res.setHeader(name, value) / res.removeHeader(name)\n"
-    "res.json()\n"
-    "pw.env.get(name) / pw.env.set(name, value) / pw.env.has(name) / pw.env.resolve(text)\n"
-    "console.log / info / warn / error\n"
-    "test(name, function () { ... })"
-)
 
+def messages_for_analysis(ctx: Dict[str, Any]) -> List[Dict[str, str]]:
+    """把「当前页签 + 请求 + 响应」打包成一次差异化分析对话。"""
+    tab = str(ctx.get("tab") or "pretty")
+    focus = _TAB_FOCUS.get(tab, _TAB_FOCUS["pretty"])
+    parts = [
+        f"当前查看的页面：{ctx.get('tab_label') or tab}（key={tab}）",
+        f"关注点：{focus}",
+    ]
+    req = ctx.get("request") or {}
+    if req:
+        lines = [f"请求：{str(req.get('method') or 'GET').upper()} {req.get('url') or '(未知地址)'}"]
+        for h in (req.get("headers") or [])[:12]:
+            if h.get("key"):
+                lines.append(f"  请求头 {h['key']}: {str(h.get('value', ''))[:120]}")
+        for p in (req.get("params") or [])[:12]:
+            if p.get("key"):
+                lines.append(f"  参数 {p['key']}={str(p.get('value', ''))[:120]}")
+        body = str((req.get("body") or {}).get("raw") or "")[:500]
+        if body.strip():
+            lines.append("  请求体（截断）：" + body.strip())
+        parts.append("\n".join(lines))
 
-def messages_for_script(ask: str, kind: str = "pre", method: str = "GET", url: str = "",
-                        body: str = "") -> List[Dict[str, str]]:
-    """把一句需求变成脚本。kind=pre 只能碰 req / pw，post 还能读 res。"""
-    where = "前置脚本（请求发送前执行）" if kind == "pre" else "后置脚本（收到响应后执行）"
-    api = _API_PRE if kind == "pre" else _API_POST
-    system = _SYS_SCRIPT.format(where=where, api=api)
-    ctx = [f"请求：{method.upper()} {url or '(未填写地址)'}"]
-    if body.strip():
-        ctx.append("请求体（截断）：\n" + body.strip()[:800])
-    ctx.append("需求：" + (ask or "").strip()[:600])
-    return [{"role": "system", "content": system},
-            {"role": "user", "content": "\n".join(ctx)}]
+    meta = [f"HTTP {ctx.get('status') or 0} {ctx.get('reason') or ''}".strip()]
+    if ctx.get("elapsed_ms"):
+        meta.append(f"耗时 {ctx['elapsed_ms']} ms")
+    if ctx.get("size"):
+        meta.append(f"体积 {ctx['size']} B")
+    if ctx.get("content_type"):
+        meta.append(f"类型 {ctx['content_type']}")
+    parts.append("响应概况：" + " · ".join(meta))
+
+    for label, key, limit in (
+        ("响应头", "headers", 2200), ("Cookies", "cookies", 1800),
+        ("控制台日志", "console", 2200), ("对比差异", "diff", 2200),
+        ("时间线", "timeline", 1800), ("提取结果", "extract", 900),
+        ("预览信息", "preview", 900),
+    ):
+        value = ctx.get(key)
+        if not value:
+            continue
+        text = value if isinstance(value, str) else json.dumps(
+            value, ensure_ascii=False, indent=2, default=str)
+        parts.append(f"{label}：\n{text.strip()[:limit]}")
+
+    body = str(ctx.get("body") or "").strip()
+    if body:
+        # 分析页签不是正文时也要给一份截断正文，避免 AI 脱离数据说话
+        parts.append("响应正文（截断）：\n" + body[:2600])
+    if ctx.get("error"):
+        parts.append("错误信息：" + str(ctx["error"]).strip()[:1000])
+    return [{"role": "system", "content": _SYS_ANALYZE_BASE},
+            {"role": "user", "content": "\n\n".join(parts)}]
 
 
 _SYS_DOC = (
-    "你是技术文档编辑。用户给你一个 HTTP 请求和它的响应，请补写接口文档里最容易被漏掉的部分。"
-    "只输出 Markdown，不要重复已有的参数表，不要输出一级标题。"
-    "结构固定为三个二级标题：## 接口说明（2-4 句：做什么、什么时候用）、"
-    "## 参数含义（只解释真正需要解释的字段，用列表）、"
-    "## 常见错误（列出可能的失败情况与处理，用列表）。"
-    "语言与用户一致（中文就写中文）；总长度不超过 400 字；不要编造响应里没有的字段。"
+    "你是资深 API 文档作者。用户给你一次真实请求与响应，请补写自动文档最缺的「人话解释」。"
+    "只输出 Markdown，不要一级标题，不要重复已有参数表的条目。\n"
+    "结构固定为三个二级标题：\n"
+    "## 接口说明：2-4 句，说清这个接口解决什么问题、什么时候调用、请求体关键约束；\n"
+    "## 参数含义：只解释真正需要解释的字段（枚举、格式、条件必填、易混淆项），"
+    "每条写「字段名：含义 + 取值建议」；\n"
+    "## 常见错误：从响应证据出发列出可能的失败场景与对应处理，不要列教科书式清单。\n"
+    "严格按证据写：响应里没有的字段不编造，业务 code 的含义按 msg/data 判断。"
+    "总长度 250-450 字，语言与用户一致。"
 )
 
 
@@ -394,8 +413,10 @@ def messages_for_doc(method: str, url: str, name: str = "", params: str = "",
 
 
 _SYS_NAME = (
-    "给一个 HTTP 请求起名字。只输出名字本身：不超过 12 个汉字（英文用 3 个单词内），"
-    "不要引号、不要句号、不要解释、不要 Markdown。"
+    "给一个 HTTP 请求起一个让人一眼看懂的名字。只输出名字本身，不要引号、标点或解释。\n"
+    "规则：1) 用「动作 + 对象」或业务含义命名，例如「查询用户订单」「提交登录」；"
+    "2) 不超过 10 个汉字（英文不超过 3 个单词）；3) 禁止照抄 URL 末段、"
+    "禁止「获取接口」「API 请求」这类空话；4) 同名路径但方法不同要体现动作差异。"
 )
 
 
@@ -425,23 +446,6 @@ def clean_json(text: str) -> str:
     if end > start:
         return s[start:end + 1]
     return s[start:]
-
-
-def clean_code(text: str) -> str:
-    """模型输出 → 可直接塞进脚本编辑器的代码：去围栏、去掉首尾的解释性文字。"""
-    s = (text or "").strip()
-    if "```" in s:
-        parts = s.split("```")
-        # 取最长的一段：通常是围栏里的代码；短段多是语言标记或结尾说明
-        s = max(parts[1:] or [s], key=len)
-        if s[:12].lower().startswith(("javascript", "js\n", "js\n")):
-            s = s.split("\n", 1)[1] if "\n" in s else ""
-    lines = [ln.rstrip() for ln in s.strip().split("\n")]
-    # 去掉「以下是脚本」这类开场白：第一行不是代码特征就丢
-    while lines and lines[0].strip() and not any(
-            ch in lines[0] for ch in "=();{}[]\"'`/"):
-        lines.pop(0)
-    return "\n".join(lines).strip()
 
 
 def clean_line(text: str, limit: int = 24) -> str:

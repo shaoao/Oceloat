@@ -756,6 +756,8 @@ class MainWindow(QWidget):
         self.response.resendRequested.connect(self.send_current)
         self.response.docRequested.connect(self.open_doc)
         self.response.aiExplainRequested.connect(self._ai_explain_response)
+        self.response.stale_bar.never.connect(self._on_stale_never)
+        self.response.set_stale_notice(bool(self.store.settings.get("stale_notice", True)))
         self.splitter.addWidget(self.editor)
         self.splitter.addWidget(self.response)
         self.splitter.setSizes([380, 420])
@@ -1142,6 +1144,21 @@ class MainWindow(QWidget):
                                  method=req.get("method", "GET"))
         if tab["id"] == self.tabstrip.current():
             self.editor.request["name"] = name
+        # 标签是集合节点的快照：名字改了必须同步回 store，否则侧栏还显示旧名字
+        node_id = tab.get("node_id")
+        if node_id:
+            node = self.store.find(node_id)
+            if node is not None:
+                node["name"] = name
+            self.sidebar.refresh()
+        url = str(req.get("url") or "")
+        old_defaults = ("Untitled Request", "未命名请求", self._url_default_name(url))
+        for entry in self.store.history:
+            if entry.get("url") == url and entry.get("name") in old_defaults:
+                entry["name"] = name
+                if isinstance(entry.get("request"), dict):
+                    entry["request"]["name"] = name
+        self.sidebar.refresh_history()
         self._autosave.start()
 
     def _preview_from_sidebar(self, request: Dict[str, Any]) -> None:
@@ -1393,7 +1410,8 @@ class MainWindow(QWidget):
                 self.response.set_response(tab["response"])
                 self._refresh_timeline(tab["request"])
                 self.response.restore_state(tab.get("view"))
-                self.response.stale_bar.setVisible(bool(tab.get("stale")))
+                self.response.stale_bar.setVisible(
+                    bool(tab.get("stale")) and bool(self.store.settings.get("stale_notice", True)))
             else:
                 self.response.show_empty()
                 self.response.restore_state(tab.get("view"))
@@ -1896,6 +1914,12 @@ class MainWindow(QWidget):
         self.tabstrip.update_tab(tab["id"], dirty=False)
         self.toast.show_message("已保存到集合", "success")
 
+    def _on_stale_never(self) -> None:
+        self.store.settings["stale_notice"] = False
+        self.response.set_stale_notice(False)
+        self.store.save()
+        self.toast.show_message("已关闭「请求已修改」提醒", "success")
+
     def _save_env_var(self, name: str, value: str) -> None:
         """提取结果 → 环境变量（没有激活环境就建一个 Default）。"""
         env = self.store.active_environment()
@@ -2164,11 +2188,17 @@ class MainWindow(QWidget):
         # 字号是就地缩放（settings 里已经处理完），这里只把主窗口重绘一遍，
         # 让自绘部分（侧栏行高、标签条、状态胶囊）跟着新系数画。
         dlg.uiScaleChanged.connect(self._on_scale_applied)
+        dlg.settingsChanged.connect(self._on_settings_applied)
         dlg.exec()
 
+    def _on_settings_applied(self) -> None:
+        self.response.set_stale_notice(
+            bool(self.store.settings.get("stale_notice", True)))
+
     def _ai_explain_response(self) -> None:
-        """用 AI 解释失败/异常响应：给原因 + 修法，流式输出。"""
+        """用 AI 分析当前响应页：不同页签喂不同证据，结果在弹窗里流式输出。"""
         from . import ai as ai_mod
+        from .dialogs import AiAnswerDialog
 
         cfg = ai_mod.config(self.store)
         ok, why = ai_mod.ready(cfg)
@@ -2176,27 +2206,30 @@ class MainWindow(QWidget):
             self.toast.show_message(why, "info")
             self.show_settings("ai")
             return
-        detail = self.response.ai_detail()
-        req = self.editor.request or {}
-        msgs = ai_mod.messages_for_error(
-            str(req.get("method") or "GET"), str(req.get("url") or ""),
-            int(detail.get("status") or 0), detail.get("detail") or "",
-            detail.get("body") or "")
-        self.response.set_ai_explaining(True)
-        self._ai_explain_buf = ""
-        self._ai_explain_chat = ai_mod.start(
-            msgs, cfg=cfg, max_tokens=420, temperature=0.3,
-            on_chunk=self._ai_explain_chunk,
-            on_done=lambda _t: self.response.set_ai_explaining(False),
-            on_error=self._ai_explain_failed)
+        ctx = self.response.ai_context(self.editor.request)
+        subtitle = i18n.trf("{page} · {method} {url}",
+                            page=ctx.get("tab_label") or "响应",
+                            method=str((ctx.get("request") or {}).get("method") or "GET").upper(),
+                            url=(ctx.get("request") or {}).get("url") or "")
+        dlg = AiAnswerDialog("AI 响应分析", subtitle, parent=self)
 
-    def _ai_explain_chunk(self, piece: str) -> None:
-        self._ai_explain_buf = getattr(self, "_ai_explain_buf", "") + piece
-        self.response.show_ai_explanation(self._ai_explain_buf)
+        def run() -> None:
+            context = self.response.ai_context(self.editor.request)
+            messages = ai_mod.messages_for_analysis(context)
+            dlg.reset()
+            dlg.set_busy(True, "正在分析")
+            self._ai_explain_chat = ai_mod.start(
+                messages, cfg=cfg, max_tokens=900, temperature=0.25,
+                on_chunk=dlg.append_chunk,
+                on_done=lambda _text: dlg.set_result(dlg.result()),
+                on_error=lambda err: dlg.set_result(err[:200], error=True))
 
-    def _ai_explain_failed(self, message: str) -> None:
-        self.response.set_ai_explaining(False)
-        self.toast.show_message(message, "error")
+        dlg.retryRequested.connect(run)
+        dlg.copyRequested.connect(lambda: (
+            QGuiApplication.clipboard().setText(dlg.result()),
+            self.toast.show_message("分析结果已复制", "success")))
+        run()
+        dlg.exec()
 
     def _on_scale_applied(self, _scale: float) -> None:
         for widget in (self.sidebar, self.tabstrip, self.editor, self.response,
@@ -2214,6 +2247,7 @@ class MainWindow(QWidget):
             self.close_tab(tab["id"])
         self.sidebar.refresh()
         self.sidebar.refresh_history()
+        self.response.set_stale_notice(bool(self.store.settings.get("stale_notice", True)))
         self.env_pill.updateGeometry()
         self.env_pill.update()
         self._apply_theme(self.store.settings.get("theme", "dark"))

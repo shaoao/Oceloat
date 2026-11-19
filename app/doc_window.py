@@ -363,7 +363,7 @@ class DocDialog(GlassDialog):
     def _build_code_panel(self) -> QWidget:
         t = theme()
         self._code_panel = QWidget()
-        self._code_open = True
+        self._code_open = False   # 默认折叠：文档正文优先，代码示例按需展开
         self._code_panel.setSizePolicy(QSizePolicy.Policy.Expanding,
                                        QSizePolicy.Policy.Fixed)
         lay = QVBoxLayout(self._code_panel)
@@ -375,7 +375,7 @@ class DocDialog(GlassDialog):
                                        height=26, pad_h=6, font_size=11.0)
         self.lang_tabs.changed.connect(self._on_lang)
         # 折叠箭头放在「代码示例」左边，和集合树同一个图标、同一个手感
-        self.code_chevron = ChevronToggle(True)
+        self.code_chevron = ChevronToggle(False)
         self.code_chevron.clicked.connect(self._toggle_code)
         lay.addWidget(HBox(self.code_chevron,
                            Label("代码示例", 11.4, t.text_dim,
@@ -387,6 +387,8 @@ class DocDialog(GlassDialog):
         self._code_lay.setContentsMargins(0, 0, 0, 0)
         self._code_lay.setSpacing(0)
         lay.addWidget(self._code_host, 1)
+        self.lang_tabs.setVisible(False)
+        self._code_host.setVisible(False)
         self._apply_code_height()
         return self._code_panel
 

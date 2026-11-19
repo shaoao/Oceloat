@@ -1559,7 +1559,7 @@ _EN.update({
     "自定义": "Custom",
 })
 
-# 变量页合并 / AI 开关 / DeepSeek / 脚本与文档 AI（v1.0.52）
+# 变量页合并 / AI 开关 / 脚本与文档 AI（v1.0.52）
 _EN.update({
     "所有请求里都用 {{名字}} 引用；同名时环境变量覆盖全局变量。":
         "Reference them as {{name}} in any request; a same-named environment variable wins.",
@@ -1589,7 +1589,6 @@ _EN.update({
     "填上模型 ID 就能用，不用等版本更新。":
         "Enter a model ID and it works — no app update needed.",
     "添加并使用": "Add and use",
-    "自定义模型 ID，例如 deepseek-chat": "Custom model ID, e.g. deepseek-chat",
     "留空用官方地址；中转 / 自建网关填这里":
         "Empty for the official endpoint; fill in for proxies or self-hosted gateways",
     "Key 只保存在本机 state.json。关掉 AI 只是暂停，Key 与模型选择都不会丢。":
@@ -1597,13 +1596,6 @@ _EN.update({
     "可选能力：不配也能正常调试接口，配了只是少敲几行。":
         "Optional: everything works without it — it just saves some typing.",
     "AI 已在设置里关闭": "AI is turned off in Settings",
-    "DeepSeek": "DeepSeek",
-    "在 DeepSeek 控制台「API Keys」里创建，形如 sk-xxxxxxxx":
-        "Create one under API Keys in the DeepSeek console; looks like sk-xxxxxxxx",
-    "默认 · 快，写代码与生成数据都稳": "Default · fast, solid for code and data",
-    "先想再答，复杂问题更准，略慢": "Thinks first, better on hard cases, a bit slower",
-    "通用": "general",
-    "推理": "reasoning",
     "AI 写脚本": "AI script",
     "说一句想做什么，直接生成这个脚本页能跑的 JavaScript":
         "Say what you need — JavaScript for this script is generated",
@@ -1647,4 +1639,31 @@ _EN.update({
     "AI 内容": "AI content",
     "已显示 AI 内容": "AI content shown",
     "已隐藏 AI 内容": "AI content hidden",
+})
+
+# v1.0.54：响应 AI 分析弹窗 / 过期提示条
+_EN.update({
+    "用 AI 分析当前页": "Analyze this page with AI",
+    "关闭提醒": "Dismiss notice",
+    "重新分析": "Analyze again",
+    "复制结果": "Copy result",
+    "分析完成": "Analysis complete",
+    "分析失败": "Analysis failed",
+    "正在分析": "Analyzing",
+    "AI 响应分析": "AI response analysis",
+    "{page} · {method} {url}": "{page} · {method} {url}",
+    "分析结果已复制": "Analysis copied",
+    "已关闭「请求已修改」提醒": "Stale-response notice turned off",
+    "{name} · {hint}": "{name} · {hint}",
+    "自定义模型 ID，例如 glm-4-flash": "Custom model ID, e.g. glm-4-flash",
+})
+
+_EN.update({
+    "用 AI 分析这个响应": "Analyze this response with AI",
+})
+
+_EN.update({
+    "请求已修改提醒": "Stale-response notice",
+    "改动请求后提示「下面是上一次的响应」，可随时关掉。":
+        "Show a notice when the request changes but the previous response is kept.",
 })

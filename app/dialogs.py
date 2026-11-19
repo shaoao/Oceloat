@@ -33,6 +33,7 @@ from . import backdrop, i18n, icons, shortcuts as sc
 from . import ai as ai_mod
 from .anim import stop as _anim_stop
 from .code_editor import CodeView
+from .markdown_view import MarkdownView
 from .codegen import LANGUAGES
 from .kv_editor import KVEditor
 from .store import CHANGELOG, STATE_FILE, VERSION, Store, body_mode, uid
@@ -49,6 +50,7 @@ from .widgets import (
     Menu,
     Pill,
     SegmentedTabs,
+    Spinner,
     Switch,
     VBox,
     animate,
@@ -251,73 +253,6 @@ class PromptDialog(GlassDialog):
         self.edit.setFocus()
 
 
-class AiPromptDialog(GlassDialog):
-    """一句话输入框：AI 写脚本用。
-
-    刻意只放一个多行输入 + 两颗按钮 —— 需求描述本来就不长，
-    再加选项、下拉、示例卡片只会让人不知道往哪写。
-    """
-
-    def __init__(self, title: str, label: str, placeholder: str = "", value: str = "",
-                 parent=None, height: int = 236):
-        super().__init__(parent, 540, height, title)
-        t = theme()
-        lay = QVBoxLayout(self.body)
-        lay.setContentsMargins(20, 14, 20, 16)
-        lay.setSpacing(10)
-        head = Label(label, 11.6, t.text_faint)
-        head.setWordWrap(True)
-        lay.addWidget(head)
-        self.edit = QPlainTextEdit(value)
-        # 输入框只给「最小高度」，剩下交给布局去分：之前按窗口高度倒算固定值，
-        # 字大一点或提示文案换行时输入框会顶到按钮上，正文和按钮叠在一起。
-        self.edit.setMinimumHeight(104)
-        self.edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.edit.setFont(font(13))
-        self.edit.setStyleSheet(
-            f"QPlainTextEdit {{ background: {t.panel_alt}; border: 1px solid {S(t.border)};"
-            f" border-radius: 9px; padding: 8px 10px; color: {t.text};"
-            f" selection-background-color: {t.selected}; }}")
-        self.edit.setPlaceholderText(placeholder)
-        lay.addWidget(self.edit, 1)
-        cancel = Button("取消", None, kind="ghost", height=28, padding=12, font_size=12)
-        cancel.clicked.connect(self.reject)
-        ok = Button("生成", "spark", kind="primary", height=28, padding=16, font_size=12,
-                    icon_size=12)
-        ok.clicked.connect(self.accept)
-        lay.addWidget(HBox(1, cancel, ok, spacing=6))
-        self._ok = ok
-        self.edit.textChanged.connect(self._sync)
-        self._sync()
-        # 高度按内容算：标题栏 47 + 上下边距 30 + 两处间距 20 + 输入框 104 + 按钮 28
-        head_h = head.heightForWidth(self.width() - 40) if head.hasHeightForWidth() \
-            else head.sizeHint().height()
-        need = 47 + 30 + head_h + 20 + 104 + 28
-        self.resize(self.width(), max(height, need))
-
-    def _sync(self) -> None:
-        self._ok.setEnabled(bool(self.edit.toPlainText().strip()))
-
-    def value(self) -> str:
-        return self.edit.toPlainText().strip()
-
-    def showEvent(self, e):
-        super().showEvent(e)
-        self.edit.setFocus()
-        self._sync()
-
-    def keyPressEvent(self, e):
-        # ⌘↵ 生成、esc 取消：和主界面的发送手感一致
-        if (e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
-                and e.modifiers() & Qt.KeyboardModifier.MetaModifier):
-            self.accept()
-            return
-        if e.key() == Qt.Key.Key_Escape:
-            self.reject()
-            return
-        super().keyPressEvent(e)
-
-
 def json_paths(data: Any, prefix: str = "", depth: int = 0, out: Optional[List] = None,
                limit: int = 120) -> List[Dict[str, str]]:
     """把 JSON 摊成「路径 + 值」列表，给取变量用。
@@ -357,6 +292,132 @@ def _scalar_text(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+class AiAnswerDialog(GlassDialog):
+    """AI 回答弹窗：流式写入、淡入动画、可复制 / 重新分析。
+
+    只负责呈现：调用方拿 messages 起流，逐块喂 append_chunk()，结束后 finish()。
+    """
+
+    copyRequested = pyqtSignal()
+    retryRequested = pyqtSignal()
+
+    def __init__(self, title: str, subtitle: str = "", parent=None,
+                 width: int = 760, height: int = 560):
+        super().__init__(parent, width, height, i18n.tr(title))
+        t = theme()
+        self._buf = ""
+        self._dirty = False
+        self._done = False
+        self._timer = QTimer(self)
+        self._timer.setInterval(70)
+        self._timer.timeout.connect(self._flush)
+
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(18, 12, 18, 16)
+        lay.setSpacing(10)
+
+        # 状态条：分析对象 + 状态 + 转圈；一行就够，不抢正文注意力
+        strip = Card(radius=9)
+        sl = QHBoxLayout(strip)
+        sl.setContentsMargins(12, 8, 12, 8)
+        sl.setSpacing(8)
+        icon = QLabel()
+        icon.setPixmap(icons.pixmap("spark", t.text_dim, 13, 1.5))
+        sub = Label(subtitle or "", 10.6, t.text_faint)
+        sub.setWordWrap(True)
+        self.spinner = Spinner(13)
+        self.spinner.hide()
+        self.state = Label("", 10.6, t.text_faint, mono_font=True)
+        sl.addWidget(icon)
+        sl.addWidget(sub, 1)
+        sl.addWidget(self.state, 0)
+        sl.addWidget(self.spinner, 0)
+        lay.addWidget(strip)
+
+        # 正文：Markdown 原生控件渲染，标题 / 列表 / 引用都能成型
+        paper = Card(radius=10)
+        pl = QVBoxLayout(paper)
+        pl.setContentsMargins(0, 0, 0, 0)
+        self.view = MarkdownView()
+        self.view.setStyleSheet(f"background: {t.panel};")
+        pl.addWidget(self.view, 1)
+        lay.addWidget(paper, 1)
+
+        self.copy_btn = Button(i18n.tr("复制结果"), "copy", kind="subtle", height=28,
+                               padding=12, font_size=11.6)
+        self.retry_btn = Button(i18n.tr("重新分析"), "refresh", kind="ghost", height=28,
+                                padding=12, font_size=11.6)
+        close_btn = Button(i18n.tr("关闭"), None, kind="primary", height=28, padding=14,
+                           font_size=11.6)
+        self.copy_btn.clicked.connect(self.copyRequested.emit)
+        self.retry_btn.clicked.connect(self.retryRequested.emit)
+        close_btn.clicked.connect(self.accept)
+        lay.addWidget(HBox(1, self.retry_btn, self.copy_btn, close_btn, spacing=7))
+        self._state_text = ""
+        self._pulse = 0
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        fade_in(self.body, 170)
+
+    def reset(self) -> None:
+        """重新分析：清掉上一轮内容与状态，不重建窗口。"""
+        self._buf = ""
+        self._dirty = False
+        self._done = False
+        self._timer.stop()
+        self.view.clear()
+        self.state.setStyleSheet("")
+
+    def set_busy(self, busy: bool, text: str = "") -> None:
+        if busy:
+            self.spinner.start()
+            self._state_text = i18n.tr(text or "正在分析")
+            self._pulse = 0
+            self.state.setText(self._state_text)
+        else:
+            self.spinner.stop()
+            self.state.setText(i18n.tr(text))
+
+    def append_chunk(self, piece: str) -> None:
+        self._buf += piece or ""
+        self._dirty = True
+        self._pulse = (self._pulse + 1) % 4
+        self.state.setText(self._state_text + "·" * self._pulse)
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def set_result(self, text: str, error: bool = False) -> None:
+        self._buf = text or ""
+        self._dirty = True
+        self._done = True
+        self._flush()
+        self.spinner.stop()
+        self.state.setText(i18n.tr("分析失败" if error else "分析完成"))
+        self.state.setStyleSheet(
+            f"color: {theme().danger if error else theme().success}; background: transparent;")
+
+    def result(self) -> str:
+        return self._buf.strip()
+
+    def _flush(self) -> None:
+        if not self._dirty:
+            self._timer.stop()
+            return
+        self._dirty = False
+        self.view.set_markdown(self._buf)
+        bar = self.view.verticalScrollBar()
+        if bar is not None:
+            bar.setValue(bar.maximum())
+        if self._done:
+            self._timer.stop()
+
+    def closeEvent(self, e):
+        self._timer.stop()
+        self.spinner.stop()
+        super().closeEvent(e)
 
 
 class VarPickDialog(GlassDialog):
@@ -1108,11 +1169,15 @@ class SettingsDialog(GlassDialog):
         self.auto_name.toggled.connect(lambda _v: self._save())
         self.restore_session = Switch(bool(s.get("restore_session", True)))
         self.restore_session.toggled.connect(lambda _v: self._save())
+        self.stale_notice = Switch(bool(s.get("stale_notice", True)))
+        self.stale_notice.toggled.connect(lambda _v: self._save())
         block = self._card(
             self._row("语言", "界面显示语言，切换后立即生效。", self.lang_seg),
             self._row("自动命名请求", "按 URL 末段自动给请求命名，重命名后不再覆盖。", self.auto_name),
             self._row("记住窗口与分栏", "下次启动恢复打开的标签、侧栏与上下分栏比例。",
                       self.restore_session),
+            self._row("请求已修改提醒", "改动请求后提示「下面是上一次的响应」，可随时关掉。",
+                      self.stale_notice),
         )
         # 快捷键独立成页，这里只留一个入口 —— 键位表太长，塞在通用页里只会被挤扁
         jump = Button("去设置", "keyboard", kind="subtle", height=27, padding=11,
@@ -1308,9 +1373,9 @@ class SettingsDialog(GlassDialog):
 
     # -------------------------------------------------- AI
     def _page_ai(self, s: Dict[str, Any]) -> QWidget:
-        """AI 页：开关 → 服务商与 Key → 模型 → 进阶。
+        """AI 页：开关 → Key → 模型 → 进阶（只接智谱 GLM）。
 
-        顺序就是「能不能用 → 接哪家 → 用哪个 → 细调」。整页不放彩色装饰，
+        顺序就是「能不能用 → 填 Key → 用哪个 → 细调」。整页不放彩色装饰，
         状态只用一行小字表达，避免设置页看起来比工作区还热闹。
         """
         t = theme()
@@ -1330,13 +1395,7 @@ class SettingsDialog(GlassDialog):
         hl.addWidget(HBox((VBox(self.ai_title, self.ai_state, spacing=3), 1),
                           self.ai_enabled, spacing=14))
 
-        # ---------- 2. 服务商与 Key
-        self.ai_provider = SegmentedTabs(
-            [(key, info["name"]) for key, info in ai_mod.PROVIDERS.items()],
-            style="pill", height=27, font_size=11.6, pad_h=13)
-        self.ai_provider.set_current(cfg["provider"], emit=False)
-        self.ai_provider.changed.connect(self._on_provider)
-
+        # ---------- 2. Key（只保留智谱，切服务商的入口已移除）
         self.ai_key = QLineEdit(cfg["api_key"])
         self.ai_key.setObjectName("Field")
         self.ai_key.setFixedHeight(30)
@@ -1359,9 +1418,6 @@ class SettingsDialog(GlassDialog):
         cl = QVBoxLayout(conn)
         cl.setContentsMargins(16, 10, 16, 12)
         cl.setSpacing(9)
-        cl.addWidget(self._row("服务商", "两家的 Key 分开保存，切回来不用重新粘贴。",
-                               self.ai_provider))
-        cl.addWidget(Divider())
         cl.addWidget(Label("API KEY", 9.4, t.text_faint, weight=QFont.Weight.DemiBold,
                            spacing=1.0))
         cl.addWidget(HBox((self.ai_key, 1), self.ai_eye, self.ai_save, spacing=8))
@@ -1393,7 +1449,7 @@ class SettingsDialog(GlassDialog):
         self.ai_custom.setObjectName("Field")
         self.ai_custom.setFixedHeight(28)
         self.ai_custom.setFont(mono(11.5))
-        i18n.placeholder(self.ai_custom, "自定义模型 ID，例如 deepseek-chat")
+        i18n.placeholder(self.ai_custom, "自定义模型 ID，例如 glm-4-flash")
         self.ai_custom_add = Button("添加并使用", "plus", kind="subtle", height=28,
                                     padding=12, font_size=11.6)
         self.ai_custom_add.clicked.connect(self._add_custom_model)
@@ -1459,25 +1515,6 @@ class SettingsDialog(GlassDialog):
         self.store.save()
         self.settingsChanged.emit()
 
-    def _on_provider(self, key: str) -> None:
-        ai_cfg = self.store.settings.setdefault("ai", {})
-        if key not in ai_mod.PROVIDERS or key == ai_cfg.get("provider"):
-            return
-        self._save_ai(quiet=True)          # 先把当前这家的 Key 存进 key_by_provider
-        preset = ai_mod.PROVIDERS[key]
-        ai_cfg["provider"] = key
-        ai_cfg["model"] = preset["default_model"]
-        ai_cfg["base_url"] = ""
-        self.store.save()
-        cfg = ai_mod.config(self.store)
-        self.ai_key.setText(cfg["api_key"])
-        self.ai_base.setText("")
-        self.ai_status.setText("")
-        self._set_ai_hint(preset)
-        self._sync_model_title()
-        self._refresh_model_grid()
-        self._refresh_ai_state()
-
     def _toggle_ai_key(self) -> None:
         showing = self.ai_key.echoMode() == QLineEdit.EchoMode.Normal
         self.ai_key.setEchoMode(QLineEdit.EchoMode.Password if showing
@@ -1486,11 +1523,7 @@ class SettingsDialog(GlassDialog):
 
     def _ai_cfg(self) -> Dict[str, Any]:
         ai_cfg = self.store.settings.setdefault("ai", {})
-        key = self.ai_key.text().strip()
-        provider = ai_cfg.get("provider") or "glm"
-        ai_cfg.setdefault("key_by_provider", {})[provider] = key
-        if provider == "glm":
-            ai_cfg["api_key"] = key       # 兼容 1.0.51 的单 Key 字段
+        ai_cfg["api_key"] = self.ai_key.text().strip()
         return ai_mod.config(self.store)
 
     def _save_ai(self, quiet: bool = False) -> None:
@@ -2212,6 +2245,7 @@ class SettingsDialog(GlassDialog):
                 pass
         for attr, key in (("redirect", "follow_redirects"), ("verify", "verify_ssl"),
                           ("auto_name", "auto_name"), ("restore_session", "restore_session"),
+                          ("stale_notice", "stale_notice"),
                           ("glass_switch", "glass_all"), ("trash_enabled", "trash_enabled")):
             wdg = getattr(self, attr, None)
             if wdg is not None:

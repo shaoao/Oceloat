@@ -19,9 +19,30 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.53"
+VERSION = "1.0.54"
 
 CHANGELOG = [
+    {
+        "version": "1.0.54",
+        "date": "2026-11-19",
+        "items": [
+            "修掉「HTTP 200 却说返回错误码」的误判：提示词现在明确区分传输状态码与业务 code，"
+            "必须结合 msg / data / success 判断，不再看到 code:1 就判失败",
+            "AI 解释响应升级为「AI 响应分析」弹窗：流式输出 + 淡入动画 + 转圈状态，"
+            "可复制、可重新分析；响应页签右侧也加了入口",
+            "分析按当前页签差异化：美化 / 树形 / 原始 / 响应头 / Cookies / 控制台 / 预览 / "
+            "对比 / 提取 / 时间线 / 请求失败，各自只喂对应证据并按关注点输出结论、解读、建议",
+            "接口文档的代码示例改为默认折叠，想看时点箭头展开",
+            "「请求已修改」提示条最右边补了 x 与「不再提醒」，关掉后不再弹出（设置里可改回）",
+            "修复 AI 起名后侧栏仍显示旧名字：同步回集合节点与同名历史记录并刷新侧栏",
+            "全局修复输入法候选阶段提示文字不消失、叠在候选字上的问题；"
+            "后续新增输入框自动生效",
+            "移除前置 / 后置脚本里的 AI 写脚本功能；AI 设置去掉 DeepSeek，只保留智谱 GLM",
+            "重写全部提示词：数据生成、响应分析、文档补全、自动起名都按证据与语义输出，"
+            "减少空话、禁止臆测",
+            "自测 654 项 + 57 项针对性验证全部通过",
+        ],
+    },
     {
         "version": "1.0.53",
         "date": "2026-11-19",
@@ -1093,6 +1114,7 @@ def _sample_state() -> Dict[str, Any]:
             "trash_enabled": True,
             "trash_days": 30,
             "auto_name": True,
+            "stale_notice": True,   # 「请求已修改」提示条：关掉后不再出现
             "restore_session": True,
             "animations": True,
             "glass_all": False,

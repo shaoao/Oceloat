@@ -465,6 +465,7 @@ class MarkdownView(QScrollArea):
         self.headingsChanged.emit([(lvl, text) for lvl, text, _w in self._headings])
 
     def clear(self) -> None:
+        self.blocks = []
         self._headings.clear()
         while self._lay.count() > 1:
             item = self._lay.takeAt(0)

@@ -489,6 +489,8 @@ def stylesheet(t: Theme | None = None) -> str:
 
 
 def apply_theme(app, t: Theme) -> None:
+    from .ime import install as _install_ime_fix
+    _install_ime_fix(app)   # 输入法候选期间隐藏 placeholder（全局一次，后续控件无需处理）
     set_theme(t)
     app.setStyleSheet(stylesheet(t))
     pal = QPalette()

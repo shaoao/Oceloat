@@ -1176,12 +1176,7 @@ class ScriptPage(QWidget):
             "试运行", "play", kind="ghost", height=26, padding=11, font_size=11.5,
             tooltip="不联网，只在临时请求上执行当前脚本，查看日志与错误。")
         self.run_btn.clicked.connect(self._run_test)
-        # AI 写脚本放在按钮组第一位：脚本页最容易卡住的就是「不知道该写什么」
-        self.ai_btn = Button(
-            "AI 写脚本", "spark", kind="subtle", height=26, padding=11, font_size=11.5,
-            tooltip="说一句想做什么，直接生成这个脚本页能跑的 JavaScript")
-        self.ai_btn.clicked.connect(self._ai_script)
-        tools = HBox(self.status_row, 1, self.ai_btn, self.run_btn, spacing=8,
+        tools = HBox(self.status_row, 1, self.run_btn, spacing=8,
                      margins=(14, 0, 0, 0))
 
         lay = QVBoxLayout(self)
@@ -1245,60 +1240,6 @@ class ScriptPage(QWidget):
     def set_logs(self, lines: List[str]) -> None:
         """真实请求执行完脚本后的日志由主窗口回填；结果走弹窗，这里不再内联展示。"""
         self._last_logs = list(lines or [])
-
-    # -------------------------------------------------- AI 写脚本
-    def _ai_script(self) -> None:
-        """一句话 → 脚本：默认就当代码需求，直接写这一页能跑的 JavaScript。"""
-        from . import ai as ai_mod
-        from .dialogs import AiPromptDialog
-
-        ok, why = ai_mod.ready()
-        if not ok:
-            self._set_status(why, "error")
-            return
-        where = "前置脚本" if self._kind == "pre" else "后置脚本"
-        dlg = AiPromptDialog(
-            "AI 写脚本",
-            i18n.trf("说明想在{where}里做什么，AI 会直接写成可运行的 JavaScript。",
-                     where=where),
-            "例如：把响应里的 token 存进环境变量，再断言状态码是 200", parent=self)
-        if not dlg.exec():
-            return
-        ask = dlg.value()
-        if not ask:
-            return
-        self.ai_btn.setEnabled(False)
-        self.status_icon.clear()
-        self.status.setText(i18n.tr("正在生成…"))
-        self.status.setStyleSheet(f"color: {theme().text_faint}; background: transparent;")
-        msgs = ai_mod.messages_for_script(ask, self._kind, "GET",
-                                          "{{base_url}}" if self._kind == "pre" else "")
-        self._ai_chat = ai_mod.start(
-            msgs, max_tokens=560, temperature=0.2,
-            on_done=self._on_ai_script, on_error=self._on_ai_script_failed)
-
-    def _on_ai_script(self, text: str) -> None:
-        from . import ai as ai_mod
-        from PyQt6.QtGui import QTextCursor
-
-        self.ai_btn.setEnabled(True)
-        code = ai_mod.clean_code(text)
-        # 只有「一句中文说明、压根没写代码」才拦下；其余一律当脚本收下
-        if not code or not any(ch in code for ch in "=();{}[]\"'`/."):
-            self._set_status(code or i18n.tr("AI 没有返回脚本，换个说法再试"), "error")
-            return
-        cur = self.code.textCursor()
-        cur.beginEditBlock()
-        cur.select(QTextCursor.SelectionType.Document)
-        cur.insertText(code.rstrip() + "\n")
-        cur.endEditBlock()
-        self.code.setTextCursor(cur)
-        self.code.setFocus()
-        self._set_status(i18n.tr("已生成，点「试运行」检查一下"), "ok")
-
-    def _on_ai_script_failed(self, message: str) -> None:
-        self.ai_btn.setEnabled(True)
-        self._set_status(message[:180], "error")
 
     def _run_test(self) -> None:
         """试跑：不联网，只在临时请求上执行当前脚本，结果用弹窗一次看清。"""
