@@ -35,7 +35,6 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QApplication,
-    QFileDialog,
     QHBoxLayout,
     QSizePolicy,
     QSplitter,
@@ -55,13 +54,13 @@ from .sio_client import SocketIoClient
 from .request_panel import REALTIME_METHODS, SIO_METHOD, RequestEditor
 from .response_panel import ResponsePanel
 from .sidebar import Sidebar
-from .store import VERSION, Store, kv, new_request, resolve_vars, uid
+from .store import Store, kv, new_request, resolve_vars, uid
 from .tabs import TabStrip
-from .anim import running as _anim_running, set_animations, stop as _anim_stop
-from .theme import (C, S, apply_theme, font, mono, px, set_accent, set_ui_scale,
+from .anim import set_animations, stop as _anim_stop
+from .theme import (C, apply_theme, font, mono, px, set_accent, set_ui_scale,
                     theme, theme_by_name)
-from .widgets import (Button, Divider, HBox, Label, Menu, VBox, animate, fade_in,
-                      fade_window, icon_button)
+from .widgets import (Divider, HBox, Label, Menu, VBox, animate, fade_window,
+                      icon_button)
 
 APP_NAME = "Ocelot"
 
@@ -564,6 +563,9 @@ class MockBadge(QWidget):
 
     clicked = pyqtSignal()
 
+    # 字体度量只算一次：sizeHint 每次布局都会问，重复构造 QFontMetricsF 很浪费
+    _fm = None
+
     def __init__(self, hub, parent=None):
         super().__init__(parent)
         self.hub = hub
@@ -586,12 +588,17 @@ class MockBadge(QWidget):
         self._on = bool(running)
 
     def refresh(self) -> None:
+        text, on = self._text, self._on
         self._compute()
-        self.updateGeometry()
-        self.update()
+        if (text, on) != (self._text, self._on):
+            # 文字变了才重排，否则只重画
+            self.updateGeometry()
+            self.update()
 
     def sizeHint(self):  # noqa: N802
-        fm = QFontMetricsF(mono(10.5))
+        fm = self._fm
+        if fm is None:
+            fm = self._fm = QFontMetricsF(mono(10.5))
         return QSize(int(fm.horizontalAdvance(self._text) + 34), 22)
 
     def enterEvent(self, e):  # noqa: N802
@@ -612,7 +619,6 @@ class MockBadge(QWidget):
 
     def paintEvent(self, _e):  # noqa: N802
         t = theme()
-        self._compute()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
@@ -872,7 +878,6 @@ class MainWindow(QWidget):
         self.split.splitterMoved.connect(self._on_sidebar_dragged)
         body_lay.addWidget(self.split, 1)
         root_lay.addWidget(body, 1)
-        root_lay.addWidget(Divider())
         root_lay.addWidget(self._build_statusbar())
 
         self.toast = Toast(self.root)
@@ -884,34 +889,48 @@ class MainWindow(QWidget):
         self.response.show_empty()
 
     def _build_statusbar(self) -> QWidget:
-        """底部一条 28px 的状态栏：左边 Mock 胶囊，右边版本号。
+        """底部一条 28px 的状态栏：只有 Mock 真在跑的时候才出现，胶囊贴右下角。
 
-        以前 Mock 只能在弹窗里看状态，关掉就不知道服务还在不在；把状态钉在
-        底部之后，随时能点回去，也不用为了看一眼端口重开面板。
+        服务没开就整条收起来（连分隔线一起），内容区白白多出 28px；
+        开着的时候点徽章一秒回到 Mock 中心，不用为了看一眼端口重开面板。
         """
-        t = theme()
+        wrap = QWidget()
+        wl = QVBoxLayout(wrap)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.setSpacing(0)
+        wl.addWidget(Divider())
         bar = QWidget()
         bar.setFixedHeight(28)
         lay = QHBoxLayout(bar)
-        lay.setContentsMargins(12, 0, 14, 0)
-        lay.setSpacing(10)
+        lay.setContentsMargins(12, 0, 12, 0)
+        lay.setSpacing(8)
+        lay.addStretch(1)
         self.mock_badge = MockBadge(self.mock)
         self.mock_badge.clicked.connect(self.open_mock)
         lay.addWidget(self.mock_badge, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.status_hint = Label("", 9.8, t.text_faint)
-        lay.addWidget(self.status_hint, 1, Qt.AlignmentFlag.AlignVCenter)
-        lay.addWidget(Label(f"v{VERSION}", 9.6, t.text_faint, mono_font=True),
-                      0, Qt.AlignmentFlag.AlignVCenter)
+        wl.addWidget(bar)
+        self.status_wrap = wrap
+        self._status_on = False
+        wrap.setVisible(False)
+        # 徽章状态由定时器兜底刷新；没在跑时定时器是停的，不白转
         self._status_tick = QTimer(self)
         self._status_tick.setInterval(1800)
         self._status_tick.timeout.connect(self._refresh_mock_badge)
-        self._status_tick.start()
-        return bar
+        return wrap
 
     def _refresh_mock_badge(self) -> None:
         badge = getattr(self, "mock_badge", None)
-        if badge is not None:
-            badge.refresh()
+        if badge is None:
+            return
+        badge.refresh()
+        on = bool(self.mock.is_running)
+        if on != self._status_on:
+            self._status_on = on
+            self.status_wrap.setVisible(on)
+            if on:
+                self._status_tick.start()
+            else:
+                self._status_tick.stop()
 
     def _build_titlebar(self) -> QWidget:
         bar = TitleBar(self)

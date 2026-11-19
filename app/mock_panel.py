@@ -13,13 +13,12 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetricsF, QPainter, QPen
 from PyQt6.QtWidgets import (
     QFileDialog,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -35,12 +34,10 @@ from .mock_server import (
     DEFAULT_PORT,
     MockHub,
     MockServer,
-    default_routes,
-    local_ips,
     mock_config,
     render_placeholders,
 )
-from .theme import C, S, font, method_color, mono, theme
+from .theme import C, font, method_color, mono, theme, ui_scale
 from .widgets import (
     Button,
     Card,
@@ -823,6 +820,42 @@ def _fmt_size(n: int) -> str:
     return f"{n} B"
 
 
+# 自绘行里字体 / 度量各建一次就够：以前每次 paintEvent、每一列都 new 一个 QFont，
+# 滚动几百行时光是建对象就够呛。缓存按 (字号, 等宽, 缩放比) 分桶，改缩放自动失效。
+_FONTS: Dict[tuple, QFont] = {}
+_FMS: Dict[tuple, QFontMetricsF] = {}
+
+
+def _f(size: float, is_mono: bool = True,
+       weight: QFont.Weight = QFont.Weight.Normal) -> QFont:
+    key = (size, is_mono, int(weight), round(ui_scale(), 3))
+    f = _FONTS.get(key)
+    if f is None:
+        f = _FONTS[key] = (mono(size, weight) if is_mono else font(size, weight))
+    return f
+
+
+def _fm(size: float, is_mono: bool = True,
+        weight: QFont.Weight = QFont.Weight.Normal) -> QFontMetricsF:
+    key = (size, is_mono, int(weight), round(ui_scale(), 3))
+    m = _FMS.get(key)
+    if m is None:
+        m = _FMS[key] = QFontMetricsF(_f(size, is_mono, weight))
+    return m
+
+
+_PIX: Dict[tuple, Any] = {}
+
+
+def _icon(name: str, color: str, size: int, weight: float = 1.5):
+    """分组行的折叠箭头 / 文件夹图标：滚动时每帧都重画会不停新建位图，缓存住。"""
+    key = (name, color, size, weight)
+    pm = _PIX.get(key)
+    if pm is None:
+        pm = _PIX[key] = icons.pixmap(name, color, size, weight)
+    return pm
+
+
 class LogRow(QWidget):
     """一条请求日志：时间 · 方法 · 路径 · 状态 · 耗时 · 体积 · 来源 · 命中。
 
@@ -854,7 +887,6 @@ class LogRow(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         w = self.width()
-        mid = self.height() // 2
 
         p.setPen(QPen(C(t.border)))
         p.drawLine(LIST_PAD, self.height() - 1, w - LIST_PAD, self.height() - 1)
@@ -874,16 +906,14 @@ class LogRow(QWidget):
         }
         colors = {"status": token, "route": t.text_faint, "client": t.text_faint,
                   "size": t.text_faint, "ms": t.text_faint}
-        route_left = x
         for key, cw in self.COLS:
             x -= cw
-            p.setFont(mono(10.4) if key != "route" else font(10.6))
             p.setPen(C(colors[key]))
             text = values[key]
             rect = QRectF(x, 0, cw, self.height())
             if key == "route":
-                fm = QFontMetricsF(p.font())
-                text = fm.elidedText(text, Qt.TextElideMode.ElideRight, cw)
+                p.setFont(_f(11.0, False))
+                text = _fm(11.0, False).elidedText(text, Qt.TextElideMode.ElideRight, cw)
                 p.drawText(rect, int(Qt.AlignmentFlag.AlignLeft |
                                      Qt.AlignmentFlag.AlignVCenter), text)
             else:
@@ -895,7 +925,7 @@ class LogRow(QWidget):
             path_right = w - LIST_PAD
 
         # 左侧固定列
-        p.setFont(mono(10.4))
+        p.setFont(_f(10.4))
         p.setPen(C(t.text_faint))
         p.drawText(QRectF(LIST_PAD, 0, self.TIME_W, self.height()),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
@@ -909,11 +939,10 @@ class LogRow(QWidget):
         # 中间路径：吃掉剩余空间，超长右省略
         px = mx + self.METHOD_W + self.GAP
         avail = max(24.0, path_right - px)
-        p.setFont(mono(11.0))
+        p.setFont(_f(11.0))
         p.setPen(C(t.text_dim))
-        fm = QFontMetricsF(p.font())
-        shown = fm.elidedText(i18n.tr(str(e.get("path", ""))),
-                              Qt.TextElideMode.ElideRight, avail)
+        shown = _fm(11.0).elidedText(i18n.tr(str(e.get("path", ""))),
+                                     Qt.TextElideMode.ElideRight, avail)
         p.drawText(QRectF(px, 0, avail, self.height()),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), shown)
         p.end()
@@ -986,21 +1015,20 @@ class GroupRow(QWidget):
             p.setBrush(C(t.hover))
             p.drawRoundedRect(QRectF(self.rect()).adjusted(4, 2, -4, -2), 6, 6)
         x = LIST_PAD + 14 * self.depth
-        chev = icons.pixmap("chevron_right" if self.collapsed else "chevron_down",
-                            t.text_faint, 11, 1.7)
+        chev = _icon("chevron_right" if self.collapsed else "chevron_down",
+                     t.text_faint, 11, 1.7)
         p.drawPixmap(QPointF(x, (self.height() - 11) / 2), chev)
         x += 15
-        folder = icons.pixmap("folder", t.text_faint, 13, 1.5)
+        folder = _icon("folder", t.text_faint, 13, 1.5)
         p.drawPixmap(QPointF(x, (self.height() - 13) / 2), folder)
         x += 19
-        p.setFont(font(11.8, QFont.Weight.DemiBold))
+        p.setFont(_f(11.8, False, QFont.Weight.DemiBold))
         p.setPen(C(t.text_dim))
         p.drawText(QRectF(x, 0, self.width() - x - 40, self.height()),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                    self.label)
-        fm = QFontMetricsF(font(11.8, QFont.Weight.DemiBold))
-        x += fm.horizontalAdvance(self.label) + 7
-        p.setFont(mono(9.8))
+        x += _fm(11.8, False, QFont.Weight.DemiBold).horizontalAdvance(self.label) + 7
+        p.setFont(_f(9.8))
         p.setPen(C(t.text_faint))
         p.drawText(QRectF(x, 0, 40, self.height()),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
@@ -1256,6 +1284,9 @@ class MockAiDialog(GlassDialog):
         if mode == "routes" and not text:
             self.status.setText(i18n.tr("先用一句话说清楚要做什么"))
             return
+        if mode == "cases" and not self.routes:
+            self.status.setText(i18n.tr("先有路由，AI 才能针对它们生成用例"))
+            return
         msgs = (mock_ai.messages_for_cases(self.routes, text) if mode == "cases"
                 else mock_ai.messages_for_routes(text, 6, self.routes))
         self._buf = ""
@@ -1408,7 +1439,7 @@ class MockDialog(GlassDialog):
         self.rows: List[MockRow] = []
         self.route_rows: List[RouteRow] = []
         self.log_rows: List[LogRow] = []
-        self._log_fp: tuple = ()
+        self._log_keys: List[int] = []
         self._chat = None
         t = theme()
 
@@ -1501,13 +1532,23 @@ class MockDialog(GlassDialog):
         tl.addWidget(self.port_edit)
         self.lan_switch = Switch(bool(self._current().get("lan")))
         self.lan_switch.toggled.connect(self._on_lan)
-        lan_box = HBox(Label("局域网", 10.6, t.text_faint), self.lan_switch, spacing=5)
+        lan_box = QWidget()
+        lan_box.setFixedHeight(26)
+        lan_l = QHBoxLayout(lan_box)
+        lan_l.setContentsMargins(0, 0, 0, 0)
+        lan_l.setSpacing(6)
+        lan_l.addWidget(Label("局域网", 10.6, t.text_faint), 0,
+                        Qt.AlignmentFlag.AlignVCenter)
+        lan_l.addWidget(self.lan_switch, 0, Qt.AlignmentFlag.AlignVCenter)
         lan_box.setToolTip("打开后监听 0.0.0.0，手机 / 其它电脑可以用局域网 IP 访问")
-        tl.addWidget(lan_box)
+        tl.addWidget(lan_box, 0, Qt.AlignmentFlag.AlignVCenter)
+        # 只有开了局域网才有可扫的地址，没开就不占宽度
         self.qr_btn = Button("扫码", "external", kind="ghost", height=26, padding=10,
                              font_size=11.4, icon_size=11, tooltip="手机上打开二维码")
         self.qr_btn.clicked.connect(self._show_qr)
-        tl.addWidget(self.qr_btn)
+        tl.addWidget(self.qr_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        # 加进布局的顺序要在 setVisible 之前：addWidget 会把子控件重新 show 出来
+        self.qr_btn.setVisible(bool(self._current().get("lan")))
         self.start_btn = Button("启动服务", "play", kind="primary", height=26, padding=12,
                                 font_size=11.6, icon_size=12)
         self.start_btn.clicked.connect(self._toggle)
@@ -1540,7 +1581,6 @@ class MockDialog(GlassDialog):
             ("新建分组", "folder", self._new_group),
             ("导入 OpenAPI / Postman", "transfer", self._import_doc),
             ("AI 生成", "spark", self._ai_generate),
-            ("AI 用例", "check", self._ai_cases),
         ):
             b = Button(text, icon, kind="subtle", height=26, padding=10, font_size=11.2,
                        icon_size=11)
@@ -1591,6 +1631,7 @@ class MockDialog(GlassDialog):
         inst = self._current()
         self.port_edit.setText(str(inst.get("port") or DEFAULT_PORT))
         self.lan_switch.setChecked(bool(inst.get("lan")))
+        self.qr_btn.setVisible(bool(inst.get("lan")))
         self._sync_local(rebuild=True)
 
     def _instance_menu(self) -> None:
@@ -1599,7 +1640,6 @@ class MockDialog(GlassDialog):
         a_new = menu.addAction(icons.icon("plus", t.text, 14), i18n.tr("新建实例…"))
         a_rename = menu.addAction(icons.icon("pencil", t.text, 14), i18n.tr("重命名当前实例…"))
         a_del = menu.addAction(icons.icon("trash", t.text, 14), i18n.tr("删除当前实例…"))
-        menu.addSeparator()
         for inst in self._instances():
             mark = "✓ " if inst.get("id") == self._current().get("id") else "   "
             act = menu.addAction(f"{mark}{inst.get('name')}  :{inst.get('port')}")
@@ -1626,6 +1666,7 @@ class MockDialog(GlassDialog):
         self._sync_instance_tabs()
         self.port_edit.setText(str(dlg.result_item["port"]))
         self.lan_switch.setChecked(False)
+        self.qr_btn.setVisible(False)
         self._sync_local(rebuild=True)
         self.local_hint.setText(i18n.tr("新实例已创建，点「启动服务」就能各自跑一个端口。"))
 
@@ -1706,6 +1747,7 @@ class MockDialog(GlassDialog):
         inst = self._current()
         inst["lan"] = bool(on)
         self.store.save()
+        self.qr_btn.setVisible(bool(on))
         if self._srv().running:
             self._start()
         else:
@@ -1988,8 +2030,13 @@ class MockDialog(GlassDialog):
                      n=added, g=groups))
 
     def _ai_generate(self) -> None:
+        """一个入口两种产出：生成接口就直接插进来，生成用例就弹 cURL 清单。"""
         dlg = MockAiDialog(self._routes(), self)
-        if dlg.exec() != dlg.DialogCode.Accepted or not dlg.result_routes:
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        if dlg.result_cases:
+            CasesDialog(dlg.result_cases, self._srv().base, self).exec()
+        if not dlg.result_routes:
             return
         for r in dlg.result_routes:
             r["id"] = _new_id("m")
@@ -1999,16 +2046,6 @@ class MockDialog(GlassDialog):
         self._restart_if_running()
         self.local_hint.setText(i18n.trf("AI 生成了 {n} 条路由，已经可以直接请求。",
                                          n=len(dlg.result_routes)))
-
-    def _ai_cases(self) -> None:
-        if not self._routes():
-            self.local_hint.setText(i18n.tr("先有路由，AI 才能生成针对它们的用例。"))
-            return
-        dlg = MockAiDialog(self._routes(), self)
-        dlg.mode.set_current("cases", emit=True)
-        if dlg.exec() != dlg.DialogCode.Accepted or not dlg.result_cases:
-            return
-        CasesDialog(dlg.result_cases, self._srv().base, self).exec()
 
     # -------------------------------------------------- 公开接口页
     def _page_public(self) -> QWidget:
@@ -2160,12 +2197,44 @@ class MockDialog(GlassDialog):
 
     def _refresh_logs(self, force: bool = False) -> None:
         entries = list(self.hub.logs)
-        fp = (len(entries), entries[0].get("time") if entries else "",
-              entries[0].get("path") if entries else "", entries[0].get("ms") if entries else 0)
-        if not force and fp == self._log_fp:
+        top = entries[:150]
+        keys = [id(e) for e in top]
+        if not force and keys == self._log_keys:
             return
-        self._log_fp = fp
+        old = self._log_keys
+        self._log_keys = keys
 
+        # 新日志永远插在最前面：只要上一批还能在列表里对上，就只补新增的几条。
+        # 以前每来一条日志就把 150 行全删了重造，请求一密集就明显卡顿。
+        added = -1
+        if old and keys:
+            try:
+                added = keys.index(old[0])
+            except ValueError:
+                added = -1
+        if force or added < 0:
+            self._rebuild_log_rows(top)
+        elif added:
+            for entry in reversed(top[:added]):
+                row = LogRow(entry)
+                self.log_rows.insert(0, row)
+                self.logs_box.insertWidget(0, row)
+            while len(self.log_rows) > 150:
+                row = self.log_rows.pop()
+                self.logs_box.removeWidget(row)
+                row.setParent(None)
+                row.deleteLater()
+        else:
+            return
+
+        self.logs_empty.setVisible(not entries)
+        self.log_scroll.setVisible(bool(entries))
+        self.log_stats.setText(self._log_summary(entries))
+        if self.tabs.current() == "logs":
+            self.hint.setText(i18n.trf("{n} 条请求", n=len(entries)) if entries
+                              else i18n.tr("请求日志"))
+
+    def _rebuild_log_rows(self, top: List[Dict[str, Any]]) -> None:
         while self.logs_box.count() > 1:
             item = self.logs_box.takeAt(0)
             w = item.widget()
@@ -2173,16 +2242,11 @@ class MockDialog(GlassDialog):
                 w.setParent(None)
                 w.deleteLater()
         self.log_rows.clear()
-        for entry in entries[:150]:
+        for entry in top:
             row = LogRow(entry)
             self.log_rows.append(row)
             self.logs_box.insertWidget(self.logs_box.count() - 1, row)
-        self.logs_empty.setVisible(not entries)
-        self.log_scroll.setVisible(bool(entries))
-        self.log_stats.setText(self._log_summary(entries))
-        if self.tabs.current() == "logs":
-            self.hint.setText(i18n.trf("{n} 条请求", n=len(entries)) if entries
-                              else i18n.tr("请求日志"))
+        self._log_rows_len = len(top)
 
     @staticmethod
     def _log_summary(entries: List[Dict[str, Any]]) -> str:
@@ -2204,6 +2268,13 @@ class MockDialog(GlassDialog):
         self._refresh_logs(force=True)
         if self.tabs.current() == "logs":
             self.log_timer.start()
+
+    def hideEvent(self, e):
+        # 面板收起来就别再每秒刷日志了：日志行留到下次打开时按需重建
+        self.log_timer.stop()
+        self._rebuild_log_rows([])
+        self._log_keys = []
+        super().hideEvent(e)
 
     def closeEvent(self, e):
         self.log_timer.stop()

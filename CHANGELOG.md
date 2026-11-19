@@ -1,5 +1,22 @@
 # What's Changed
 
+## v1.0.65 — 2026-11-20
+
+**Changed**
+- **The status bar only exists while a mock server is running.** The capsule badge moved to the bottom-right and replaced the version number; when nothing is running the whole strip (divider included) collapses, giving the content area 28px back.
+- **The "AI test cases" button is gone.** The AI dialog already had two modes — generate routes / generate test cases — so one entry covers both: routes get inserted, cases open their cURL list.
+- **The QR button only appears when LAN is on.** No LAN, no address to scan, so it no longer takes up a slot.
+- The instance menu dropped its extra separator; the instance list now follows the actions directly.
+
+**Performance**
+- **Request log updates are incremental**: a new entry inserts one row and drops one once the list is full, instead of rebuilding all 150 rows. Measured 0.43 ms per entry versus 4.94 ms — about 91% faster, so bursty traffic no longer stutters. Closing the panel frees those rows immediately.
+- Hand-drawn rows (log, group) now cache fonts, font metrics and icons; scrolling stops creating a `QFont`/`QPixmap` per frame.
+- The badge timer only ticks while the server runs and is fully stopped when idle.
+- Removed dead code and unused imports (the separate test-case entry, the empty status hint, a handful of unused symbols).
+
+**Verified**
+- Full smoke suite: 679 checks pass; brand suite: 107 checks pass.
+
 ## v1.0.64 — 2026-11-20
 
 **Added**

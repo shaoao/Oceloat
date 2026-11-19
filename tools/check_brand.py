@@ -1,4 +1,4 @@
-"""v1.0.64 品牌标识专项自测。
+"""v1.0.65 品牌标识专项自测。
 
 覆盖：细线几何（尖耳 / 圆颊 / 窄下颌，额顶一阶连续、下颌不是平底、侧壁不直）、
 五官（竖椭圆眼 / 倒三角鼻 / 两颗豹斑）与按尺寸分级、位图真的画出了东西、
@@ -270,15 +270,17 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.64", VERSION == "1.0.64", VERSION)
-check("更新内容是 1.0.64", CHANGELOG[0]["version"] == "1.0.64")
-check("更新内容写了品牌标识", any("标识" in x for x in CHANGELOG[0]["items"]))
+check("版本 1.0.65", VERSION == "1.0.65", VERSION)
+check("更新内容是 1.0.65", CHANGELOG[0]["version"] == "1.0.65")
+# 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
+ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
+check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
 check("更新内容写了墨线动画",
-      any("墨线" in x or "描出" in x for x in CHANGELOG[0]["items"]))
+      any("墨线" in x or "描出" in x for x in ALL_ITEMS))
 check("更新内容写了五官",
-      any("眼睛" in x or "鼻" in x for x in CHANGELOG[0]["items"]))
+      any("眼睛" in x or "鼻" in x for x in ALL_ITEMS))
 check("更新内容写了白底图标",
-      any("白底" in x for x in CHANGELOG[0]["items"]))
+      any("白底" in x for x in ALL_ITEMS))
 mw_src = (ROOT / "app" / "main_window.py").read_text(encoding="utf-8")
 check("主窗口导入了 BrandMark", "from .brand import BrandMark" in mw_src)
 check("启动时设置应用图标", "app.setWindowIcon" in (ROOT / "main.py").read_text(encoding="utf-8"))
@@ -328,10 +330,24 @@ check("Mock AI 生成存在", (ROOT / "app" / "mock_ai.py").exists()
 check("二维码模块存在且无第三方依赖", (ROOT / "app" / "qr.py").exists()
       and "import qrcode" not in (ROOT / "app" / "qr.py").read_text(encoding="utf-8"))
 check("云同步统计有元数据", "META_KEY" in (ROOT / "app" / "cloud.py").read_text(encoding="utf-8"))
-check("更新内容写了多实例", any("多实例" in x for x in CHANGELOG[0]["items"]))
-check("更新内容写了一键 Mock", any("一键 Mock" in x for x in CHANGELOG[0]["items"]))
-check("更新内容写了二维码", any("二维码" in x for x in CHANGELOG[0]["items"]))
-check("更新内容写了线条加粗", any("4.2%" in x for x in CHANGELOG[0]["items"]))
+check("更新内容写了多实例", any("多实例" in x for x in ALL_ITEMS))
+check("更新内容写了一键 Mock", any("一键 Mock" in x for x in ALL_ITEMS))
+check("更新内容写了二维码", any("二维码" in x for x in ALL_ITEMS))
+check("更新内容写了线条加粗", any("4.2%" in x for x in ALL_ITEMS))
+
+# ---------------------------------------------------------------- 1.0.65 新增
+print("\n[1.0.65 新增]")
+check("状态栏只在 Mock 运行时出现", "self.status_wrap.setVisible(on)" in _mw_src
+      and "self._status_tick.stop()" in _mw_src)
+check("右下角不再有版本号", "v{VERSION}" not in _mw_src)
+check("AI 用例按钮已并入 AI 生成", "AI 用例" not in _mock_src
+      and "result_cases" in _mock_src)
+check("扫码按钮跟局域网联动", "self.qr_btn.setVisible(bool(on))" in _mock_src)
+check("实例菜单无多余分隔线", "删除当前实例…" in _mock_src)
+check("日志增量刷新", "_log_keys" in _mock_src and "def _rebuild_log_rows" in _mock_src)
+check("自绘行缓存字体与图标", "_FONTS" in _mock_src and "_PIX" in _mock_src)
+check("更新内容写了状态栏收起", any("状态栏" in x for x in ALL_ITEMS))
+check("更新内容写了日志增量", any("增量插入" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:
