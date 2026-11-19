@@ -19,9 +19,23 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.69"
+VERSION = "1.0.70"
 
 CHANGELOG = [
+    {
+        "version": "1.0.70",
+        "date": "2026-11-20",
+        "items": [
+            "可以打包成 macOS 应用了：python3 tools/build_app.py 一条命令出 Ocelot.app 和 dmg，"
+            "不用装 Python，双击就开",
+            "包体从 93MB 压到 62MB：去掉用不到的 Qt 框架与插件、多媒体只留 macOS 系统后端（省 17MB 的 ffmpeg）、"
+            "Qt 翻译只留中文，再 strip 掉符号",
+            "启动约 0.6 秒（进程启动到窗口出现）：单目录打包，不做 onefile，省掉每次启动解压上百兆的耗时",
+            "新增 --self-test：把所有模块导一遍、真起一次 Mock 服务、渲染一次窗口，打包脚本拿它验收产物，"
+            "少一个 Qt 模块就会报错",
+            "README 补了打包和运行说明",
+        ],
+    },
     {
         "version": "1.0.69",
         "date": "2026-11-20",

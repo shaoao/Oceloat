@@ -90,6 +90,11 @@ def main() -> int:
     store = Store.load()
     set_accent(store.settings.get("accent", "auto"))
     apply_theme(app, theme_by_name(store.settings.get("theme", "dark")))
+    # 打包验收用：真的导一遍模块、起一次 Mock、渲染一次窗口，再退出。
+    if "--self-test" in sys.argv:
+        from app.selftest import run as _self_test
+
+        raise SystemExit(_self_test())
     # 品牌标识：Dock 图标与窗口图标用同一枚线条标
     from app.brand import app_icon as _brand_icon
 
@@ -121,6 +126,15 @@ def main() -> int:
     window.show()
     window.raise_()
     window.activateWindow()  # 从 IDE 运行面板启动时也能到最前
+
+    # 启动耗时：外部把自进程起始时间放进 OCELOT_T0，这里打一行，
+    # 打包后量「双击到窗口出来」用（含 PyInstaller 引导时间）。
+    t0 = os.environ.get("OCELOT_T0")
+    if t0:
+        try:
+            print(f"[Ocelot] 启动 {(time.time() - float(t0)) * 1000:.0f} ms", flush=True)
+        except ValueError:
+            pass
 
     autoquit = os.environ.get("OCELOT_AUTOQUIT") or os.environ.get("REQLY_AUTOQUIT")
     if autoquit:

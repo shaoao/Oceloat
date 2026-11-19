@@ -19,3 +19,8 @@ env/
 ocelot_shots/
 state.json
 state.json.bak
+
+# 打包产物
+build/
+dist/
+*.dmg

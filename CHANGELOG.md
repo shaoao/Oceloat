@@ -1,5 +1,18 @@
 # What's Changed
 
+## v1.0.70 — 2026-11-20
+
+**Added**
+- macOS packaging: `python3 tools/build_app.py` builds `Ocelot.app` and a DMG in one go. The bundle carries its own Python runtime, so the app runs by double-clicking, with no Python install.
+- `--self-test`: imports every module, starts a real mock server, loads a media file and renders the main window offscreen. The build script uses it to verify the packaged bundle, so a missing Qt module fails the build instead of the user's first click.
+
+**Changed**
+- Bundle slimmed from 93 MB to 62 MB (DMG 27 MB): unused Qt frameworks and plugins are dropped, QtMultimedia keeps only the macOS AVFoundation backend (that alone removes the 17 MB ffmpeg runtime), Qt translations are cut to Chinese, and the remaining Mach-O binaries are stripped and re-signed ad hoc.
+- Built as a one-directory bundle, not one-file: no per-launch extraction, so cold start stays around 0.6 s from process start to first frame.
+
+**Verified**
+- Packaged bundle self-test: 6/6 pass. Smoke suite: 680 checks. Brand suite: 146 checks.
+
 ## v1.0.69 — 2026-11-20
 
 **Fixed**

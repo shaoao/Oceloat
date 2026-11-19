@@ -17,6 +17,8 @@ python3 main.py
 
 Python 3.10+，PyQt6 6.5+。macOS 上也可以双击 `启动 Ocelot.command`。第一次打开自带几条示例请求，点一下就能发。
 
+不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.70.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
+
 ## 发请求
 
 GET / POST / PUT / PATCH / DELETE / HEAD / OPTIONS 都有。参数、请求头、Cookies、请求体和认证分开填，互不打架；JSON 请求体边写边校验。
@@ -89,9 +91,12 @@ WebSocket 和 Socket.IO 是独立的请求类型，有整页界面：文本 / JS
 
 ```bash
 python3 tools/smoke.py        # 680 项自测，会真起 HTTP / WebSocket 服务
-python3 tools/check_brand.py  # 标识与版本检查
+python3 tools/check_brand.py  # 标识、版本与打包配方检查
 python3 tools/readme_shots.py # 重新生成上文截图
+python3 tools/build_app.py    # 打包成 Ocelot.app + dmg（约 62MB / 27MB）
 ```
+
+打包后的 App 自带 Python 和 Qt，双击就开，不用装环境。`python3 main.py --self-test` 会导一遍所有模块、起一次 Mock、渲染一次窗口，打包脚本拿它验收产物。
 
 发版：改 `app/store.py` 的 `VERSION`（末位加一），往 `CHANGELOG` 写几条。软件里「设置 → 关于 → 更新内容」读的就是它。
 

@@ -1,4 +1,4 @@
-"""v1.0.69 品牌标识专项自测。
+"""v1.0.70 品牌标识专项自测。
 
 覆盖：细线几何（尖耳 / 圆颊 / 窄下颌，额顶一阶连续、下颌不是平底、侧壁不直）、
 五官（竖椭圆眼 / 倒三角鼻 / 两颗豹斑）与按尺寸分级、位图真的画出了东西、
@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.69", VERSION == "1.0.69", VERSION)
-check("更新内容是 1.0.69", CHANGELOG[0]["version"] == "1.0.69")
+check("版本 1.0.70", VERSION == "1.0.70", VERSION)
+check("更新内容是 1.0.70", CHANGELOG[0]["version"] == "1.0.70")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -412,6 +412,29 @@ check("i18n 同步了新简介",
 check("更新内容写了方形透明修复", any("方形透明块" in x for x in ALL_ITEMS))
 check("更新内容写了简介纠正", any("并不准确" in x for x in ALL_ITEMS))
 check("更新内容写了 README 精简", any("README 又精简" in x for x in ALL_ITEMS))
+
+# ---------------------------------------------------------------- 1.0.70 新增
+print("\n[1.0.70 新增]")
+_spec = (ROOT / "Ocelot.spec").read_text(encoding="utf-8")
+_build = ROOT / "tools" / "build_app.py"
+_mainsrc = (ROOT / "main.py").read_text(encoding="utf-8")
+check("有 PyInstaller 配方", _spec.count("BUNDLE(") == 1 and "main.py" in _spec)
+check("配方保留了必要的 Qt 模块",
+      all(x in _spec for x in ("QtWebSockets", "QtMultimedia", "QtNetwork", "QtWidgets")))
+check("配方挡掉了用不到的 Qt 模块", "iter_modules(PyQt6.__path__)" in _spec
+      and "KEEP_QT" in _spec)
+check("单目录打包，不用 onefile",
+      "exclude_binaries=True" in _spec and "onefile" not in _spec.lower().replace(
+          "不做 onefile", ""))
+check("打包脚本存在且会自检", _build.exists()
+      and "self_test" in _build.read_text(encoding="utf-8"))
+check("自检入口接在 main.py", "--self-test" in _mainsrc
+      and (ROOT / "app" / "selftest.py").exists())
+check("应用图标能用于打包", (ROOT / "docs" / "Ocelot.icns").exists()
+      and (ROOT / "docs" / "Ocelot.icns").stat().st_size > 20_000)
+check("更新内容写了打包", any("打包" in x for x in ALL_ITEMS))
+check("更新内容写了体积与启动", any("62MB" in x for x in ALL_ITEMS)
+      and any("0.6 秒" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:
