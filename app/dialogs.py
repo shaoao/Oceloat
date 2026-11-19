@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import QFileDialog
 
 from . import backdrop, i18n, icons, shortcuts as sc
 from . import ai as ai_mod
+from .brand import BrandMark
 from .anim import stop as _anim_stop
 from .code_editor import CodeView
 from .markdown_view import AnalysisView
@@ -1932,11 +1933,20 @@ class SettingsDialog(GlassDialog):
         pills = HBox(Pill(f"v{VERSION}", t.text_dim, font_size=10.2),
                      Pill("纯本地", t.text_faint, font_size=10.2),
                      1, spacing=6)
+        # 标识：进来先自己演一遍「描边重画」，之后鼠标悬浮还能再演
+        self.about_mark = BrandMark(44, token="text", hover_token="accent",
+                                    autoplay=True, tooltip="Ocelot")
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(13)
+        title_row.addWidget(self.about_mark, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_row.addWidget(word, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_row.addStretch(1)
         hero = Card(radius=12)
         hv = QVBoxLayout(hero)
         hv.setContentsMargins(22, 20, 22, 18)
         hv.setSpacing(7)
-        hv.addWidget(word)
+        hv.addLayout(title_row)
         hv.addWidget(tag)
         hv.addSpacing(6)
         hv.addWidget(pills)

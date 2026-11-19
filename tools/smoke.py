@@ -3577,17 +3577,19 @@ def main() -> int:
         check("菜单动作名可点", "resources" in acts)
         _dlg = _resmon.ResourceDialog(w.store, w, analysis_cache=w._analysis_cache,
                                       tabs_count=len(w.tabs_data))
-        _dlg.resize(1080, 800)
         _dlg.show()
         app.processEvents()
-        check("资源管理器能构建", _dlg.tile_mem.value.text() not in ("", "—"),
-              _dlg.tile_mem.value.text())
-        check("资源管理器六项资产", len(_dlg.asset_stats) == 6)
+        check("资源管理器能构建", _dlg.mem_value.text() not in ("", "—"),
+              _dlg.mem_value.text())
+        check("资源管理器窗口更小", _dlg.width() <= 760 and _dlg.height() <= 520,
+              f"{_dlg.width()}x{_dlg.height()}")
+        check("资源管理器三块内容", len(_dlg.storage_cells) == 4
+              and len(_dlg.health_hints) == 2)
         check("资源管理器显示健康分", _dlg.health_ring._center.isdigit(),
               _dlg.health_ring._center)
         check("资源管理器内存趋势有采样", len(_dlg._samples) >= 1)
-        _dlg._act_cache()
-        check("清空分析缓存后长度为 0", len(w._analysis_cache) == 0)
+        _dlg._act_clean()
+        check("一键清理后缓存为 0", len(w._analysis_cache) == 0)
         _dlg.done(0)
         check("关窗后停止采样", not _dlg._timer.isActive())
 
@@ -3621,7 +3623,8 @@ def main() -> int:
         QTimer.singleShot(int(wait), lambda: driver(i + 1))
 
     QTimer.singleShot(600, lambda: driver(0))
-    QTimer.singleShot(30000, finish)
+    # 兜底超时：机器忙时前面几步会慢，30 秒容易在最后几步前被切断
+    QTimer.singleShot(75000, finish)
     app.exec()
     return 1 if FAILS else 0
 

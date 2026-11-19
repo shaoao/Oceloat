@@ -1682,6 +1682,26 @@ _EN.update({
         "Cached result expires after {n} minutes; click Analyze again to refresh",
 })
 
+# v1.0.58：资源管理器精简 + 品牌标识
+_EN.update({
+    "存储": "Storage",
+    "峰值 {peak}": "Peak {peak}",
+    "峰值 {peak} · 系统 {pct}%": "Peak {peak} · system {pct}%",
+    "峰值 {peak} · 系统内存 {pct}%（已用 {used} / {total}）":
+        "Peak {peak} · system memory {pct}% ({used} / {total} used)",
+    "{size} · {files} 个文件": "{size} · {files} files",
+    "磁盘剩余 {free}（{pct}%）": "{free} free on disk ({pct}%)",
+    "现在 {now} · 平均 {avg}": "now {now} · avg {avg}",
+    "一键清理": "Clean up",
+    "清过期回收站 + 7 天前的备份 + AI 分析缓存":
+        "Purge expired trash, backups older than 7 days and cached analyses",
+    "已清理 {what} · {v}": "Cleaned {what} · {v}",
+    "{n} 项过期记录": "{n} expired items",
+    "{n} 个旧备份": "{n} old backups",
+    "{n} 份分析缓存": "{n} cached analyses",
+    "没有需要清理的东西": "Nothing to clean up",
+})
+
 # v1.0.57：资源管理器
 _EN.update({
     "资源管理器": "Resource Manager",

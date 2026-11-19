@@ -90,6 +90,10 @@ def main() -> int:
     store = Store.load()
     set_accent(store.settings.get("accent", "auto"))
     apply_theme(app, theme_by_name(store.settings.get("theme", "dark")))
+    # 品牌标识：Dock 图标与窗口图标用同一枚线条标
+    from app.brand import app_icon as _brand_icon
+
+    app.setWindowIcon(_brand_icon())
 
     # 上次没正常退出（硬崩 / 强杀）时，本次先关掉动画再启动。
     # macOS 上无边框透明窗口 + 图形特效是 SIGBUS 的主要诱因，动画关掉基本绕开；

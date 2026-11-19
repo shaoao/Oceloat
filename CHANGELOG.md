@@ -1,5 +1,21 @@
 # What's Changed
 
+## v1.0.58 — 2026-11-19
+
+**Added**
+- Line-art ocelot wordmark as the app logo: the welcome screen, the title bar (left of the title), the About card and the Dock icon now share one vector mark that follows the theme.
+- Hover animation on the mark: the outline redraws itself from start to end, the whole mark lifts and scales slightly, and the two spots pop in with a spring. Leaving reverses the same curve. The About page plays it once on open.
+
+**Changed**
+- **Resource Manager trimmed down**: four metric tiles and six panels became three blocks — memory, storage, health — so there is nothing extra to interpret.
+- The window shrank from 1080×800 to 656×452 and lost its scroll area.
+- The maintenance strip went from four buttons to two: **Free memory** and **Clean up** (expired trash + backups older than 7 days + cached analyses), with a single combined report.
+- Dropped the object-type scan (which walked tens of thousands of Python objects every refresh) and runtime widget counters; sampling is now every 3 seconds, so the dashboard costs less memory and CPU itself.
+- Disk free space folded into the storage card as one line instead of its own card.
+
+**Verified**
+- Targeted and full smoke checks pass.
+
 ## v1.0.57 — 2026-11-19
 
 **Added**

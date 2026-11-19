@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import (
 )
 
 from . import i18n, icons
+from .brand import BrandMark, app_icon as brand_icon
 from .code_editor import CodeView, human_elapsed
 from .dialogs import CodeDialog, CommandPalette, EnvDialog, ImportCurlDialog, SettingsDialog
 from .http_client import ApiClient, Response
@@ -516,10 +517,12 @@ class WelcomeView(QWidget):
         col.setSpacing(0)
         col.addStretch(2)
 
-        mark = LogoMark(58)
-        holder = HBox(1, mark, 1)
+        # 空状态就是品牌展示位：进软件先演一遍描边动画
+        self.mark = BrandMark(62, token="text", hover_token="accent",
+                              autoplay=True, tooltip=APP_NAME)
+        holder = HBox(1, self.mark, 1)
         col.addWidget(holder)
-        col.addSpacing(22)
+        col.addSpacing(20)
         title = Label(APP_NAME, 27, theme().text, weight=QFont.Weight.Bold, spacing=-0.4)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(title)
@@ -544,24 +547,6 @@ class WelcomeView(QWidget):
         hint = Label("⌘↵ 发送   ·   ⌘S 保存   ·   ⌘B 侧边栏", 10.5, theme().text_faint, mono_font=True)
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(hint)
-
-
-class LogoMark(QWidget):
-    def __init__(self, size: int = 56, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(size, size)
-
-    def paintEvent(self, _e):
-        t = theme()
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        r = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
-        p.setPen(QPen(C(t.border_strong), 1))
-        p.setBrush(C(t.accent))
-        p.drawRoundedRect(r, 16, 16)
-        pm = icons.pixmap("send", t.accent_text, 26, 1.9)
-        p.drawPixmap(QPointF(r.center().x() - 13, r.center().y() - 13), pm)
-        p.end()
 
 
 # ---------------------------------------------------------------- 主窗口
@@ -624,6 +609,7 @@ class MainWindow(QWidget):
         self._shortcuts: List[QShortcut] = []
 
         self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(brand_icon())
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
@@ -821,6 +807,11 @@ class MainWindow(QWidget):
         self.lights = TrafficLights(self, bar)
         lay.addWidget(self.lights, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addSpacing(10)
+        # 品牌标识：鼠标悬浮时轮廓会沿着起点到终点重新点亮一遍
+        self.brand_mark = BrandMark(21, token="text_dim", hover_token="text",
+                                    tooltip=APP_NAME)
+        lay.addWidget(self.brand_mark, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addSpacing(7)
         word = Label(APP_NAME, 12.5, theme().text, weight=QFont.Weight.DemiBold, spacing=0.2)
         lay.addWidget(word)
         # lay.addWidget(Label("API Client", 10.5, theme().text_faint, mono_font=True, spacing=0.4))

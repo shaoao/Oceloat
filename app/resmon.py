@@ -1,14 +1,11 @@
 """资源管理器：内存、存储与数据资产的实时看板 + 安全维护动作。
 
-这不是又一个设置页。目标是让人一眼看清「这个程序到底占了多少、占在哪、
-还能放出多少」，并且能当场动手清理：
+这不是又一个设置页。目标是让人一眼看清「这个程序到底占了多少、数据占了多少、
+有什么该动手」，并且能当场清理。刻意只留三块：
 
-- 内存：进程常驻 / 峰值 / 系统压力，2 秒采样画出近 3 分钟趋势；
-- 存储：应用数据按类别拆开（状态文件、自动备份、日志、其它），
-  百分比条直接看出谁在占地方；
-- 运行时：对象类型 Top 5、线程数、控件数，能判断有没有东西在堆积；
-- 数据资产：集合 / 请求 / 历史 / 回收站 / 环境 / 标签页；
-- 维护：释放内存、清分析缓存、清过期回收站、清旧备份，做完即时回报。
+- 内存：进程常驻 / 峰值 / 系统压力，3 秒采样画出趋势线；
+- 存储：应用数据按类别拆开（状态文件、自动备份、日志、其它）+ 磁盘余量；
+- 健康度：一个分数加最多两条提示，然后是「释放内存 / 一键清理」。
 
 所有测量都用标准库（resource / gc / vm_stat / ps），不引入 psutil。
 测量失败一律降级为 0 或 None，界面显示「—」，绝不因为读不到指标而崩。
@@ -23,7 +20,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections import Counter, deque
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -40,7 +37,7 @@ from PyQt6.QtWidgets import (
 from . import i18n
 from .dialogs import GlassDialog
 from .theme import C, font, mono, theme
-from .widgets import Button, Card, Label, SmoothScrollArea, fade_in
+from .widgets import Button, Card, Label, fade_in
 
 # ------------------------------------------------------------------ 工具
 
@@ -325,32 +322,6 @@ def data_assets(store: Any, tabs: int = 0) -> Dict[str, int]:
         "environments": size_of("environments"),
         "tabs": tabs,
         "history_limit": int(store.settings.get("history_limit", 240) or 240),
-    }
-
-
-def object_stats(limit: int = 5) -> Dict[str, Any]:
-    """按类型统计 Python 对象数量。gc.get_objects() 有成本，只在刷新时调用。"""
-    counter: Counter = Counter()
-    total = 0
-    try:
-        for obj in gc.get_objects():
-            counter[type(obj).__name__] += 1
-            total += 1
-    except Exception:  # noqa: BLE001
-        pass
-    return {"total": total, "top": counter.most_common(limit), "types": len(counter)}
-
-
-def runtime_stats() -> Dict[str, int]:
-    widgets = 0
-    try:
-        widgets = len(QApplication.allWidgets())
-    except Exception:  # noqa: BLE001
-        pass
-    return {
-        "threads": threading.active_count(),
-        "widgets": widgets,
-        "blocks": int(sys.getallocatedblocks()),
     }
 
 
@@ -642,102 +613,6 @@ class StackBar(QWidget):
         p.end()
 
 
-class BarRow(QWidget):
-    """一行数据：左边颜色点 + 名称，右边数值，下面一条占比细条。"""
-
-    def __init__(self, name: str, token: str = "accent", height: int = 38,
-                 mono_value: bool = True, parent=None):
-        super().__init__(parent)
-        self._name = name
-        self._token = token
-        self._value = "—"
-        self._fraction = 0.0
-        self._mono = mono_value
-        self.setFixedHeight(height)
-
-    def set_name(self, name: str) -> None:
-        self._name = name
-        self.update()
-
-    def set_value(self, value: str, fraction: float) -> None:
-        self._value = value
-        self._fraction = max(0.0, min(1.0, float(fraction)))
-        self.update()
-
-    def paintEvent(self, _e):
-        t = theme()
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        w = float(self.width())
-        h = float(self.height())
-        col = _q(getattr(t, self._token, t.accent))
-
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(col)
-        p.drawEllipse(QRectF(2.0, 10.5, 5.0, 5.0))
-
-        p.setPen(_q(t.text_dim))
-        p.setFont(font(11.4))
-        p.drawText(QRectF(16, 2, max(10.0, w - 168), 22),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                   i18n.tr(self._name))
-
-        p.setPen(_q(t.text))
-        p.setFont(mono(10.8) if self._mono else font(10.8))
-        p.drawText(QRectF(w - 152, 2, 150, 22),
-                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._value)
-
-        bar_y = h - 5
-        # 只画有颜色的那一段，不铺满宽度的轨道 —— 铺了整行就像文字被画了下划线
-        if self._fraction > 0:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(_alpha(col, 200))
-            p.drawRoundedRect(QRectF(2, bar_y, max(4.0, (w - 4) * self._fraction), 4), 2, 2)
-        p.end()
-
-
-class MiniStat(QWidget):
-    """小方块：一个大数字 + 一个标签 + 一颗彩色点。"""
-
-    def __init__(self, label: str, token: str = "accent", parent=None):
-        super().__init__(parent)
-        self._label = label
-        self._token = token
-        self._value = "—"
-        self.setFixedHeight(46)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-
-    def set_value(self, value: str) -> None:
-        self._value = value
-        self.update()
-
-    def paintEvent(self, _e):
-        t = theme()
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        r = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
-        p.setPen(QPen(_alpha(t.text, 14), 1))
-        p.setBrush(_alpha(t.text, 8))
-        p.drawRoundedRect(r, 9, 9)
-
-        col = _q(getattr(t, self._token, t.accent))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(col)
-        p.drawEllipse(QRectF(11, 12.5, 5, 5))
-
-        p.setPen(_q(t.text))
-        p.setFont(font(14.6, QFont.Weight.DemiBold, spacing=-0.2))
-        p.drawText(QRectF(22, 5, self.width() - 28, 20),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._value)
-
-        p.setPen(_q(t.text_faint))
-        p.setFont(font(9.9))
-        p.drawText(QRectF(11, 24, self.width() - 18, 16),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                   i18n.tr(self._label))
-        p.end()
-
-
 class HintLine(QWidget):
     """健康提示一行：彩色圆点 + 自动换行的说明。
 
@@ -762,61 +637,40 @@ class HintLine(QWidget):
         self.label.setText(text)
 
 
-class MetricTile(Card):
-    """顶部指标卡：标签 + 大数字 + 一行说明 + 可选趋势线。"""
-
-    def __init__(self, caption: str, sub: str = "", with_spark: bool = False,
-                 parent=None):
-        super().__init__(radius=12, parent=parent)
-        self.setFixedHeight(92)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(15, 10, 15, 8)
-        lay.setSpacing(1)
-        self.caption = Label(caption, 10.3, theme().text_faint)
-        self.value = Label("—", 18.5, theme().text,
-                           weight=QFont.Weight.DemiBold, spacing=-0.3)
-        self.sub = Label(sub, 10.0, theme().text_faint)
-        lay.addWidget(self.caption)
-        lay.addWidget(self.value)
-        lay.addWidget(self.sub)
-        self.spark: Optional[Sparkline] = None
-        if with_spark:
-            self.spark = Sparkline(height=20)
-            lay.addWidget(self.spark)
-        else:
-            lay.addStretch(1)
-
-    def set_value(self, value: str, sub: Optional[str] = None) -> None:
-        self.value.setText(value)
-        if sub is not None:
-            self.sub.setText(sub)
-
-
 # ------------------------------------------------------------------ 主窗口
 
 
 class ResourceDialog(GlassDialog):
-    """资源管理器窗口。入口在右上角「设置与更多」菜单里。"""
+    """资源管理器窗口（精简版）。
+
+    只回答三个问题：这个程序占了多少内存、应用数据占了多少、有没有需要动手
+    的地方。其余指标（指标卡四连、对象分布、运行时、资产明细、独立磁盘卡）
+    全部砍掉 —— 看板每多一格，用户就多一次「这格要不要管」的判断成本；
+    删掉对象扫描后，每轮刷新也不再遍历几万个 Python 对象。
+    """
 
     BLUR_FIXED = True
-    REFRESH_MS = 2000
+    REFRESH_MS = 3000
+
+    STORAGE_TOKENS = {"state": "accent", "backup": "info",
+                      "log": "warning", "other": "text_faint"}
 
     def __init__(self, store, parent=None, analysis_cache=None,
                  tabs_count: int = 0, on_data_changed=None):
         screen = QApplication.primaryScreen()
         avail = screen.availableGeometry() if screen is not None else None
-        width = 1080
-        height = 800
+        width = 656
+        height = 452
         if avail is not None:
-            width = max(880, min(width, avail.width() - 60))
-            height = max(620, min(height, avail.height() - 40))
+            width = max(560, min(width, avail.width() - 60))
+            height = max(408, min(height, avail.height() - 40))
         super().__init__(parent, width=width, height=height, title="资源管理器")
 
         self.store = store
         self._cache = analysis_cache
         self._tabs_count = tabs_count
         self._on_data_changed = on_data_changed
-        self._samples: deque = deque(maxlen=90)     # (时间戳, 字节)，2s 一个点 = 近 3 分钟
+        self._samples: deque = deque(maxlen=90)     # (时间戳, 字节)，3s 一个点 = 近 4 分半
         self._tick_count = 0
         self._last_storage: Dict[str, Any] = {}
         self._last_assets: Dict[str, int] = {}
@@ -842,215 +696,151 @@ class ResourceDialog(GlassDialog):
         self.refresh_btn.clicked.connect(self._manual_refresh)
         lay.insertWidget(max(0, lay.count() - 1), self.refresh_btn)
 
-    def _section(self, title: str, sub: str = "") -> Tuple[Card, QVBoxLayout, Label]:
-        """统一的分节卡：主题色圆点 + 标题 + 右侧说明 + 内容区。
+    def _build(self) -> None:
+        body = QVBoxLayout(self.body)
+        body.setContentsMargins(16, 12, 16, 14)
+        body.setSpacing(11)
+        body.addWidget(self._build_memory(), 0)
+        body.addWidget(self._build_columns(), 1)
+        body.addWidget(self._build_actions(), 0)
 
-        返回右侧说明那个 Label，采集到的数值后面直接写进去。
-        """
+    def _head(self, title: str, sub: str = "") -> Tuple[QHBoxLayout, Label]:
+        """分节标题：主题色圆点 + 标题 + 右侧说明。"""
+        row = QHBoxLayout()
+        row.setSpacing(7)
+        row.addWidget(Dot("accent", 5))
+        row.addWidget(Label(title, 12.0, theme().text, weight=QFont.Weight.DemiBold))
+        row.addStretch(1)
+        slot = Label(sub, 10.2, theme().text_faint)
+        row.addWidget(slot)
+        return row, slot
+
+    def _build_memory(self) -> QWidget:
+        card = Card(radius=12)
+        box = QVBoxLayout(card)
+        box.setContentsMargins(18, 12, 18, 10)
+        box.setSpacing(2)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        head.addWidget(Label("进程内存", 10.3, theme().text_faint))
+        head.addStretch(1)
+        self.trend_note = Label(i18n.trf("近 {m} 分钟", m=3), 9.8, theme().text_faint)
+        self.trend_note.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        head.addWidget(self.trend_note)
+        box.addLayout(head)
+
+        self.mem_value = Label("—", 25.5, theme().text,
+                               weight=QFont.Weight.DemiBold, spacing=-0.5)
+        box.addWidget(self.mem_value)
+        self.mem_sub = Label("读取中…", 10.3, theme().text_faint)
+        box.addWidget(self.mem_sub)
+        box.addSpacing(3)
+        self.trend = Sparkline("accent", 44)
+        box.addWidget(self.trend)
+        return card
+
+    def _build_columns(self) -> QWidget:
+        host = QWidget()
+        cols = QHBoxLayout(host)
+        cols.setContentsMargins(0, 0, 0, 0)
+        cols.setSpacing(11)
+        cols.addWidget(self._build_storage(), 5)
+        cols.addWidget(self._build_health(), 4)
+        return host
+
+    def _build_storage(self) -> QWidget:
         card = Card(radius=12)
         box = QVBoxLayout(card)
         box.setContentsMargins(16, 12, 16, 12)
-        box.setSpacing(8)
-        head = QHBoxLayout()
-        head.setSpacing(7)
-        head.addWidget(Dot("accent", 5))
-        head.addWidget(Label(title, 12.2, theme().text, weight=QFont.Weight.DemiBold))
-        head.addStretch(1)
-        slot = Label(sub, 10.3, theme().text_faint)
-        head.addWidget(slot)
+        box.setSpacing(9)
+        head, self.storage_sub = self._head("存储")
         box.addLayout(head)
-        return card, box, slot
 
-    def _build(self) -> None:
-        body = QVBoxLayout(self.body)
-        body.setContentsMargins(20, 14, 14, 14)
-        body.setSpacing(0)
-
-        root = QWidget()
-        rv = QVBoxLayout(root)
-        rv.setContentsMargins(0, 0, 6, 2)
-        rv.setSpacing(12)
-
-        # 顶部四个指标
-        tiles = QHBoxLayout()
-        tiles.setSpacing(10)
-        self.tile_mem = MetricTile("进程内存", "峰值 —", with_spark=True)
-        self.tile_sys = MetricTile("系统内存", "读取中…")
-        self.tile_data = MetricTile("应用数据", "读取中…")
-        self.tile_rt = MetricTile("运行时", "读取中…")
-        for tile in (self.tile_mem, self.tile_sys, self.tile_data, self.tile_rt):
-            tiles.addWidget(tile, 1)
-        rv.addLayout(tiles)
-
-        rv.addWidget(self._build_actions())
-
-        cols = QHBoxLayout()
-        cols.setSpacing(12)
-        left = QVBoxLayout()
-        left.setSpacing(12)
-        right = QVBoxLayout()
-        right.setSpacing(12)
-        left.addWidget(self._build_memory())
-        left.addWidget(self._build_storage())
-        left.addWidget(self._build_disk())
-        left.addStretch(1)
-        right.addWidget(self._build_health())
-        right.addWidget(self._build_assets())
-        right.addWidget(self._build_objects())
-        right.addStretch(1)
-        cols.addLayout(left, 58)
-        cols.addLayout(right, 42)
-        rv.addLayout(cols)
-
-        scroll = SmoothScrollArea()
-        scroll.setWidget(root)
-        body.addWidget(scroll)
-
-    def _build_actions(self) -> QWidget:
-        card = Card(radius=12)
-        card.setFixedHeight(54)
-        lay = QHBoxLayout(card)
-        lay.setContentsMargins(15, 0, 14, 0)
-        lay.setSpacing(8)
-        lay.addWidget(Dot("accent", 5))
-        lay.addWidget(Label("维护", 12.2, theme().text, weight=QFont.Weight.DemiBold))
-        lay.addSpacing(6)
-
-        self.btn_free = Button("释放内存", "broom", kind="primary", height=28,
-                               padding=10, icon_size=12, font_size=11.4, gap=6,
-                               tooltip="回收 Python 堆 + 图标 / 图片缓存")
-        self.btn_cache = Button("清空分析缓存", "spark", height=28, padding=10,
-                                icon_size=12, font_size=11.4, gap=6,
-                                tooltip="丢掉本轮已生成的 AI 分析结果")
-        self.btn_trash = Button("清理过期回收站", "trash", height=28, padding=10,
-                                icon_size=12, font_size=11.4, gap=6,
-                                tooltip="只清理超过保留天数的条目")
-        self.btn_backup = Button("清理旧备份", "download", height=28, padding=10,
-                                 icon_size=12, font_size=11.4, gap=6,
-                                 tooltip="删除 7 天前的 state.json 自动备份")
-        self.btn_free.clicked.connect(self._act_free)
-        self.btn_cache.clicked.connect(self._act_cache)
-        self.btn_trash.clicked.connect(self._act_trash)
-        self.btn_backup.clicked.connect(self._act_backup)
-        for btn in (self.btn_free, self.btn_cache, self.btn_trash, self.btn_backup):
-            lay.addWidget(btn)
-
-        lay.addStretch(1)
-        self.report = Label("", 10.6, theme().text_faint)
-        self.report.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.report.setMinimumWidth(180)
-        lay.addWidget(self.report)
-        return card
-
-    def _build_memory(self) -> QWidget:
-        card, box, self.mem_sub = self._section("内存构成")
-        row = QHBoxLayout()
-        row.setSpacing(18)
-        self.mem_ring = Ring(106, 10)
-        row.addWidget(self.mem_ring, 0, Qt.AlignmentFlag.AlignVCenter)
-        legend = QVBoxLayout()
-        legend.setSpacing(2)
-        self.mem_rows: Dict[str, BarRow] = {}
-        for key, token, name in (
-            ("process", "accent", "Ocelot 进程"),
-            ("others", "info", "其它应用"),
-            ("free", "success", "可用内存"),
-        ):
-            row_w = BarRow(name, token, height=34)
-            self.mem_rows[key] = row_w
-            legend.addWidget(row_w)
-        legend.addStretch(1)
-        row.addLayout(legend, 1)
-        box.addLayout(row)
-
-        # 趋势直接长在内存卡里：单独一张卡要多一行标题，800 高的窗口装不下
-        self.trend = Sparkline("accent", 36)
-        box.addWidget(self.trend)
-        self.trend_foot = Label("", 10.2, theme().text_faint, mono_font=True)
-        box.addWidget(self.trend_foot)
-        return card
-
-    def _build_storage(self) -> QWidget:
-        card, box, self.storage_sub = self._section("存储构成")
         self.storage_bar = StackBar(9)
         box.addWidget(self.storage_bar)
-        self.storage_rows: Dict[str, BarRow] = {}
-        tokens = {"state": "accent", "backup": "info", "log": "warning", "other": "text_faint"}
-        rows = QVBoxLayout()
-        rows.setContentsMargins(0, 0, 0, 0)
-        rows.setSpacing(0)
-        for key, token in tokens.items():
-            row_w = BarRow(GROUP_META[key], token, height=28)
-            self.storage_rows[key] = row_w
-            rows.addWidget(row_w)
-        box.addLayout(rows)
-        return card
 
-    def _build_disk(self) -> QWidget:
-        card, box, self.disk_sub = self._section("磁盘")
-        self.disk_bar = StackBar(9)
-        box.addWidget(self.disk_bar)
-        self.disk_card = card          # 数据目录太长了，放悬浮提示里
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(5)
+        self.storage_cells: Dict[str, Label] = {}
+        for i, key in enumerate(("state", "backup", "log", "other")):
+            cell = QWidget()
+            h = QHBoxLayout(cell)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(6)
+            h.addWidget(Dot(self.STORAGE_TOKENS[key], 5), 0,
+                        Qt.AlignmentFlag.AlignVCenter)
+            h.addWidget(Label(GROUP_META[key], 10.4, theme().text_faint))
+            h.addStretch(1)
+            value = Label("—", 10.4, theme().text_dim, mono_font=True)
+            h.addWidget(value)
+            grid.addWidget(cell, i // 2, i % 2)
+            self.storage_cells[key] = value
+        box.addLayout(grid)
+
+        box.addStretch(1)
+        self.disk_note = Label("", 10.1, theme().text_faint)
+        box.addWidget(self.disk_note)
+        self.storage_card = card          # 数据目录太长了，放悬浮提示里
         return card
 
     def _build_health(self) -> QWidget:
-        card, box, _ = self._section("健康度")
+        card = Card(radius=12)
+        box = QVBoxLayout(card)
+        box.setContentsMargins(16, 12, 16, 12)
+        box.setSpacing(9)
+        head, _ = self._head("健康度")
+        box.addLayout(head)
+
         row = QHBoxLayout()
-        row.setSpacing(16)
-        self.health_ring = Ring(94, 9)
+        row.setSpacing(12)
+        self.health_ring = Ring(84, 8)
         row.addWidget(self.health_ring, 0, Qt.AlignmentFlag.AlignVCenter)
         hints = QVBoxLayout()
-        hints.setSpacing(4)
+        hints.setSpacing(5)
         self.health_hints: List[HintLine] = []
-        for _ in range(3):
+        for _ in range(2):
             line = HintLine()
             self.health_hints.append(line)
             hints.addWidget(line)
         hints.addStretch(1)
         row.addLayout(hints, 1)
-        box.addLayout(row)
+        box.addLayout(row, 1)
         return card
 
-    def _build_assets(self) -> QWidget:
-        card, box, self.assets_sub = self._section("数据资产")
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(8)
-        self.asset_stats: Dict[str, MiniStat] = {}
-        specs = (
-            ("requests", "请求数", "accent"),
-            ("collections", "集合数", "info"),
-            ("history", "历史记录", "success"),
-            ("trash", "回收站", "warning"),
-            ("environments", "环境数", "danger"),
-            ("tabs", "标签页", "text_faint"),
-        )
-        for i, (key, name, token) in enumerate(specs):
-            stat = MiniStat(name, token)
-            self.asset_stats[key] = stat
-            grid.addWidget(stat, i // 3, i % 3)
-        box.addLayout(grid)
-        return card
+    def _build_actions(self) -> QWidget:
+        card = Card(radius=12)
+        card.setFixedHeight(50)
+        lay = QHBoxLayout(card)
+        lay.setContentsMargins(14, 0, 13, 0)
+        lay.setSpacing(8)
+        lay.addWidget(Dot("accent", 5))
+        lay.addSpacing(2)
 
-    def _build_objects(self) -> QWidget:
-        card, box, self.objects_sub = self._section("对象分布")
-        self.object_rows: List[BarRow] = []
-        tokens = ("accent", "info", "success", "warning", "danger")
-        rows = QVBoxLayout()
-        rows.setContentsMargins(0, 0, 0, 0)
-        rows.setSpacing(0)
-        for i in range(5):
-            row_w = BarRow("—", tokens[i], height=27)
-            self.object_rows.append(row_w)
-            rows.addWidget(row_w)
-        box.addLayout(rows)
+        self.btn_free = Button("释放内存", "broom", kind="primary", height=27,
+                               padding=10, icon_size=12, font_size=11.4, gap=6,
+                               tooltip="回收 Python 堆 + 图标 / 图片缓存")
+        self.btn_clean = Button("一键清理", "trash", height=27, padding=10,
+                                icon_size=12, font_size=11.4, gap=6,
+                                tooltip="清过期回收站 + 7 天前的备份 + AI 分析缓存")
+        self.btn_free.clicked.connect(self._act_free)
+        self.btn_clean.clicked.connect(self._act_clean)
+        lay.addWidget(self.btn_free)
+        lay.addWidget(self.btn_clean)
+
+        lay.addStretch(1)
+        self.report = Label("", 10.5, theme().text_faint)
+        self.report.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(self.report)
         return card
 
     # -------------------------------------------------- 刷新
     def showEvent(self, e):
         super().showEvent(e)
         if i18n.current() != "en":
-            # 英文下 GlassDialog 已经调过 refresh_i18n()，这里不必再来一遍（对象扫描不便宜）
+            # 英文下 GlassDialog 已经调过 refresh_i18n()，这里不必再来一遍
             self.refresh()
         self._timer.start()
 
@@ -1080,17 +870,14 @@ class ResourceDialog(GlassDialog):
     def refresh(self) -> None:
         self._refresh_memory()
         self._refresh_storage()
-        self._refresh_assets()
-        self._refresh_objects()
         self._refresh_health()
 
     def _tick(self) -> None:
         self._tick_count += 1
         self._refresh_memory()
-        # 存储 / 对象这类扫描不必每 2 秒来一次，12 秒一次足够
-        if self._tick_count % 6 == 0:
+        # 存储 / 健康涉及遍历目录，15 秒一次足够
+        if self._tick_count % 5 == 0:
             self._refresh_storage()
-            self._refresh_assets()
             self._refresh_health()
 
     def _refresh_memory(self) -> None:
@@ -1102,36 +889,22 @@ class ResourceDialog(GlassDialog):
         rss = proc["rss"]
         if rss:
             self._samples.append((time.time(), float(rss)))
-            if self.tile_mem.spark is not None:
-                self.tile_mem.spark.set_series(self._series())
+            self.trend.set_series(self._series())
 
-        self.tile_mem.set_value(
-            human_bytes(rss) if rss else "—",
-            i18n.trf("峰值 {v}", v=human_bytes(proc["peak"])))
+        self.mem_value.setText(human_bytes(rss) if rss else "—")
 
         total = sysmem["total"]
-        avail = sysmem["available"]
         pct = sysmem["percent"]
+        peak = human_bytes(proc["peak"])
         if total:
-            self.tile_sys.set_value(
-                f"{pct:.0f}%",
-                i18n.trf("已用 {used} / {total}",
-                         used=human_bytes(sysmem["used"]), total=human_bytes(total)))
+            self.mem_sub.setText(i18n.trf("峰值 {peak} · 系统 {pct}%",
+                                          peak=peak, pct=f"{pct:.0f}"))
+            # 整机的已用 / 总量放悬浮提示，主标题只留最要紧的两个数
+            self.mem_sub.setToolTip(i18n.trf(
+                "已用 {used} / {total}",
+                used=human_bytes(sysmem["used"]), total=human_bytes(total)))
         else:
-            self.tile_sys.set_value("—", i18n.tr("无法读取系统内存"))
-
-        # 环形图：进程 / 其它应用 / 可用
-        used = sysmem["used"] or rss
-        others = max(0, used - rss)
-        segs = [(rss, theme().accent), (others, theme().info), (avail, theme().success)]
-        self.mem_ring.set_segments(segs, human_bytes(rss) if rss else "—", "Ocelot")
-
-        base = total or (used + avail) or 1
-        self.mem_sub.setText(i18n.trf("整机 {total}", total=human_bytes(total) if total else "—"))
-        for key, value in (("process", rss), ("others", others), ("free", avail)):
-            self.mem_rows[key].set_value(
-                f"{human_bytes(value)} · {value / base * 100:.0f}%",
-                value / base if base else 0.0)
+            self.mem_sub.setText(i18n.trf("峰值 {peak}", peak=peak))
 
         self._refresh_trend(rss)
 
@@ -1149,18 +922,19 @@ class ResourceDialog(GlassDialog):
     def _refresh_trend(self, rss: int) -> None:
         vals = [v for _, v in self._samples if v > 0]
         self.trend.set_series(self._series())
-        if vals:
-            lo, hi = min(vals), max(vals)
-            avg = sum(vals) / len(vals)
-            span = (self._samples[-1][0] - self._samples[0][0]) if len(self._samples) > 1 else 0
+        if not vals:
+            self.trend_note.setText(i18n.tr("采样中…"))
+            return
+        avg = sum(vals) / len(vals)
+        now = human_bytes(rss)
+        if len(self._samples) > 1:
+            span = self._samples[-1][0] - self._samples[0][0]
             head = (i18n.trf("近 {m} 分钟", m=max(1, round(span / 60)))
                     if span >= 60 else i18n.tr("刚开始采样"))
-            self.trend_foot.setText(head + i18n.trf(
-                " · 现在 {now} · 最低 {lo} · 平均 {avg} · 最高 {hi}",
-                now=human_bytes(rss), lo=human_bytes(lo),
-                avg=human_bytes(avg), hi=human_bytes(hi)))
         else:
-            self.trend_foot.setText(i18n.tr("采样中…"))
+            head = i18n.tr("刚开始采样")
+        self.trend_note.setText(head + " · " + i18n.trf(
+            "现在 {now} · 平均 {avg}", now=now, avg=human_bytes(avg)))
 
     def _refresh_storage(self) -> None:
         try:
@@ -1171,73 +945,25 @@ class ResourceDialog(GlassDialog):
             return
         self._last_storage = data
         total = data["total"]
-        self.tile_data.set_value(
-            human_bytes(total),
-            i18n.trf("{files} 个文件 · 状态 {state}",
-                     files=data["files"],
-                     state=human_bytes(next((g["size"] for g in data["groups"]
-                                             if g["key"] == "state"), 0))))
-        self.storage_sub.setText(i18n.trf("应用数据 {size}", size=human_bytes(total)))
-        colors = {"state": theme().accent, "backup": theme().info,
-                  "log": theme().warning, "other": theme().text_faint}
-        base = total or 1
+        self.storage_sub.setText(
+            i18n.trf("{size} · {files} 个文件",
+                     size=human_bytes(total), files=data["files"]))
+        colors = {key: getattr(theme(), token) for key, token in self.STORAGE_TOKENS.items()}
         self.storage_bar.set_segments([(g["size"], colors[g["key"]]) for g in data["groups"]])
         for g in data["groups"]:
-            row = self.storage_rows[g["key"]]
-            row.set_value(human_bytes(g["size"]), g["size"] / base if total else 0.0)
-            row.setToolTip(i18n.trf("{n} 个文件", n=g["files"]))
+            label = self.storage_cells.get(g["key"])
+            if label is not None:
+                label.setText(human_bytes(g["size"]))
+
         disk = data["disk"]
         if disk["total"]:
             free_pct = disk["free"] / disk["total"] * 100
-            self.disk_sub.setText(i18n.trf("剩余 {free}（{pct}%）",
-                                           free=human_bytes(disk["free"]),
-                                           pct=f"{free_pct:.0f}"))
-            self.disk_bar.set_segments([(disk["used"], theme().accent),
-                                        (disk["free"], _alpha(theme().text, 45))])
-            self.disk_card.setToolTip(i18n.trf(
-                "已用 {used} · 可用 {free}\n数据目录 {path}",
-                used=human_bytes(disk["used"]), free=human_bytes(disk["free"]),
-                path=data["root"]))
+            self.disk_note.setText(i18n.trf(
+                "磁盘剩余 {free}（{pct}%）",
+                free=human_bytes(disk["free"]), pct=f"{free_pct:.0f}"))
         else:
-            self.disk_sub.setText("")
-            self.disk_bar.set_segments([])
-            self.disk_card.setToolTip(data["root"])
-
-    def _refresh_assets(self) -> None:
-        try:
-            assets = data_assets(self.store, self._tabs_count)
-        except Exception:  # noqa: BLE001
-            return
-        self._last_assets = assets
-        for key, stat in self.asset_stats.items():
-            stat.set_value(human_count(assets.get(key, 0)))
-        self.assets_sub.setText(i18n.trf("共 {n} 个请求",
-                                         n=human_count(assets.get("requests", 0))))
-
-    def _refresh_objects(self) -> None:
-        try:
-            stats = object_stats(5)
-            runtime = runtime_stats()
-        except Exception:  # noqa: BLE001
-            return
-        top = stats["top"]
-        peak = max((n for _name, n in top), default=1) or 1
-        for i, row_w in enumerate(self.object_rows):
-            if i < len(top):
-                name, count = top[i]
-                row_w.show()
-                row_w.set_name(name)
-                row_w.set_value(human_count(count), count / peak)
-            else:
-                row_w.hide()
-        self.objects_sub.setText(i18n.trf("{n} 个对象 · {k} 种类型",
-                                          n=human_count(stats["total"]),
-                                          k=human_count(stats["types"])))
-        self.tile_rt.set_value(
-            human_count(stats["total"]),
-            i18n.trf("线程 {t} · 控件 {w} · 缓存 {c}",
-                     t=runtime["threads"], w=runtime["widgets"],
-                     c=len(self._cache) if self._cache is not None else 0))
+            self.disk_note.setText("")
+        self.storage_card.setToolTip(i18n.trf("数据目录 {path}", path=data["root"]))
 
     def _refresh_health(self) -> None:
         try:
@@ -1251,6 +977,7 @@ class ResourceDialog(GlassDialog):
                           time.time() - self.store.trash_keep_days() * 86400)
         except Exception:  # noqa: BLE001
             return
+        self._last_assets = assets
         status = health_status(
             mem, storage, assets,
             cache_entries=len(self._cache) if self._cache is not None else 0,
@@ -1262,13 +989,10 @@ class ResourceDialog(GlassDialog):
         metrics = {"pct": f"{mem['percent']:.0f}", "size": human_bytes(storage.get("total", 0)),
                    "n": human_count(assets.get("history", 0)),
                    "limit": human_count(assets.get("history_limit", 240))}
-        expired_n = {"n": human_count(expired)}
         for i, line in enumerate(self.health_hints):
             if i < len(status["hints"]):
                 level, tpl = status["hints"][i]
-                args = dict(metrics)
-                args.update(expired_n)
-                text = i18n.trf(tpl, **args) if "{" in tpl else i18n.tr(tpl)
+                text = i18n.trf(tpl, **metrics) if "{" in tpl else i18n.tr(tpl)
                 line.set_hint(level, text)
                 line.show()
             else:
@@ -1319,49 +1043,47 @@ class ResourceDialog(GlassDialog):
 
         QTimer.singleShot(360, finish)
 
-    def _act_cache(self) -> None:
-        if self._cache is None:
-            self._flash_report(i18n.tr("没有可清理的分析缓存"), "info")
-            return
-        n = len(self._cache)
-        self._cache.clear()
-        self.btn_cache.spin_once(520)
-        self._refresh_objects()
-        if n:
-            self._flash_report(i18n.trf("已清空 {n} 份分析缓存", n=n), "success")
-        else:
-            self._flash_report(i18n.tr("分析缓存本来就是空的"), "info")
+    def _act_clean(self) -> None:
+        """一键清理：过期回收站 + 7 天前的备份 + 分析缓存。
 
-    def _act_trash(self) -> None:
+        三件事都属于「扔了也不会丢数据」的范围，合成一颗按钮，
+        省掉用户在四个按钮之间判断「该点哪个」。
+        """
+        cached = 0
+        if self._cache is not None:
+            cached = len(self._cache)
+            self._cache.clear()
+        trash = 0
         try:
-            n = self.store.purge_expired_trash()
-            if n:
+            trash = int(self.store.purge_expired_trash() or 0)
+            if trash:
                 self.store.save()
                 self._notify_data_changed()
         except Exception:  # noqa: BLE001
-            n = 0
-        self.btn_trash.spin_once(520)
-        self.refresh()
-        if n:
-            self._flash_report(i18n.trf("已清理 {n} 项过期记录", n=n), "success")
-        else:
-            self._flash_report(i18n.tr("没有过期的回收站条目"), "info")
-
-    def _act_backup(self) -> None:
+            trash = 0
+        backups, freed = 0, 0
         try:
             from .store import APP_DIR
 
-            count, freed = free_backups(APP_DIR)
+            backups, freed = free_backups(APP_DIR)
         except Exception:  # noqa: BLE001
-            count, freed = 0, 0
-        self.btn_backup.spin_once(520)
-        self._refresh_storage()
-        self._refresh_health()
-        if count:
-            self._flash_report(i18n.trf("已删除 {n} 个旧备份 · {v}",
-                                       n=count, v=human_bytes(freed)), "success")
+            backups, freed = 0, 0
+
+        self.btn_clean.spin_once(520)
+        self.refresh()
+        parts = []
+        if trash:
+            parts.append(i18n.trf("{n} 项过期记录", n=trash))
+        if backups:
+            parts.append(i18n.trf("{n} 个旧备份", n=backups))
+        if cached:
+            parts.append(i18n.trf("{n} 份分析缓存", n=cached))
+        if parts:
+            text = i18n.trf("已清理 {what} · {v}", what="、".join(parts),
+                            v=human_bytes(freed))
+            self._flash_report(text, "success")
         else:
-            self._flash_report(i18n.tr("没有超过 7 天的备份"), "info")
+            self._flash_report(i18n.tr("没有需要清理的东西"), "info")
 
     def _notify_data_changed(self) -> None:
         if callable(self._on_data_changed):
@@ -1373,8 +1095,4 @@ class ResourceDialog(GlassDialog):
     # -------------------------------------------------- 语言
     def refresh_i18n(self) -> None:
         """语言切换后重设动态文案（采集值本身不需要翻译）。"""
-        self._refresh_memory()
-        self._refresh_storage()
-        self._refresh_assets()
-        self._refresh_objects()
-        self._refresh_health()
+        self.refresh()

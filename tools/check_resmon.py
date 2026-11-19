@@ -112,18 +112,6 @@ check("历史计数", assets["history"] == 2, str(assets["history"]))
 check("回收站计数", assets["trash"] == 1, str(assets["trash"]))
 check("标签页计数来自运行时", assets["tabs"] == 4, str(assets["tabs"]))
 
-# ---------------------------------------------------------------- 对象统计
-print("\n[对象统计]")
-stats = resmon.object_stats(5)
-check("对象总数为正", stats["total"] > 0, str(stats["total"]))
-check("Top 最多 5 项", len(stats["top"]) <= 5, str(len(stats["top"])))
-check("Top 按数量降序",
-      [n for _t, n in stats["top"]] == sorted([n for _t, n in stats["top"]], reverse=True))
-check("类型数不少于 Top 项数", stats["types"] >= len(stats["top"]))
-runtime = resmon.runtime_stats()
-check("控件数非负", runtime["widgets"] >= 0, str(runtime["widgets"]))
-check("堆块数为正", runtime["blocks"] > 0, str(runtime["blocks"]))
-
 # ---------------------------------------------------------------- 健康分
 print("\n[健康分]")
 calm = {"total": 16 * 1024 ** 3, "available": 12 * 1024 ** 3,
@@ -171,34 +159,36 @@ check("超过 8 分钟不再命中", cache.get("k") is None)
 # ---------------------------------------------------------------- 窗口
 print("\n[窗口]")
 dlg = resmon.ResourceDialog(st, analysis_cache=cache, tabs_count=4)
-dlg.resize(1080, 800)
 dlg.show()
 app.processEvents()
-check("窗口能构建", dlg.width() > 800 and dlg.height() > 600,
+check("窗口比旧版更小", dlg.width() <= 760 and dlg.height() <= 520,
       f"{dlg.width()}x{dlg.height()}")
-check("四个指标卡都在", all(hasattr(dlg, n) for n in
-                            ("tile_mem", "tile_sys", "tile_data", "tile_rt")))
-check("六块分节都在", all(hasattr(dlg, n) for n in
-                          ("mem_ring", "storage_bar", "disk_bar",
-                           "health_ring", "asset_stats", "object_rows")))
-check("资产六项齐全", len(dlg.asset_stats) == 6, str(len(dlg.asset_stats)))
-check("对象行有五条", len(dlg.object_rows) == 5, str(len(dlg.object_rows)))
-check("内存数值已填充", "MB" in dlg.tile_mem.value.text() or "GB" in dlg.tile_mem.value.text(),
-      dlg.tile_mem.value.text())
-check("系统内存已填充", "%" in dlg.tile_sys.value.text(), dlg.tile_sys.value.text())
-check("存储数值已填充", dlg.tile_data.value.text() != "—", dlg.tile_data.value.text())
+check("窗口不至于小到挤成一团", dlg.width() >= 600 and dlg.height() >= 400,
+      f"{dlg.width()}x{dlg.height()}")
+check("三块内容都在", all(hasattr(dlg, n) for n in
+                          ("mem_value", "trend", "storage_bar",
+                           "health_ring", "health_hints")))
+check("存储四类齐全", len(dlg.storage_cells) == 4, str(len(dlg.storage_cells)))
+check("健康提示两行", len(dlg.health_hints) == 2, str(len(dlg.health_hints)))
+check("内存数值已填充",
+      "MB" in dlg.mem_value.text() or "GB" in dlg.mem_value.text(),
+      dlg.mem_value.text())
+check("系统内存也写进副标题", "%" in dlg.mem_sub.text(), dlg.mem_sub.text())
+check("存储数值已填充", dlg.storage_sub.text() != "—", dlg.storage_sub.text())
+check("磁盘余量已填充", "剩余" in dlg.disk_note.text(), dlg.disk_note.text())
 check("健康分已算出", dlg.health_ring._center.isdigit(), dlg.health_ring._center)
 check("趋势至少有一个采样点", len(dlg._samples) >= 1, str(len(dlg._samples)))
-check("维护按钮齐全", all(hasattr(dlg, n) for n in
-                          ("btn_free", "btn_cache", "btn_trash", "btn_backup")))
+check("维护只留两颗按钮", all(hasattr(dlg, n) for n in ("btn_free", "btn_clean")))
+check("旧的四连指标卡已删除", not hasattr(dlg, "tile_mem"))
+check("对象分布已删除", not hasattr(dlg, "object_rows"))
 
-# 清空缓存动作真的清
+# 一键清理：缓存真的清掉、回报里带上条数
 cache.put("x", "y")
-dlg._act_cache()
+st.trash.append({"id": "old", "node": {}, "deleted_at": time.time() - 60 * 86400})
+dlg._act_clean()
 app.processEvents()
-check("清空分析缓存生效", len(cache) == 0, str(len(cache)))
-check("清空后给出回报", "清空" in dlg.report.text() or "空" in dlg.report.text(),
-      dlg.report.text())
+check("一键清理清空分析缓存", len(cache) == 0, str(len(cache)))
+check("一键清理给出回报", dlg.report.text() != "", dlg.report.text())
 
 # 释放内存不崩、给出回报
 dlg._act_free()
@@ -213,22 +203,20 @@ check("关窗清空采样", len(dlg._samples) == 0, str(len(dlg._samples)))
 # ---------------------------------------------------------------- 中英文案
 print("\n[文案]")
 strings = [
-    "资源管理器", "资源管理器…", "进程内存", "峰值 {v}", "系统内存", "应用数据", "运行时",
-    "维护", "释放内存", "清空分析缓存", "清理过期回收站", "清理旧备份",
-    "内存构成", "存储构成", "磁盘", "健康度", "数据资产", "对象分布", "Ocelot 进程",
-    "其它应用", "可用内存", "状态文件", "自动备份", "运行日志", "其它文件",
-    "健康分", "请求数", "集合数", "历史记录", "回收站", "环境数", "标签页",
-    "整机 {total}", "已用 {used} / {total}", "{files} 个文件 · 状态 {state}",
-    "剩余 {free}（{pct}%）", "共 {n} 个请求", "{n} 个对象 · {k} 种类型",
-    "线程 {t} · 控件 {w} · 缓存 {c}", "刚开始采样", " · 现在 {now} · 最低 {lo} · 平均 {avg} · 最高 {hi}",
-    "已释放 {v}", "已清空 {n} 份分析缓存", "已清理 {n} 项过期记录",
-    "已删除 {n} 个旧备份 · {v}", "没有超过 7 天的备份", "指标已刷新",
-    "系统内存 {pct}%，余量不多", "未发现问题，状态良好",
+    "资源管理器", "资源管理器…", "进程内存", "峰值 {peak}", "存储", "健康度",
+    "峰值 {peak} · 系统 {pct}%", "已用 {used} / {total}",
+    "{size} · {files} 个文件", "磁盘剩余 {free}（{pct}%）",
+    "现在 {now} · 平均 {avg}", "刚开始采样", "采样中…", "近 {m} 分钟",
+    "状态文件", "自动备份", "运行日志", "其它文件", "健康分",
+    "释放内存", "一键清理", "清过期回收站 + 7 天前的备份 + AI 分析缓存",
+    "已清理 {what} · {v}", "{n} 项过期记录", "{n} 个旧备份", "{n} 份分析缓存",
+    "没有需要清理的东西", "已释放 {v}", "内存已经很干净，无需释放",
+    "指标已刷新", "数据目录 {path}",
 ]
 i18n.set_language("en", notify=False)
 missing = [s for s in strings if i18n.tr(s) == s]
 check("英文词条齐全", not missing, "、".join(missing))
-check("英文不是拼音", i18n.tr("内存构成") == "Memory composition", i18n.tr("内存构成"))
+check("英文不是拼音", i18n.tr("存储") == "Storage", i18n.tr("存储"))
 i18n.set_language("zh", notify=False)
 
 # ---------------------------------------------------------------- 接线
@@ -238,11 +226,10 @@ check("菜单里有资源管理器入口", "资源管理器…" in mw_src)
 check("菜单动作接到 open_resources", "self.open_resources()" in mw_src)
 check("open_resources 传入分析缓存", "analysis_cache=self._analysis_cache" in mw_src)
 check("清数据后刷新侧栏", "_on_resources_changed" in mw_src)
-check("版本 1.0.57", VERSION == "1.0.57", VERSION)
-check("更新内容是 1.0.57", CHANGELOG[0]["version"] == "1.0.57")
-check("更新内容写了资源管理器",
+check("版本 1.0.58", VERSION == "1.0.58", VERSION)
+check("更新内容是 1.0.58", CHANGELOG[0]["version"] == "1.0.58")
+check("更新内容写了资源管理器精简",
       any("资源管理器" in x for x in CHANGELOG[0]["items"]))
-check("更新内容写了 8 分钟", any("8 分钟" in x for x in CHANGELOG[0]["items"]))
 
 # ---------------------------------------------------------------- 汇总
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
