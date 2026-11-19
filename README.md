@@ -91,14 +91,20 @@ WebSocket 和 Socket.IO 是独立的请求类型，有整页界面：文本 / JS
 
 ## 数据在哪
 
-`~/Library/Application Support/Ocelot/state.json`，一个 JSON，先写临时文件再改名，不会写坏。早期版本叫 Reqly，旧数据第一次启动会自动搬过来。
+`~/Library/Application Support/Ocelot/state.json`，一个 JSON，先写临时文件再改名。
+
+旁边会攒几份 `state.json.bak-时间`：每次落盘前自动留上一份，最多 5 份、10 分钟一份。存档读不出来的时候不会悄悄换成示例数据 —— 坏文件改名成 `state.json.corrupt-时间` 留着，程序自己挑最近一份能读的备份恢复，并在界面上说一声。想手动退回某天，在「资源管理器」里右键那份备份，选「用这份存档恢复」。
+
+早期版本叫 Reqly，旧数据第一次启动会自动搬过来。
+
+**只有两个操作会真的删数据**：清空回收站（和回收站到期自动清理），以及「从云端恢复」用云端快照覆盖本机。后者现在会先备份、并在云端比本机少的时候问一句。
 
 ## 开发
 
 代码在 `app/` 下，一个功能一个文件，界面全部用 QPainter 画，不引图片资源。
 
 ```bash
-python3 tools/smoke.py        # 695 项自测，会真起 HTTP / WebSocket 服务
+python3 tools/smoke.py        # 709 项自测，会真起 HTTP / WebSocket 服务
 python3 tools/check_brand.py  # 标识、版本与打包配方检查
 python3 tools/readme_shots.py # 重新生成上文截图
 python3 tools/build_app.py    # 打包成 Ocelot.app + dmg（约 62MB / 27MB）

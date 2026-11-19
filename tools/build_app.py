@@ -97,6 +97,22 @@ def build() -> None:
 
 
 # ---------------------------------------------------------------- 精简
+def stamp_version() -> str:
+    """把 Info.plist 的版本改成 app/store.py 里的 VERSION。
+
+    配方里的版本号是手写的，忘了改就会出现「dmg 叫 1.0.72、App 信息里写着
+    1.0.70」这种前后不一致。以代码里的版本为准，这里统一盖章。
+    """
+    from app.store import VERSION  # type: ignore
+
+    plist = os.path.join(APP, "Contents", "Info.plist")
+    for key in ("CFBundleShortVersionString", "CFBundleVersion"):
+        subprocess.run(["/usr/libexec/PlistBuddy", "-c",
+                        f"Set :{key} {VERSION}", plist],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return VERSION
+
+
 def prune() -> None:
     fw = os.path.join(APP, "Contents", "Frameworks")
     qt_lib = os.path.join(fw, "PyQt6", "Qt6", "lib")
@@ -227,7 +243,7 @@ def main() -> int:
 
     print("[2/5] 删掉没用到的 Qt 框架 / 插件 / 翻译…", flush=True)
     prune()
-    print(f"      {mb(size_of(APP))}")
+    print(f"      {mb(size_of(APP))}  ·  版本 {stamp_version()}")
 
     print("[3/5] strip + ad-hoc 签名…", flush=True)
     strip_and_sign()

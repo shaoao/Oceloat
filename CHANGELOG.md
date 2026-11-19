@@ -1,5 +1,23 @@
 # What's Changed
 
+## v1.0.72 — 2026-11-20
+
+**Fixed**
+- The packaged build shipped without `app/assets`, so every third-party logo in the import dialog (Postman / Apifox / Hoppscotch / Insomnia / OpenAPI) rendered as blank space. The assets now travel with the bundle, and the bundle self-test fails the build if they go missing again.
+- The `Info.plist` version is now stamped from `app/store.py`, so a 1.0.72 DMG no longer reports 1.0.70 in Get Info.
+
+**Changed**
+- The mock center is a normal window now instead of a modal dialog: you can switch requests, send them and edit collections with it open. "Try" no longer closes it.
+- Every window carries its own title (Mock 中心, 设置 · 通用, 资源管理器, 回收站, 导入导出 …), so ⌘` and the system Window menu stop showing "Ocelot" for all of them.
+
+**Data safety**
+- Snapshots are backed up automatically: before each save the previous file is kept as `state.json.bak-<time>`, at most five copies, at most one per 10 minutes. Right-click any of them in the file manager to restore it; the current data is backed up first.
+- A state file that fails to parse is no longer silently replaced with sample data. It is quarantined as `state.json.corrupt-<time>`, the newest readable backup is restored automatically, and the window says what happened.
+- "Restore from cloud" asks for confirmation when the cloud snapshot holds fewer requests than this Mac, and "clean old files" now keeps the three newest backups, only pruning those older than 30 days.
+
+**Verified**
+- Smoke suite: 709 checks. Brand suite: 178 checks. Packaged-bundle self-test: 8/8.
+
 ## v1.0.71 — 2026-11-20
 
 **Added**

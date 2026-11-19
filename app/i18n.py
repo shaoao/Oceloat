@@ -1827,7 +1827,7 @@ _EN.update({
     # 概览
     "{n} 个文件": "{n} files",
     "清理旧文件": "Clean old files",
-    "清掉过期回收站、7 天前的自动备份与 AI 分析缓存":
+    "清掉过期回收站、30 天前的自动备份与 AI 分析缓存（最近的备份永远保留）":
         "Purge expired trash, backups older than 7 days and cached analyses",
     "数据目录": "Data folder",
 
@@ -1898,4 +1898,25 @@ _EN.update({
     "5 分钟": "5 min",
     "15 分钟": "15 min",
     "30 分钟": "30 min",
+})
+
+# v1.0.72：存档自动备份 / 恢复，Mock 中心改为独立窗口
+_EN.update({
+    "用这份存档恢复": "Restore from this snapshot",
+    "用这份备份恢复": "Restore from this backup",
+    "恢复": "Restore",
+    "将用「{name}」（{stamp} · {size}）覆盖当前数据。"
+    "当前数据会先自动备份一份，随时能退回来。恢复后建议重启一次窗口。":
+        "This replaces your current data with “{name}” ({stamp} · {size}). "
+        "The current data is backed up first, so you can undo it. "
+        "Restarting the window afterwards is recommended.",
+    "恢复失败：{why}": "Restore failed: {why}",
+    "已用 {name} 恢复；当前数据已另存为一份备份":
+        "Restored from {name}; the previous data is kept as a backup",
+    "云端数据比本机少": "The cloud copy is smaller than this Mac",
+    "云端有 {a} 个请求，本机有 {b} 个。恢复会用云端覆盖本机（覆盖前自动备份），确定继续？":
+        "The cloud has {a} requests, this Mac has {b}. Restoring overwrites this Mac "
+        "(a backup is taken first). Continue?",
+    "继续恢复": "Restore anyway",
+    "已取消恢复": "Restore cancelled",
 })

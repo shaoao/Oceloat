@@ -1418,7 +1418,13 @@ class CasesDialog(GlassDialog):
 
 
 class MockDialog(GlassDialog):
-    """Mock 中心：本地服务（可多实例）/ 公开接口 / 请求日志。"""
+    """Mock 中心：本地服务（可多实例）/ 公开接口 / 请求日志。
+
+    这是个独立窗口，不是模态弹窗：开着它照样能切请求、发请求、改路由 ——
+    调 Mock 的时候本来就要一边看服务一边改主界面。
+    """
+
+    MODELESS = True
 
     chosen = pyqtSignal(dict)                 # 选了一个公开接口
     trialRequested = pyqtSignal(str, str)     # (method, url)
@@ -1982,7 +1988,7 @@ class MockDialog(GlassDialog):
             return
         self.trialRequested.emit((item.get("method") or "GET").upper(),
                                  srv.url_for(item.get("path") or "/"))
-        self.accept()
+        # 这是独立窗口：试用完别自己关掉，主窗口里发请求时还能对照路由
 
     def _copy_base(self) -> None:
         from PyQt6.QtGui import QGuiApplication
@@ -2145,7 +2151,6 @@ class MockDialog(GlassDialog):
 
     def _pick(self, item: Dict[str, Any]) -> None:
         self.chosen.emit(item)
-        self.accept()
 
     # -------------------------------------------------- 请求日志页
     def _page_logs(self) -> QWidget:

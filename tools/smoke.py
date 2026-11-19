@@ -3769,9 +3769,90 @@ def main() -> int:
             print("失败项：" + ", ".join(FAILS))
         app.quit()
 
+    def step37():
+        """独立 Mock 窗口 / 窗口标题 / 存档备份与恢复 / 品牌图标资源。"""
+        import json as _json
+        import tempfile as _tf
+        from pathlib import Path as _P
+
+        from app import icons as _icons
+        from app.dialogs import SettingsDialog
+        from app.store import Store as _Store
+
+        # 1) Mock 中心是独立窗口：不模态、开两次复用同一个
+        w.open_mock()
+        app.processEvents()
+        dlg = getattr(w, "_mock_dialog", None)
+        check("Mock 中心是非模态窗口", dlg is not None and not dlg.isModal(),
+              f"modal={dlg.isModal() if dlg else 'None'}")
+        check("Mock 中心有自己的窗口名", dlg is not None and dlg.windowTitle() == "Mock 中心",
+              dlg.windowTitle() if dlg else "")
+        first = dlg
+        w.open_mock()
+        app.processEvents()
+        check("重复打开不会重建 Mock 窗口", w._mock_dialog is first)
+        check("Mock 窗口不铺模糊遮罩", first._fixed_mode is False and not first._backdrop_on)
+        first.hide()
+
+        # 2) 其他窗口在 ⌘` 列表里也该有自己的名字
+        sett = SettingsDialog(w.store, w, page="general")
+        check("设置窗口标题带页面名", sett.windowTitle().startswith("设置"),
+              sett.windowTitle())
+        sett.hide()
+
+        # 3) 品牌来源图标（打包漏带就是空白）
+        pm = _icons.source_pixmap("postman", "#FFFFFF", 19)
+        check("品牌来源图标能渲染", not pm.isNull() and pm.width() > 0,
+              f"{pm.width()}x{pm.height()}")
+        check("品牌图标资源目录在", (_icons.assets_root() / "sources").is_dir(),
+              str(_icons.assets_root()))
+
+        # 4) 存档备份：限频、最多 5 份、能恢复、损坏能自救
+        folder = _P(_tf.mkdtemp(prefix="ocelot-bak-"))
+        state = folder / "state.json"
+        st = _Store.load(state)
+        st.data["collections"].append({"id": "mine1", "type": "request",
+                                       "name": "我的请求", "method": "GET",
+                                       "url": "https://example.com"})
+        st.save()
+        st._last_backup = 0
+        st.data["collections"].append({"id": "mine2", "type": "request",
+                                       "name": "第二个", "method": "GET",
+                                       "url": "https://example.com/2"})
+        st.save()
+        check("落盘前会留一份备份", len(st.backups()) >= 1, str(len(st.backups())))
+        for i in range(8):
+            st._last_backup = 0
+            st.data["collections"].append({"id": f"x{i}", "type": "request",
+                                           "name": f"p{i}", "method": "GET",
+                                           "url": "https://example.com"})
+            st.save()
+        check("备份最多留 5 份", len(st.backups()) == 5, str(len(st.backups())))
+
+        # 用最旧那份恢复：当前数据要先被备份
+        oldest = st.backups()[-1]
+        before = len(st.backups())
+        ok, why = st.restore_from(oldest)
+        check("能从备份恢复", ok, why)
+        check("恢复前先备份当前数据", len(st.backups()) >= before,
+              f"{before} -> {len(st.backups())}")
+
+        # 存档写坏：隔离原件 + 从备份救回来
+        state.write_text("{ 这不是 JSON", "utf-8")
+        healed = _Store.load(state)
+        names = [x.name for x in folder.iterdir()]
+        check("坏存档被隔离保留", any(".corrupt-" in n for n in names), str(names))
+        check("坏存档自动从备份恢复", bool(healed.load_note)
+              and "备份" in (healed.load_note or "") and healed.data["collections"],
+              healed.load_note or "")
+        check("恢复后存档可用", isinstance(_json.loads(state.read_text("utf-8")), dict))
+
+        import shutil as _sh
+        _sh.rmtree(folder, ignore_errors=True)
+
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

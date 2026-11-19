@@ -1,4 +1,4 @@
-"""v1.0.71 品牌标识专项自测。
+"""v1.0.72 品牌标识专项自测。
 
 覆盖：细线几何（尖耳 / 圆颊 / 窄下颌，额顶一阶连续、下颌不是平底、侧壁不直）、
 五官（竖椭圆眼 / 倒三角鼻 / 两颗豹斑）与按尺寸分级、位图真的画出了东西、
@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.71", VERSION == "1.0.71", VERSION)
-check("更新内容是 1.0.71", CHANGELOG[0]["version"] == "1.0.71")
+check("版本 1.0.72", VERSION == "1.0.72", VERSION)
+check("更新内容是 1.0.72", CHANGELOG[0]["version"] == "1.0.72")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -462,6 +462,44 @@ check("i18n 登记了文件管理文案",
       (ROOT / "app" / "i18n.py").read_text(encoding="utf-8"))
 check("更新内容写了定时回收", any("自动释放内存" in x for x in ALL_ITEMS))
 check("更新内容写了文件管理", any("资源管理器彻底改成文件管理" in x for x in ALL_ITEMS))
+
+# ---------------------------------------------------------------- 1.0.72 新增
+print("\n[1.0.72 新增]")
+_spec_src = (ROOT / "Ocelot.spec").read_text(encoding="utf-8")
+_mock_src = (ROOT / "app" / "mock_panel.py").read_text(encoding="utf-8")
+_icons_src = (ROOT / "app" / "icons.py").read_text(encoding="utf-8")
+_mw2 = (ROOT / "app" / "main_window.py").read_text(encoding="utf-8")
+check("配方带上了 app/assets", 'datas=[("app/assets", "app/assets")]' in _spec_src)
+check("资源路径兼容打包环境", "_MEIPASS" in _icons_src and "def assets_root" in _icons_src)
+check("自检会验品牌图标", "品牌图标能着色渲染" in
+      (ROOT / "app" / "selftest.py").read_text(encoding="utf-8"))
+check("Mock 中心是独立窗口", "MODELESS = True" in _mock_src
+      and "class MockDialog" in _mock_src)
+check("主窗口复用同一个 Mock 窗口", "_mock_dialog" in _mw2
+      and "dlg.isVisible()" in _mw2)
+check("Mock 用 show() 打开而不是 exec()",
+      "dlg.show()" in _mw2.split("def open_mock")[1].split("def _mock_trial")[0])
+check("对话框都设了系统窗口标题", "self.setWindowTitle(title or \"Ocelot\")" in _dlg_src)
+check("存档每次落盘前备份", "def backup_now" in
+      (ROOT / "app" / "store.py").read_text(encoding="utf-8")
+      and "_backup_if_due" in (ROOT / "app" / "store.py").read_text(encoding="utf-8"))
+check("坏存档先隔离再恢复", "corrupt-" in (ROOT / "app" / "store.py").read_text(encoding="utf-8")
+      and "def _newest_valid_backup" in
+      (ROOT / "app" / "store.py").read_text(encoding="utf-8"))
+check("文件管理器能恢复备份", "def _restore_backup" in _res
+      and "restore_from" in _res)
+check("清理备份至少留 3 份", "keep: int = 3" in _res)
+check("云端覆盖前会确认", "_request_count" in _dlg_src
+      and "云端数据比本机少" in _dlg_src)
+check("打包脚本对齐版本号", "def stamp_version" in
+      (ROOT / "tools" / "build_app.py").read_text(encoding="utf-8"))
+check("i18n 登记了恢复文案",
+      "Restore from this backup" in
+      (ROOT / "app" / "i18n.py").read_text(encoding="utf-8"))
+check("更新内容写了打包图标修复", any("Postman / Apifox" in x for x in ALL_ITEMS))
+check("更新内容写了独立 Mock 窗口", any("Mock 中心改成独立窗口" in x for x in ALL_ITEMS))
+check("更新内容写了存档备份", any("存档自动备份" in x for x in ALL_ITEMS))
+check("更新内容写了窗口标题", any("⌘` 切换" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

@@ -19,9 +19,31 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.71"
+VERSION = "1.0.72"
 
 CHANGELOG = [
+    {
+        "version": "1.0.72",
+        "date": "2026-11-20",
+        "items": [
+            "修打包版的一个疏漏：安装包里少了 app/assets 那几张第三方剪影，"
+            "导入对话框的 Postman / Apifox / Hoppscotch / Insomnia / OpenAPI 图标全是空白。"
+            "现在资源随包发布，自检里也加了一条「品牌图标能着色渲染」，以后漏掉会直接构建失败",
+            "Mock 中心改成独立窗口：开着它照样能切请求、发请求、改集合，两个窗口同时用。"
+            "点「试用」也不再自己关掉，方便对着路由看响应",
+            "每个窗口有自己的名字（Mock 中心 / 设置 · 通用 / 资源管理器 / 回收站 / 导入导出…），"
+            "⌘` 切换和系统「窗口」菜单里不再一律显示 Ocelot",
+            "存档自动备份：每次落盘前把上一份留成 state.json.bak-时间，最多 5 份、"
+            "最多 10 分钟一份。文件管理器里右键任意一份就能「用这份存档恢复」，"
+            "恢复前还会把当前数据再备份一次",
+            "存档读不出来时不再悄悄换成示例数据：坏文件改名保留成 state.json.corrupt-时间，"
+            "自动挑最近一份能读的备份恢复，并在界面上告诉你发生了什么",
+            "「从云端恢复」如果发现云端比本机少（比如旧快照），会先问一句再覆盖；"
+            "「清理旧文件」不再动最近 3 份备份，只清 30 天前的",
+            "打包脚本顺手把 Info.plist 的版本号对齐 app/store.py，避免 dmg 叫 1.0.72、"
+            "App 信息里还写着旧版本",
+        ],
+    },
     {
         "version": "1.0.71",
         "date": "2026-11-20",
@@ -1447,26 +1469,122 @@ def _sample_state() -> Dict[str, Any]:
 class Store:
     _active: Optional["Store"] = None
 
+    # 存档自动备份：每次落盘前把磁盘上那份另存为 state.json.bak-<时间>，最多留
+    # BACKUP_KEEP 份、最多每 BACKUP_EVERY 秒一份。有了它，误删 / 云端覆盖 /
+    # 存档写坏都还能捡回来。
+    BACKUP_KEEP = 5
+    BACKUP_EVERY = 600
+
     def __init__(self, data: Dict[str, Any], path: Path = STATE_FILE):
         self.data = data
         self.path = Path(path)      # 允许传字符串，否则 save() 里 .parent 会炸
         self._dirty = False
+        self._last_backup = 0.0
+        # 启动时如果走过「存档损坏 → 从备份恢复」，这里留一句话给界面提示
+        self.load_note: Optional[str] = None
 
     @classmethod
     def active(cls) -> Optional["Store"]:
         """进程内当前使用的 Store（弹窗读设置用，避免到处传引用）。"""
         return cls._active
 
-    # ------------------------------------------------------------ 生命周期
+    # ------------------------------------------------------------ 备份
+    def backups(self) -> List[Path]:
+        """按时间从新到旧列出自动备份（``state.json.bak-*``）。"""
+        try:
+            items = list(self.path.parent.glob(f"{self.path.name}.bak-*"))
+        except OSError:
+            return []
+        return sorted(items, key=lambda p: p.stat().st_mtime if p.exists() else 0,
+                      reverse=True)
+
+    def backup_now(self) -> Optional[Path]:
+        """立刻把磁盘上那份存档备份一份，返回备份路径（失败返回 None）。"""
+        if not self.path.exists():
+            return None
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+        target = self.path.with_name(f"{self.path.name}.bak-{stamp}")
+        if target.exists():         # 同一秒内多次备份：不互相覆盖
+            target = self.path.with_name(f"{self.path.name}.bak-{stamp}-{len(self.backups())}")
+        try:
+            shutil.copy2(self.path, target)
+        except OSError:
+            return None
+        self._last_backup = time.time()
+        self._prune_backups()
+        return target
+
+    def _backup_if_due(self) -> None:
+        if time.time() - self._last_backup < self.BACKUP_EVERY:
+            return
+        self.backup_now()
+
+    def _prune_backups(self) -> None:
+        for old in self.backups()[self.BACKUP_KEEP:]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+
+    def restore_from(self, source: Path) -> tuple[bool, str]:
+        """用某份备份覆盖当前存档。
+
+        覆盖前先把当前存档另存一份（强制、跳过限频），所以点错了还能退回去。
+        """
+        source = Path(source)
+        try:
+            text = source.read_text("utf-8")
+            data = json.loads(text)
+        except Exception as exc:        # noqa: BLE001
+            return False, f"读不了这份备份：{exc}"
+        if not isinstance(data, dict) or "collections" not in data:
+            return False, "这不是 Ocelot 的存档"
+        self.backup_now()
+        try:
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(text, "utf-8")
+            os.replace(tmp, self.path)
+        except OSError as exc:
+            return False, f"写入失败：{exc}"
+        self.data.clear()
+        self.data.update(data)
+        self._dirty = False
+        return True, ""
+
     @classmethod
     def load(cls, path: Path = STATE_FILE) -> "Store":
         path = Path(path)
         data: Optional[Dict[str, Any]] = None
-        try:
-            if path.exists():
+        note: Optional[str] = None
+        existed = path.exists()
+        if existed:
+            try:
                 data = json.loads(path.read_text("utf-8"))
-        except Exception:
-            data = None
+            except Exception:                    # noqa: BLE001
+                data = None
+            if not isinstance(data, dict):
+                # 存档读不了（写了一半 / 被别的东西改坏了）。以前这里直接换成
+                # 示例数据，下一次保存就把用户的东西盖掉了 —— 现在先留证据、
+                # 再试最近的备份，实在没有才用示例。
+                bad = path.with_name(
+                    f"{path.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
+                try:
+                    os.replace(path, bad)
+                except OSError:
+                    bad = None
+                recovered = cls._newest_valid_backup(path)
+                if recovered:
+                    data = recovered[0]
+                    note = f"存档损坏，已从备份恢复（{recovered[1].name}）"
+                    try:                    # 恢复出来的内容写回原位，往后照常用
+                        path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                                        "utf-8")
+                    except OSError:
+                        pass
+                else:
+                    data = None
+                    note = ("存档损坏，原件已保留为 "
+                            f"{bad.name if bad else path.name}，当前显示示例数据")
         if not isinstance(data, dict):
             data = _sample_state()
         base = _sample_state()
@@ -1484,6 +1602,7 @@ class Store:
                     for sk, sv in default.items():
                         cur.setdefault(sk, sv)
         store = cls(data, path)
+        store.load_note = note
         # 启动时按设置清理过期回收站条目（默认开、保留 30 天）。有清理才落盘，
         # 免得每次启动都重写一次 state.json。
         if store.purge_expired_trash():
@@ -1493,6 +1612,24 @@ class Store:
         if cls._active is None:
             cls._active = store
         return store
+
+    @staticmethod
+    def _newest_valid_backup(path: Path) -> Optional[tuple[Dict[str, Any], Path]]:
+        """找最近一份能解析的备份；``state.json.bak``（云端恢复前留的）也算。"""
+        cands: List[Path] = []
+        try:
+            cands = sorted(path.parent.glob(f"{path.name}.bak*"),
+                           key=lambda p: p.stat().st_mtime, reverse=True)
+        except OSError:
+            return None
+        for cand in cands:
+            try:
+                data = json.loads(cand.read_text("utf-8"))
+            except Exception:            # noqa: BLE001
+                continue
+            if isinstance(data, dict) and "collections" in data:
+                return data, cand
+        return None
 
     @staticmethod
     def migrate_legacy() -> bool:
@@ -1511,6 +1648,8 @@ class Store:
     def save(self) -> None:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            # 覆盖磁盘上前先留一份（限频 10 分钟、最多 5 份），写坏了还能退回去
+            self._backup_if_due()
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), "utf-8")
             os.replace(tmp, self.path)

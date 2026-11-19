@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Callable, Dict
 
@@ -570,7 +571,22 @@ def pixmap(name: str, color: str = "#ECECEF", size: int = 16, width: float = 1.6
 # 第三方工具的标识（Postman / Apifox / Hoppscotch / Insomnia / OpenAPI）不适合
 # 用自绘线条表达，改成透明底的单色剪影资源：读一次原图，按需着色 + 缩放并缓存，
 # 主题切换时只换颜色，不必重新抠图。
-_SOURCE_DIR = Path(__file__).resolve().parent / "assets" / "sources"
+def assets_root() -> Path:
+    """``app/assets`` 的真实位置。
+
+    打包后 Python 代码进了归档，``__file__`` 不再指向磁盘上的目录，资源被
+    PyInstaller 放到 ``sys._MEIPASS``（macOS 上是 ``Contents/Resources``）。
+    以前只按 ``__file__`` 找，dmg 里的导入对话框就成了一张没有 logo 的列表。
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        for cand in (Path(base) / "app" / "assets", Path(base) / "assets"):
+            if cand.is_dir():
+                return cand
+    return Path(__file__).resolve().parent / "assets"
+
+
+_SOURCE_DIR = assets_root() / "sources"
 _source_cache: Dict[tuple, QPixmap] = {}
 _source_raw: Dict[str, QPixmap] = {}
 

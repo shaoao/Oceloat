@@ -106,6 +106,25 @@ def check_media() -> None:
     player.deleteLater()
 
 
+def check_assets() -> None:
+    """第三方来源剪影（导入对话框里的 logo）必须跟着包一起走。
+
+    这些是 PNG 数据文件，不是代码，PyInstaller 不会自动带上；漏了就只剩一排
+    光秃秃的文字，而且只有打包版才看得出来。
+    """
+    from app import icons
+
+    folder = icons.assets_root() / "sources"
+    names = ("postman", "apifox", "hoppscotch", "insomnia", "openapi")
+    missing = [n for n in names if not (folder / f"{n}.png").exists()]
+    _mark("品牌来源图标随包发布", not missing,
+          f"{folder}" + (f" 缺 {', '.join(missing)}" if missing else ""))
+
+    pm = icons.source_pixmap("postman", "#FFFFFF", 19)
+    _mark("品牌图标能着色渲染", not pm.isNull() and pm.width() > 0,
+          f"{pm.width()}x{pm.height()}")
+
+
 def check_mock() -> None:
     """真的起一个服务、真的发一次请求。"""
     from app.mock_server import MockServer, route
@@ -154,7 +173,8 @@ def run() -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.processEvents()
     print("[Ocelot 自检]", flush=True)
-    for fn in (check_imports, check_qt_modules, check_media, check_mock, check_window):
+    for fn in (check_imports, check_qt_modules, check_assets, check_media,
+               check_mock, check_window):
         try:
             fn()
         except Exception as exc:                        # noqa: BLE001

@@ -6,7 +6,7 @@
 - 按名称 / 大小 / 修改时间排序，带筛选框；
 - 双击进入文件夹、打开文件，右键菜单，悬停出行内「在 Finder 中显示 / 删除」；
 - 新建文件夹、重命名、删除（走系统废纸篓，能捡回来）；
-- 顶部一行占用概览 + 一个「清理旧文件」（过期回收站、7 天前备份、分析缓存）。
+- 顶部一行占用概览 + 一个「清理旧文件」（过期回收站、30 天前备份、分析缓存）。
 
 内存/健康度那套看板已经整体搬走：定时回收在 ``app/memtrim.py``，
 开关在「设置 → 通用」。这里只谈存储，不再谈内存。
@@ -317,16 +317,21 @@ def data_assets(store: Any, tabs: int = 0) -> Dict[str, int]:
     }
 
 
-def free_backups(root: Path, days: int = 7) -> Tuple[int, int]:
-    """删掉 N 天前的 state.json.bak-*，返回 (个数, 字节)。只碰自己的备份。"""
+def free_backups(root: Path, days: int = 30, keep: int = 3) -> Tuple[int, int]:
+    """删掉 N 天前的 state.json.bak*，返回 (个数, 字节)。
+
+    只碰自己的备份，而且**永远留最近 keep 份**：哪怕全是老文件，也有三份能退回去。
+    这些备份现在就是存档损坏时的救命绳，不能为了省几百 KB 全清掉。
+    """
     cutoff = time.time() - days * 86400
     count = 0
     freed = 0
     try:
-        entries = list(root.glob("state.json.bak*"))
+        entries = sorted(root.glob("state.json.bak*"),
+                         key=lambda p: p.stat().st_mtime, reverse=True)
     except OSError:
         return 0, 0
-    for path in entries:
+    for path in entries[keep:]:
         try:
             if path.stat().st_mtime > cutoff:
                 continue
@@ -918,7 +923,7 @@ class ResourceDialog(GlassDialog):
         row.addStretch(1)
         self.clean_btn = Button("清理旧文件", "broom", kind="ghost", height=25,
                                 padding=9, icon_size=12, font_size=11.2, gap=5,
-                                tooltip="清掉过期回收站、7 天前的自动备份与 AI 分析缓存")
+                                tooltip="清掉过期回收站、30 天前的自动备份与 AI 分析缓存（最近的备份永远保留）")
         self.clean_btn.clicked.connect(self._act_clean)
         row.addWidget(self.clean_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         box.addLayout(row)
@@ -1153,10 +1158,18 @@ class ResourceDialog(GlassDialog):
         menu.addSeparator()
         act_copy = menu.addAction(icons.icon("copy", t.text_dim, 14), "复制路径")
         menu.addSeparator()
+        act_restore = None
+        if path.name.startswith("state.json"):
+            menu.addSeparator()
+            act_restore = menu.addAction(
+                icons.icon("undo", t.accent, 14), "用这份存档恢复")
+        menu.addSeparator()
         act_rename = menu.addAction(icons.icon("pencil", t.text, 14), "重命名")
         act_delete = menu.addAction(icons.icon("trash", t.danger, 14), "删除")
         chosen = menu.exec(pos)
-        if chosen is act_open:
+        if chosen is act_restore and act_restore is not None:
+            self._restore_backup(path)
+        elif chosen is act_open:
             self.browser._activate(path)
         elif chosen is act_copy:
             QApplication.clipboard().setText(str(path))
@@ -1168,6 +1181,33 @@ class ResourceDialog(GlassDialog):
             self._act_rename()
         elif chosen is act_delete:
             self._delete(path)
+
+    def _restore_backup(self, path: Path) -> None:
+        """把某份 state.json 备份当成当前存档用（覆盖前自动再备份一次）。"""
+        from .dialogs import ConfirmDialog
+
+        try:
+            stamp = time.strftime("%m-%d %H:%M", time.localtime(path.stat().st_mtime))
+            size = human_bytes(path.stat().st_size)
+        except OSError:
+            stamp, size = "", ""
+        ok = ConfirmDialog.ask(
+            self, i18n.tr("用这份备份恢复"),
+            i18n.trf("将用「{name}」（{stamp} · {size}）覆盖当前数据。"
+                     "当前数据会先自动备份一份，随时能退回来。恢复后建议重启一次窗口。",
+                     name=path.name, stamp=stamp, size=size),
+            i18n.tr("恢复"))
+        if not ok:
+            return
+        done, why = self.store.restore_from(path)
+        if not done:
+            self._say_info(i18n.trf("恢复失败：{why}", why=why))
+            return
+        self.store.save()
+        self._notify_data_changed()
+        self.browser.reload()
+        self.refresh_overview()
+        self._say(i18n.trf("已用 {name} 恢复；当前数据已另存为一份备份", name=path.name))
 
     def _act_clean(self) -> None:
         """清掉「扔了也不丢数据」的四类东西：过期回收站、旧备份、分析缓存、空 .trash。"""

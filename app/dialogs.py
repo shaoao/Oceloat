@@ -83,6 +83,20 @@ def _scale_key(value) -> str:
     return best
 
 
+def _request_count(data: dict) -> int:
+    """数一个快照里有多少个请求（含文件夹里的），用来判断备份/云快照够不够新。"""
+    total = 0
+    stack = list((data or {}).get("collections") or [])
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        if node.get("type") == "request":
+            total += 1
+        stack.extend(node.get("children") or [])
+    return total
+
+
 class GlassDialog(QDialog):
     """无边框圆角对话框，与主窗口同一套视觉语言。
 
@@ -92,12 +106,25 @@ class GlassDialog(QDialog):
     """
 
     BLUR_FIXED = False
+    # 需要「开着它还能操作主窗口」的窗口把这里设成 True：不再设模态、不再压
+    # 一层模糊遮罩，窗口也能拖到屏幕任意角落（Mock 中心就是这种）。
+    MODELESS = False
 
     def __init__(self, parent=None, width: int = 520, height: int = 320, title: str = ""):
         super().__init__(parent)
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        if self.MODELESS:
+            # 仍是 Dialog 类型（无边框圆角的绘制与阴影都按它调好了），只是不设
+            # 模态，也不吃主窗口的点击
+            self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+            self.setModal(False)
+            self.setWindowModality(Qt.WindowModality.NonModal)
+        else:
+            self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+            self.setModal(True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setModal(True)
+        # 系统窗口标题：macOS 的 ⌘` 与「窗口」菜单按这个列出窗口。以前只有
+        # 主窗口设过标题，其余窗口在切换器里一律显示成「Ocelot」。
+        self.setWindowTitle(title or "Ocelot")
         self._radius = 13
         self.resize(width, height)
         self._root = QVBoxLayout(self)
@@ -127,6 +154,12 @@ class GlassDialog(QDialog):
         self._root.addWidget(self.body, 1)
 
     # -------------------------------------------------- 绘制
+    def set_title(self, text: str) -> None:
+        """改标题：界面里那行字和系统窗口标题一起改，⌘` 列表里才对得上。"""
+        self.title = text
+        self._title_label.setText(text)
+        self.setWindowTitle(text or "Ocelot")
+
     def paintEvent(self, _e):
         t = theme()
         p = QPainter(self)
@@ -183,7 +216,10 @@ class GlassDialog(QDialog):
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
-        # 页面切换时对话框高度会变，保持「还在正中间」
+        # 页面切换时对话框高度会变，保持「还在正中间」。
+        # 独立窗口（MODELESS）一旦露过面就按用户摆的位置待着，别再自动挪。
+        if self.MODELESS and self._user_moved:
+            return
         if self.isVisible() and not self._user_moved:
             self._place_center()
 
@@ -210,8 +246,10 @@ class GlassDialog(QDialog):
             if nav is not None:
                 nav.sync_width()
                 nav.update()
-        # 模糊 + 固定：设置窗口、导入导出窗口，或用户打开了「所有窗口都模糊」
-        self._fixed_mode = bool(self.BLUR_FIXED or _glass_everywhere())
+        # 模糊 + 固定：设置窗口、导入导出窗口，或用户打开了「所有窗口都模糊」。
+        # 独立窗口（Mock 中心）不铺遮罩 —— 遮罩会把主窗口的点击吃掉。
+        self._fixed_mode = bool(not self.MODELESS
+                                and (self.BLUR_FIXED or _glass_everywhere()))
         if not self._user_moved:
             self._place_center()
         if self._fixed_mode and not self._backdrop_on:
@@ -1912,15 +1950,18 @@ class SettingsDialog(GlassDialog):
             except Exception as exc:  # noqa: BLE001
                 self._cloud_say(False, i18n.trf("数据格式不对：{err}", err=exc))
                 return
-            # 先备份本机快照，再整份替换；云端没带的字段（比如 token）保留本机值
-            try:
-                from .store import STATE_FILE
-
-                if STATE_FILE.exists():
-                    STATE_FILE.with_suffix(".json.bak").write_text(
-                        STATE_FILE.read_text("utf-8"), "utf-8")
-            except Exception:  # noqa: BLE001
-                pass
+            # 云端比本机薄的时候先问一句：一份旧云快照能把几天的本地改动抹平
+            if _request_count(data) < _request_count(self.store.data):
+                ok = ConfirmDialog.ask(
+                    self, i18n.tr("云端数据比本机少"),
+                    i18n.trf("云端有 {a} 个请求，本机有 {b} 个。恢复会用云端覆盖本机"
+                             "（覆盖前自动备份），确定继续？",
+                             a=_request_count(data), b=_request_count(self.store.data)),
+                    i18n.tr("继续恢复"))
+                if not ok:
+                    self._cloud_say(False, i18n.tr("已取消恢复"))
+                    return
+            self.store.backup_now()
             keep = {k: self.store.settings.get(k) for k in
                     ("turso_url", "turso_token", "cloud_enabled", "cloud_auto", "theme", "accent")}
             self.store.data.clear()
@@ -2274,7 +2315,7 @@ class SettingsDialog(GlassDialog):
 
     def _apply_page_title(self) -> None:
         label = dict((k, l) for k, l, _i in self.NAV).get(self.nav.current_key(), "设置")
-        self._title_label.setText(i18n.trf("设置 · {name}", name=label))
+        self.set_title(i18n.trf("设置 · {name}", name=label))
 
     def refresh_i18n(self) -> None:
         """重设运行时拼接的文案。
@@ -4498,7 +4539,7 @@ class TransferDialog(GlassDialog):
         self.back_btn.setVisible(key not in ("import", "done"))
         titles = {"import": "导入导出", "file": "导入集合", "export": "导出集合",
                   "done": self._done_title or "完成"}
-        self._title_label.setText(i18n.tr(titles.get(key, "集合")))
+        self.set_title(i18n.tr(titles.get(key, "导入导出")))
         # 高度跟着内容走：列表页最高，选文件 / 导出页短一些，免得中间空一大块
         if key == "export":
             self._refresh_export_summary()

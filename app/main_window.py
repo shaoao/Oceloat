@@ -730,6 +730,10 @@ class MainWindow(QWidget):
             # 走完整一遍重翻译：只 apply_language 不会重算自绘控件的尺寸，
             # 英文比中文长的那几处（Collections / History）会被裁掉半截。
             self._retranslate("en")
+        # 启动时如果存档坏了被自动救回来，得让人知道发生了什么、原文件在哪
+        note = getattr(store, "load_note", None)
+        if note:
+            QTimer.singleShot(900, lambda: self.toast.show_message(note, "error"))
 
     def _retranslate(self, _lang: str) -> None:
         # 自绘控件的文案不经过 QLabel：在 apply_language 遍历时顺手刷新，
@@ -1181,18 +1185,25 @@ class MainWindow(QWidget):
         self.toast.show_message("已复制为新标签", "success")
 
     def open_mock(self) -> None:
-        """Mock 中心：本地 Mock 服务 + 公开接口清单。"""
+        """Mock 中心：独立窗口，开着也能继续用主窗口。"""
         from .mock_panel import MockDialog
 
-        dlg = MockDialog(self.store, self.mock, self)
-        dlg.chosen.connect(self._use_mock)
-        dlg.trialRequested.connect(self._mock_trial)
-        dlg.stateChanged.connect(self._refresh_mock_badge)
-        was_running = self.mock.is_running
-        dlg.exec()
+        dlg = getattr(self, "_mock_dialog", None)
+        if dlg is None:
+            dlg = MockDialog(self.store, self.mock, self)
+            dlg.chosen.connect(self._use_mock)
+            dlg.trialRequested.connect(self._mock_trial)
+            dlg.stateChanged.connect(self._refresh_mock_badge)
+            self._mock_dialog = dlg
         self._refresh_mock_badge()
-        if self.mock.is_running != was_running:
-            self._sync_mock_state()
+        if dlg.isVisible():
+            # 已经开着：抬到前面就够，别重建（重建会把正在编辑的路由丢掉）
+            dlg.raise_()
+            dlg.activateWindow()
+            return
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _mock_trial(self, method: str, url: str) -> None:
         """点了某条本地路由的「试用」：建一条指向它的请求，直接发。"""

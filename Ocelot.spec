@@ -40,7 +40,9 @@ a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    # app/assets 里是第三方来源的剪影（Postman / Apifox / Hoppscotch / Insomnia /
+    # OpenAPI），导入对话框要用。忘了带上的话打包版就只剩一排光秃秃的文字。
+    datas=[("app/assets", "app/assets")],
     hiddenimports=HIDDEN,
     hookspath=[],
     runtime_hooks=[],
