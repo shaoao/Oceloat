@@ -1,4 +1,4 @@
-"""v1.0.67 品牌标识专项自测。
+"""v1.0.68 品牌标识专项自测。
 
 覆盖：细线几何（尖耳 / 圆颊 / 窄下颌，额顶一阶连续、下颌不是平底、侧壁不直）、
 五官（竖椭圆眼 / 倒三角鼻 / 两颗豹斑）与按尺寸分级、位图真的画出了东西、
@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.67", VERSION == "1.0.67", VERSION)
-check("更新内容是 1.0.67", CHANGELOG[0]["version"] == "1.0.67")
+check("版本 1.0.68", VERSION == "1.0.68", VERSION)
+check("更新内容是 1.0.68", CHANGELOG[0]["version"] == "1.0.68")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -380,6 +380,22 @@ check("macOS 菜单去掉环境变量项", "环境变量…" not in _menu_src
       and "show_envs()" not in _menu_src)
 check("更新内容写了右半侧与恢复", any("右半侧" in x for x in ALL_ITEMS)
       and any("整条收起" in x for x in ALL_ITEMS))
+
+# ---------------------------------------------------------------- 1.0.68 新增
+print("\n[1.0.68 新增]")
+check("全屏后重绘先清窗", "CompositionMode_Clear" in _mw_src
+      and "Qt.GlobalColor.transparent" in _mw_src)
+check("卡片不再描浅色边", "卡片本体时把描边笔收掉" in _mw_src
+      and "p.setPen(Qt.PenStyle.NoPen)\n        p.setBrush(C(t.window))" in _mw_src)
+check("遮罩随窗口状态重对齐", "resync_all()" in _mw_src
+      and "def resync_all()" in (ROOT / "app" / "backdrop.py").read_text(encoding="utf-8"))
+check("欢迎页简介不再写 macOS", "为 macOS 打造" not in _mw_src
+      and "一个窗口全搞定" in _mw_src)
+check("README 有新截图", all(
+    (ROOT / "docs" / f"shot-{n}.png").exists() for n in
+    ("main", "mock", "mock-logs", "qr", "palette", "cloud", "light")))
+check("更新内容写了边框修复", any("半透明线" in x for x in ALL_ITEMS))
+check("更新内容写了 README 装修", any("README 重新排版" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

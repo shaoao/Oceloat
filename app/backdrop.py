@@ -265,3 +265,14 @@ def refresh_all() -> None:
         if backdrop.isVisible():
             backdrop.capture()
             backdrop.update()
+
+
+def resync_all() -> None:
+    """窗口尺寸 / 状态变了（最大化、全屏、还原）：先把遮罩重新对齐到卡片，
+    再重抓底图。事件过滤器只盯 Resize，最大化本身有时只发 WindowStateChange，
+    漏掉之后遮罩就停在旧尺寸，边上露出一条半透明的线。"""
+    for key, backdrop in list(_BY_HOST.items()):
+        backdrop.sync_geometry()
+        if backdrop.isVisible():
+            backdrop.capture()
+            backdrop.update()

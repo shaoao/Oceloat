@@ -526,7 +526,7 @@ class WelcomeView(QWidget):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(title)
         col.addSpacing(7)
-        sub = Label("为 macOS 打造的轻量 API 调试工具", 12.5, theme().text_dim)
+        sub = Label("接口调试、Mock、脚本与协作，一个窗口全搞定", 12.5, theme().text_dim)
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(sub)
         col.addSpacing(34)
@@ -1020,14 +1020,21 @@ class MainWindow(QWidget):
     # -------------------------------------------------- 窗口绘制 / 交互
     CARD_RADIUS = 12
 
+    def card_margin(self) -> int:
+        """当前该留多少阴影留白。每次都现算，不缓存——全屏 / 最大化
+        切换时 changeEvent 未必先于 resize 到达，缓存的 _margin 会短暂过期，
+        窗口边缘就露出一圈没重绘的透明边（用户说的「一圈线」）。
+        """
+        return 0 if self.isMaximized() else self._margin
+
     def card_rect(self) -> QRect:
         """窗口卡片（去掉四周阴影留白）在自身坐标里的矩形。
 
         背景遮罩按这块区域铺，才能和窗口的圆角、边框严丝合缝对齐。
         """
-        if self.isMaximized():
+        m = self.card_margin()
+        if m == 0:
             return self.rect()
-        m = self._margin
         return self.rect().adjusted(m, m, -m, -m)
 
     def card_radius(self) -> int:
@@ -1062,20 +1069,29 @@ class MainWindow(QWidget):
         t = theme()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        if self.isMaximized():
+        # 先整窗刷成透明：无边框透明窗口在全屏 / 最大化来回切换后，边缘那 8px
+        # 会留下上一次的像素，看起来像一圈半透明的线。每次重绘先清干净再画。
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        p.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        m = self.card_margin()
+        if m == 0:
+            # 最大化 / 全屏：铺满、不画圆角和阴影，也不要留任何透明缝。
+            p.setPen(Qt.PenStyle.NoPen)
             p.fillRect(self.rect(), C(t.window))
             p.end()
             return
-        card = QRectF(self.rect()).adjusted(self._margin, self._margin,
-                                            -self._margin, -self._margin)
+        card = QRectF(self.rect()).adjusted(m, m, -m, -m)
         # 外扩阴影：多层圆角矩形近似
-        for i in range(self._margin, 0, -1):
-            alpha = int(26 * (1 - (i - 1) / max(1, self._margin)) ** 2)
+        for i in range(m, 0, -1):
+            alpha = int(26 * (1 - (i - 1) / max(1, m)) ** 2)
             c = QColor(0, 0, 0, alpha if t.is_dark else alpha)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(c)
             p.drawRoundedRect(card.adjusted(-i, -i + 1, i, i + 2), 12 + i, 12 + i)
-        p.setPen(QPen(C(t.border_strong), 1))
+        # 画卡片本体时把描边笔收掉：之前那圈 border_strong 在浅色桌面上
+        # 看着就是「一圈透明的线」，卡片靠阴影和底色已经足够分明。
+        p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(C(t.window))
         p.drawRoundedRect(card, 12, 12)
         p.end()
@@ -1134,8 +1150,16 @@ class MainWindow(QWidget):
             lay = self.layout()
             if lay is not None:
                 lay.setContentsMargins(self._margin, self._margin, self._margin, self._margin)
+            # 尺寸缓存清掉，强制按新状态重裁圆角；否则还原后还戴着全屏时清掉的 mask
+            self._mask_size = None
             self._round_corners()
             self.update()
+            # 遮罩（命令面板 / 弹窗的模糊底）也要跟着重新对齐，不然会停在旧尺寸
+            try:
+                from . import backdrop as _backdrop
+                _backdrop.resync_all()
+            except Exception:       # noqa: BLE001
+                pass
         elif e.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
             # 从别的窗口回来后自检一次：万一标签栏和编辑器错位，立刻拉回正轨
             QTimer.singleShot(0, self._ensure_tab_sync)

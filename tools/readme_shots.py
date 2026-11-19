@@ -3,7 +3,7 @@
 用法：python3 tools/readme_shots.py
 输出：docs/shot-*.png
 
-只截最基础的几张：主界面、请求体、响应树、Mock 中心、接口文档、设置、浅色。
+主界面、请求体、响应树、Mock 中心与日志、二维码、命令面板、云同步、接口文档、设置、浅色。
 响应数据是本地造的，不依赖网络，多跑几次结果一致。
 """
 from __future__ import annotations
@@ -192,27 +192,68 @@ def main() -> int:
         from app.mock_panel import MockDialog
         from app.mock_server import default_routes
 
-        cfg = store.data.setdefault("mock", {})
-        cfg["routes"] = default_routes()
-        ok, _msg = w.mock.start(cfg["routes"], 8787, False)
+        from app.mock_server import mock_config
+
+        cfg = mock_config(store.data)
+        cfg["instances"] = [{"id": "main", "name": "用户服务", "port": 8787,
+                             "lan": False, "auto_start": False,
+                             "routes": default_routes()}]
+        srv = w.mock.get("main", "用户服务")
+        ok, _msg = srv.start(cfg["instances"][0]["routes"], 8787, False, False)
         if ok:
             import urllib.request
 
             for path in ("/api/user", "/api/user", "/api/slow", "/api/boom", "/api/echo"):
                 try:
-                    urllib.request.urlopen(w.mock.url_for(path), timeout=5).read()
+                    urllib.request.urlopen(srv.url_for(path), timeout=5).read()
                 except Exception:      # noqa: BLE001 —— 500 的那条本来就会抛
                     pass
         dlg = MockDialog(store, w.mock, w)
+        dlg._refresh_mock_badge() if hasattr(dlg, "_refresh_mock_badge") else None
+        dlg.resize(1150, 780)
         dlg.show()
 
         def done():
             save(dlg, "mock")
-            dlg.close()
-            w.mock.stop()
-            next_()
+            dlg.tabs.set_current("logs", emit=True)
+            dlg._on_tab("logs")
+            QTimer.singleShot(400, lambda: (save(dlg, "mock-logs"), dlg.close(),
+                                            w.mock.stop_all(), w._refresh_mock_badge(),
+                                            next_()))
 
         QTimer.singleShot(650, done)
+
+    # ---- 4b. 局域网二维码
+    def s_qr(next_):
+        from app.mock_panel import LanQrDialog
+        from app.mock_server import MockServer
+
+        from app.mock_server import default_routes
+
+        srv = MockServer(instance="qr", name="二维码演示")
+        srv.start(default_routes()[:1], 8799, False, True)
+        dlg = LanQrDialog(srv, w)
+        dlg.resize(560, 600)
+        dlg.show()
+
+        def done():
+            save(dlg, "qr")
+            dlg.close()
+            srv.stop()
+            next_()
+
+        QTimer.singleShot(400, done)
+
+    # ---- 4c. 命令面板
+    def s_palette(next_):
+        w.palette.open()
+
+        def done():
+            save(w, "palette")
+            w.palette.close()
+            next_()
+
+        QTimer.singleShot(400, done)
 
     # ---- 5. 接口文档
     def s_doc(next_):
@@ -243,6 +284,26 @@ def main() -> int:
 
         QTimer.singleShot(500, done)
 
+    # ---- 6b. 云同步统计
+    def s_cloud(next_):
+        from app.cloud import snapshot_stats
+        from app.dialogs import SettingsDialog
+
+        dlg = SettingsDialog(store, w, page="cloud")
+        dlg.resize(1000, 760)
+        dlg.show()
+        try:
+            dlg._show_remote(snapshot_stats(store.data))
+        except Exception:      # noqa: BLE001
+            pass
+
+        def done():
+            save(dlg, "cloud")
+            dlg.close()
+            next_()
+
+        QTimer.singleShot(500, done)
+
     # ---- 7. 浅色主题
     def s_light(next_):
         switch_to(get_tab)
@@ -256,7 +317,7 @@ def main() -> int:
 
         QTimer.singleShot(650, done)
 
-    steps = [s_main, s_body, s_tree, s_mock, s_doc, s_settings, s_light]
+    steps = [s_main, s_body, s_tree, s_mock, s_qr, s_palette, s_doc, s_settings, s_cloud, s_light]
 
     def run(i=0):
         if i >= len(steps):

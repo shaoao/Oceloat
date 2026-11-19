@@ -1,5 +1,18 @@
 # What's Changed
 
+## v1.0.68 — 2026-11-20
+
+**Fixed**
+- Removed the faint semi-transparent rim that showed around the window edge after a fullscreen/maximize → command-palette sequence. Each paint now clears the whole frameless window first, the card no longer draws a light 1px stroke, and the backdrop plus the rounded-corner mask resync on every window-state change.
+- Replaced the welcome-page tagline with a plainer line that no longer mentions macOS.
+- Repaired the README screenshot generator, which broke after the multi-instance mock refactor.
+
+**Changed**
+- Rewrote the README in plain language: advantages and quick start first, features grouped by topic, and real screenshots for the mock tree, request log, LAN QR code, command palette, cloud-sync stats and light theme.
+
+**Verified**
+- Full smoke suite: 679 checks pass; brand suite: 128 checks pass.
+
 ## v1.0.67 — 2026-11-20
 
 **Fixed**

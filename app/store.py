@@ -19,9 +19,21 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.67"
+VERSION = "1.0.68"
 
 CHANGELOG = [
+    {
+        "version": "1.0.68",
+        "date": "2026-11-20",
+        "items": [
+            "修掉全屏 / 最大化来回切换后再打开搜索，窗口边缘出现一圈半透明线的问题："
+            "重绘前先整窗清干净，卡片不再描那圈浅色边，遮罩和圆角遮罩都跟着窗口状态重新对齐",
+            "欢迎页那行简介换成人话：接口调试、Mock、脚本与协作，一个窗口全搞定",
+            "README 重新排版：先讲优势和怎么上手，再按功能分组，配上真实界面截图；"
+            "功能清单补全，Mock、云同步、命令面板、二维码都有专门的一节",
+            "README 截图脚本修好了多实例改动带来的报错，并新增请求日志、二维码、命令面板、云同步几张图",
+        ],
+    },
     {
         "version": "1.0.67",
         "date": "2026-11-20",
