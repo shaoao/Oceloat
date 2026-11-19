@@ -1,4 +1,4 @@
-"""v1.0.62 品牌标识专项自测。
+"""v1.0.63 品牌标识专项自测。
 
 覆盖：细线几何（尖耳 / 圆颊 / 窄下颌，额顶一阶连续、下颌不是平底、侧壁不直）、
 五官（竖椭圆眼 / 倒三角鼻 / 两颗豹斑）与按尺寸分级、位图真的画出了东西、
@@ -70,7 +70,7 @@ check("轮廓左右对称",
       abs((bounds.left() - 48.0) + (bounds.right() - 48.0)) < 0.5, str(bounds))
 check("耳朵到下颌的高度对得上", 64 <= bounds.height() <= 70, str(bounds.height()))
 check("轮廓长度合理", 200 < path.length() < 300, str(path.length()))
-check("线宽只占 4% 左右", brand.STROKE_PX <= 0.045, str(brand.STROKE_PX))
+check("线宽只占 3.6% 左右", brand.STROKE_PX <= 0.038, str(brand.STROKE_PX))
 
 
 def heading(u0: float, u1: float) -> float:
@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.62", VERSION == "1.0.62", VERSION)
-check("更新内容是 1.0.62", CHANGELOG[0]["version"] == "1.0.62")
+check("版本 1.0.63", VERSION == "1.0.63", VERSION)
+check("更新内容是 1.0.63", CHANGELOG[0]["version"] == "1.0.63")
 check("更新内容写了品牌标识", any("标识" in x for x in CHANGELOG[0]["items"]))
 check("更新内容写了墨线动画",
       any("墨线" in x or "描出" in x for x in CHANGELOG[0]["items"]))
@@ -290,3 +290,29 @@ if FAIL:
     for name in FAIL:
         print("  -", name)
 sys.exit(1 if FAIL else 0)
+
+
+# ---------------------------------------------------------------- 1.0.63 新增
+print("\n[1.0.63 新增]")
+_src = (ROOT / "app" / "brand.py").read_text(encoding="utf-8")
+_icons_src = (ROOT / "app" / "icons.py").read_text(encoding="utf-8")
+_dlg_src = (ROOT / "app" / "dialogs.py").read_text(encoding="utf-8")
+
+check("应用图标是缓存单例", "@lru_cache(maxsize=1)" in _src
+      and "def app_icon()" in _src)
+check("更新内容默认只加载 10 版",
+      "DEFAULT_LIMIT = 10" in _dlg_src and "CHANGELOG[:max(1, self._limit)]" in _dlg_src)
+check("更新内容支持 1/10/20/50/100 切换",
+      all(f"({n}," in _dlg_src for n in (1, 10, 20, 50, 100)))
+check("品牌来源图标走缓存",
+      "_source_cache" in _icons_src and "def source_pixmap" in _icons_src)
+
+_src_dir = ROOT / "app" / "assets" / "sources"
+for _n in ("postman", "apifox", "hoppscotch", "insomnia", "openapi"):
+    check(f"来源图标 {_n}.png 存在", (_src_dir / f"{_n}.png").exists())
+check("导入页用了品牌来源图标",
+      'source:postman' in _dlg_src and 'source:openapi' in _dlg_src)
+check("更新内容写了范围选择",
+      any("10 个版本" in x for x in CHANGELOG[0]["items"]))
+check("更新内容写了图标缓存",
+      any("缓存" in x for x in CHANGELOG[0]["items"]))

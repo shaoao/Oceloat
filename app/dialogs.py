@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import (QEasingCurve, QPoint, QPointF, QRectF, QSize, Qt, QTimer,
                           QVariantAnimation, pyqtSignal)
-from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QGuiApplication, QPainter, QPainterPath, QPen
+from PyQt6.QtGui import (QAction, QColor, QFont, QFontMetricsF, QGuiApplication, QPainter,
+                         QPainterPath, QPen)
 from PyQt6.QtWidgets import (
     QApplication,
     QStyledItemDelegate,
@@ -2709,9 +2710,15 @@ def _group_items(items: List[str]) -> List[tuple]:
 
 
 class WhatsNewPanel(QWidget):
-    """更新内容面板：版本分组 + 分类小标题 + 自动换行，可滚动。"""
+    """更新内容面板：版本分组 + 分类小标题 + 自动换行，可滚动。
 
-    def __init__(self, parent=None):
+    默认只构造最近 10 个版本——更新日志有 60+ 版、每版十来条，一次全建成
+    QWidget 会让弹窗打开卡顿。切换范围时才重建，且只造看得见的那几版。
+    """
+
+    DEFAULT_LIMIT = 10
+
+    def __init__(self, parent=None, limit: int | None = None):
         super().__init__(parent)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -2721,16 +2728,34 @@ class WhatsNewPanel(QWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        lay.addWidget(self.scroll)
 
+        self._limit = int(limit or self.DEFAULT_LIMIT)
+        self._build()
+
+    def _build(self) -> None:
+        """按当前范围重建内容：先丢弃旧 host，让旧 widget 立刻释放。"""
+        old = self.scroll.takeWidget()
+        if old is not None:
+            old.deleteLater()
         host = QWidget()
         host_lay = QVBoxLayout(host)
         host_lay.setContentsMargins(4, 2, 12, 18)
         host_lay.setSpacing(18)
-        for i, entry in enumerate(CHANGELOG):
+        for i, entry in enumerate(CHANGELOG[:max(1, self._limit)]):
             host_lay.addWidget(self._entry(entry, latest=(i == 0)))
         host_lay.addStretch(1)
         self.scroll.setWidget(host)
-        lay.addWidget(self.scroll)
+
+    def set_limit(self, n: int) -> None:
+        n = max(1, int(n))
+        if n == self._limit:
+            return
+        self._limit = n
+        self._build()
+
+    def limit(self) -> int:
+        return self._limit
 
     def _entry(self, entry: Dict[str, Any], latest: bool = False) -> QWidget:
         t = theme()
@@ -2780,13 +2805,107 @@ class WhatsNewPanel(QWidget):
         return card
 
 
+RANGE_OPTIONS: Tuple[Tuple[int, str], ...] = (
+    (1, "上次更新以来"),
+    (10, "当前版本及之前 10 个版本"),
+    (20, "当前版本及之前 20 个版本"),
+    (50, "当前版本及之前 50 个版本"),
+    (100, "当前版本及之前 100 个版本"),
+)
+
+
+class WhatsNewRangeButton(QWidget):
+    """更新内容顶部的范围选择按钮：显示当前范围，点击弹出可勾选的菜单。"""
+
+    changed = pyqtSignal(int)
+
+    def __init__(self, limit: int, parent=None):
+        super().__init__(parent)
+        self._limit = limit
+        self._hover = 0.0
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setFixedHeight(30)
+
+    def _label(self) -> str:
+        for n, text in RANGE_OPTIONS:
+            if n == self._limit:
+                return i18n.tr(text)
+        return i18n.tr("当前版本及之前 {n} 个版本").format(n=self._limit)
+
+    def sizeHint(self):  # noqa: N802
+        fm = QFontMetricsF(font(11.5))
+        return QSize(int(fm.horizontalAdvance(self._label()) + 38), 30)
+
+    def enterEvent(self, e):  # noqa: N802
+        self._hover = 1.0
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):  # noqa: N802
+        self._hover = 0.0
+        self.update()
+        super().leaveEvent(e)
+
+    def mouseReleaseEvent(self, e):  # noqa: N802
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint()):
+            self._popup()
+        super().mouseReleaseEvent(e)
+
+    def _popup(self) -> None:
+        menu = Menu(self)
+        for n, text in RANGE_OPTIONS:
+            act = QAction(i18n.tr(text), menu)
+            act.setCheckable(True)
+            act.setChecked(n == self._limit)
+            act.setData(n)
+            act.triggered.connect(lambda _checked=False, v=n: self._choose(v))
+            menu.addAction(act)
+        menu.exec(self.mapToGlobal(QPoint(0, self.height() + 4)))
+
+    def _choose(self, n: int) -> None:
+        if n == self._limit:
+            return
+        self._limit = n
+        self.updateGeometry()
+        self.update()
+        self.changed.emit(n)
+
+    def paintEvent(self, _e):  # noqa: N802
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        bg = C(t.hover)
+        bg.setAlpha(int(bg.alpha() * (0.55 + 0.45 * self._hover)))
+        p.setPen(QPen(C(t.border), 1))
+        p.setBrush(bg)
+        p.drawRoundedRect(r, 8, 8)
+        p.setFont(font(11.5))
+        p.setPen(C(t.text_dim))
+        p.drawText(QRectF(12, 0, self.width() - 30, self.height()),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                   self._label())
+        chev = icons.pixmap("chevron_down", t.text_faint, 11, 1.6)
+        icons.draw_centered(p, chev, self.width() - 15, self.height() / 2)
+        p.end()
+
+
 class WhatsNewDialog(GlassDialog):
     def __init__(self, parent=None):
         super().__init__(parent, 620, 560, "更新内容")
         lay = QVBoxLayout(self.body)
         lay.setContentsMargins(20, 8, 14, 16)
         lay.setSpacing(10)
-        lay.addWidget(WhatsNewPanel(), 1)
+
+        self.panel = WhatsNewPanel()
+        self.range_btn = WhatsNewRangeButton(self.panel.limit(), self)
+        self.range_btn.changed.connect(self.panel.set_limit)
+        top = HBox(1, self.range_btn, spacing=8)
+        top.layout().setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(top)
+
+        lay.addWidget(self.panel, 1)
         ok = Button("关闭", None, kind="primary", height=28, padding=20, font_size=12)
         ok.clicked.connect(self.accept)
         foot = HBox(1, ok, spacing=8)
@@ -3365,8 +3484,13 @@ class TransferRow(QWidget):
             p.drawRoundedRect(r, 8, 8)
         enabled = self.isEnabled()
         col = t.danger if self._danger else (t.text_dim if enabled else t.text_faint)
-        pm = icons.pixmap(self._icon, col, 17, 1.5)
-        p.drawPixmap(QPointF(12, (self.height() - 17) / 2), pm)
+        if self._icon.startswith("source:"):
+            # 第三方来源：透明底品牌剪影，统一 19px、随主题着色
+            pm = icons.source_pixmap(self._icon[7:], col, 19)
+            p.drawPixmap(QPointF(11, (self.height() - 19) / 2), pm)
+        else:
+            pm = icons.pixmap(self._icon, col, 17, 1.5)
+            p.drawPixmap(QPointF(12, (self.height() - 17) / 2), pm)
         left = 40
         if self._subtitle:
             p.setFont(font(12.6))
@@ -3720,9 +3844,9 @@ class TransferDialog(GlassDialog):
 
     @staticmethod
     def _source_icon(key: str) -> str:
-        return {"ocelot": "grid", "postman": "send", "apifox": "layers",
-                "hoppscotch": "file", "insomnia": "moon", "openapi": "book",
-                "har": "table"}.get(key, "file")
+        return {"ocelot": "grid", "postman": "source:postman", "apifox": "source:apifox",
+                "hoppscotch": "source:hoppscotch", "insomnia": "source:insomnia",
+                "openapi": "source:openapi", "har": "table"}.get(key, "file")
 
     # -------------------------------------------------- 页面 2：选择文件
     def _build_file(self) -> QWidget:

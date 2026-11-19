@@ -1,5 +1,20 @@
 # What's Changed
 
+## v1.0.63 — 2026-11-19
+
+**Changed**
+- **What's New loads lazily**: it now opens with only the 10 most recent versions and a range picker in the top-right (since last update / 10 / 20 / 50 / 100 versions). Instead of building all 63 versions up front, it builds 289 widgets rather than 1816 — about 84% fewer, so the dialog opens much faster.
+- **Real source icons in the collection import/export page**: Postman, Apifox, Hoppscotch, Insomnia and OpenAPI now use their own brand marks — cut out to transparent silhouettes, sized uniformly and tinted to the current theme.
+- **Finer logo strokes**: outline stroke reduced from 4% to 3.6% of the mark size, with a 0.98px floor at small sizes. The two eyes, inverted-triangle nose and two spots are untouched, and so is the ink-writing hover with sequential feature lighting.
+- The dock icon keeps its white rounded square with near-black fine strokes — clean on both light and dark desktops.
+
+**Optimized**
+- The app icon (11 pixmap sizes, ~21MB) is now a cached singleton — the main window, tray and dialogs no longer redraw it on every request.
+- Changelog and brand/source icons share caches; switching themes only re-tints, never re-cuts the artwork.
+
+**Verified**
+- Full smoke suite: 663 checks pass, no new bugs found.
+
 ## v1.0.62 — 2026-11-19
 
 **Added**

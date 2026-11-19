@@ -307,6 +307,12 @@ _EN: Dict[str, str] = {
     "一款把请求调试做得干净、安静的本地桌面工具。": "A calm, local desktop tool for debugging HTTP requests.",
     "功能与修复": "What's Changed", "按版本记录每一次界面重做、修复与新能力。": "Every redesign, fix and new capability, version by version.",
     "查看更新内容": "View What's New",
+    "上次更新以来": "Since last update",
+    "当前版本及之前 10 个版本": "Current and previous 10 versions",
+    "当前版本及之前 20 个版本": "Current and previous 20 versions",
+    "当前版本及之前 50 个版本": "Current and previous 50 versions",
+    "当前版本及之前 100 个版本": "Current and previous 100 versions",
+    "当前版本及之前 {n} 个版本": "Current and previous {n} versions",
     "本地数据": "Local Data", "请求、集合与设置只保存在本机，不上传。": "Requests, collections and settings stay on this machine.",
 
     # Toast / 提示

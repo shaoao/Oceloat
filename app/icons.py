@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable, Dict
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
@@ -565,14 +566,52 @@ def pixmap(name: str, color: str = "#ECECEF", size: int = 16, width: float = 1.6
     return pm
 
 
+# ---------------------------------------------------------------- 品牌来源图标
+# 第三方工具的标识（Postman / Apifox / Hoppscotch / Insomnia / OpenAPI）不适合
+# 用自绘线条表达，改成透明底的单色剪影资源：读一次原图，按需着色 + 缩放并缓存，
+# 主题切换时只换颜色，不必重新抠图。
+_SOURCE_DIR = Path(__file__).resolve().parent / "assets" / "sources"
+_source_cache: Dict[tuple, QPixmap] = {}
+_source_raw: Dict[str, QPixmap] = {}
+
+
+def source_pixmap(name: str, color: str = "#C9C9D2", size: int = 20,
+                  dpr: float = 2.0) -> QPixmap:
+    """按逻辑尺寸返回第三方来源剪影，着主题色、透明底、Retina 清晰。"""
+    key = (name, color, size, dpr)
+    hit = _source_cache.get(key)
+    if hit is not None:
+        return hit
+    raw = _source_raw.get(name)
+    if raw is None:
+        path = _SOURCE_DIR / f"{name}.png"
+        raw = QPixmap(str(path)) if path.exists() else QPixmap()
+        _source_raw[name] = raw
+    pm = QPixmap(int(round(size * dpr)), int(round(size * dpr)))
+    pm.fill(Qt.GlobalColor.transparent)
+    if not raw.isNull():
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        p.drawPixmap(pm.rect(), raw)
+        # 原图是白色剪影：SourceIn 用主题色铺一遍，形状/透明度都保留
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        p.fillRect(pm.rect(), QColor(color))
+        p.end()
+    pm.setDevicePixelRatio(dpr)
+    _source_cache[key] = pm
+    return pm
+
+
 def clear_cache() -> int:
     """清空图标缓存，返回被丢弃的条目数。
 
     图标都是按需重建的：清掉之后下一次绘制会重新生成，界面不会出现空白，
     但这一批 QPixmap 立刻变成可回收对象。资源管理器里的「释放内存」用它。
     """
-    n = len(_cache) + len(_pm_cache)
+    n = len(_cache) + len(_pm_cache) + len(_source_cache)
     _cache.clear()
     _pm_cache.clear()
+    _source_cache.clear()
     QPixmapCache.clear()
     return n
