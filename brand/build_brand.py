@@ -20,7 +20,7 @@ from PyQt6.QtGui import QGuiApplication, QPainterPath, QTransform  # noqa: E402
 OUT = Path(__file__).resolve().parent
 APP = None
 
-SW = 4.3          # 与 app/brand.py 的 4.5% 线宽对齐（96 画布 → 4.32）
+SW = 96 * 0.040   # 与 app/brand.py 的 4% 线宽对齐（96 画布 → 3.84）
 
 
 def _d(path: QPainterPath, scale: float = 1.0) -> str:
@@ -53,20 +53,26 @@ def head_d() -> str:
     return _d(outline())
 
 
-def spots() -> tuple[tuple[float, float, float], ...]:
-    from app.brand import DOTS
-    return DOTS
-
-
-def mark(color: str = "#111111", sw: float = SW, with_spots: bool = True) -> str:
-    out = (
-        f'<path d="{head_d()}" fill="none" stroke="{color}" stroke-width="{sw:.2f}" '
-        f'stroke-linecap="round" stroke-linejoin="round"/>'
-    )
-    if with_spots:
-        for x, y, r in spots():
-            out += f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{r:.2f}" fill="{color}"/>'
+def features(color: str) -> str:
+    """五官：两只竖椭圆眼、倒三角鼻、两颗豹斑。"""
+    from app.brand import EYES, NOSE, SPOTS
+    out = ""
+    for cx, cy, rx, ry in EYES:
+        out += (f'<ellipse cx="{cx:.2f}" cy="{cy:.2f}" '
+                f'rx="{rx:.2f}" ry="{ry:.2f}" fill="{color}"/>')
+    cx, cy, hw, h = NOSE
+    out += (f'<polygon points="{cx - hw:.2f},{cy - h:.2f} {cx + hw:.2f},{cy - h:.2f} '
+            f'{cx:.2f},{cy:.2f}" fill="{color}"/>')
+    for px, py, r in SPOTS:
+        out += f'<circle cx="{px:.2f}" cy="{py:.2f}" r="{r:.2f}" fill="{color}"/>'
     return out
+
+
+def mark(color: str = "#111111", sw: float = SW) -> str:
+    return (
+        f'<path d="{head_d()}" fill="none" stroke="{color}" stroke-width="{sw:.2f}" '
+        f'stroke-linecap="round" stroke-linejoin="round"/>' + features(color)
+    )
 
 
 # ---------------------------------------------------------------- 文字 → 路径
@@ -117,7 +123,9 @@ def build() -> None:
     (OUT / "ocelot-mark.svg").write_text(svg(96, 96, mark("#111111")), "utf-8")
     (OUT / "ocelot-mark-inverse.svg").write_text(svg(96, 96, mark("#F2F2F5")), "utf-8")
     (OUT / "ocelot-mark-solid.svg").write_text(
-        svg(96, 96, f'<path d="{head_d()}" fill="#111111"/>'), "utf-8")
+        svg(96, 96, f'<path d="{head_d()}" fill="none" stroke="#111111" '
+                    f'stroke-width="{SW * 1.9:.2f}" stroke-linecap="round" '
+                    f'stroke-linejoin="round"/>{features("#111111")}'), "utf-8")
 
     # 应用图标：白底 + 近黑细线（与应用内 Dock 图标一致），另出深底反白一版
     S, pad, radius = 1024, 208, 232

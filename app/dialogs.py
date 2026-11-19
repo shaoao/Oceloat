@@ -1934,7 +1934,7 @@ class SettingsDialog(GlassDialog):
                      Pill("纯本地", t.text_faint, font_size=10.2),
                      1, spacing=6)
         # 标识：进来先自己演一遍「描边重画」，之后鼠标悬浮还能再演
-        self.about_mark = BrandMark(44, token="text", hover_token="accent",
+        self.about_mark = BrandMark(52, token="text", hover_token="accent",
                                     autoplay=True, tooltip="Ocelot")
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)

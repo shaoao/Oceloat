@@ -46,6 +46,7 @@ from PyQt6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
+    QPolygonF,
     QRadialGradient,
 )
 from PyQt6.QtWidgets import QWidget
@@ -57,8 +58,17 @@ BOX = 96.0                       # 设计画布
 CENTER = 48.0                    # 画布横轴中心
 STROKE_PX = 0.040                # 描边 ≈ 尺寸的 4%（细线，小尺寸靠下限兜底）
 MIN_STROKE_PX = 1.05             # 小尺寸兜底，别细到消失
-DOTS = ((38.0, 48.2, 2.40), (54.8, 62.6, 1.70))   # 左颊大斑 / 下颌小斑
-DOT_U = (0.76, 0.10)             # 两块斑在轮廓（按长度）上的位置，墨线走到才亮
+# 五官：竖向小椭圆的眼睛 + 一颗很小的倒三角鼻（尺寸太小会自动降级）
+EYES = ((41.8, 46.6, 1.55, 1.95), (54.2, 46.6, 1.55, 1.95))
+NOSE = (48.0, 54.2, 2.05, 2.40)              # cx, cy, 半宽, 高
+# 虎猫身上的玫瑰斑：左颊一颗大的、下颌一颗小的，刻意不对称
+SPOTS = ((33.8, 57.4, 1.35), (53.6, 64.4, 0.95))
+# 五亮点亮顺序（跟轮廓书写进度挂钩，写到一个位置才亮一个）
+EYE_U, NOSE_U, SPOT_U = 0.58, 0.74, (0.84, 0.91)
+
+# 按尺寸分级：小于 32 只留眼睛（再多就糊成一团）
+DETAIL_MIN = 32.0
+SPOT_MIN = 48.0
 VIEW_CY = 50.8                   # 内容视觉中心（耳朵高，重心略偏上）
 
 
@@ -71,22 +81,26 @@ def outline() -> QPainterPath:
     * 耳朵外沿从耳根向上**微微内收**，到尖部收得住，不读成兔子耳；
     * 下颌是一整段圆 U，底部不能出现方角。
     """
-    path = QPainterPath(QPointF(48.0, 84.6))
+    path = QPainterPath(QPointF(48.0, 84.4))
     # 下颌底 → 右下
-    path.cubicTo(54.6, 84.8, 62.0, 82.6, 67.0, 78.2)
+    path.cubicTo(54.2, 84.8, 61.4, 82.6, 66.6, 78.2)
     # 右下 → 右颊最宽（眼睛高度）
-    path.cubicTo(72.4, 73.6, 75.6, 64.8, 75.6, 55.0)
-    # 脸颊 → 右耳尖：一条连续外沿，中间不留节点
-    path.cubicTo(75.6, 44.6, 74.8, 31.6, 74.0, 16.0)
-    # 耳尖 → 额顶（内凹弧，收尾切线水平，与另一半无缝相接）
-    path.cubicTo(68.0, 23.2, 55.4, 30.4, 48.0, 30.4)
+    path.cubicTo(72.2, 73.4, 75.0, 65.2, 75.0, 56.6)
+    # 最宽 → 右耳根：只收 1.4 单位，够出耳根、不够「耸肩」
+    path.cubicTo(75.0, 48.2, 74.2, 43.2, 73.6, 40.0)
+    # 耳根 → 右耳尖：几乎垂直，保持原来的耳尖高度与角度
+    path.cubicTo(73.4, 32.2, 73.2, 23.6, 73.2, 16.6)
+    # 耳尖 → 额顶：贴着外沿先陡后缓，收尾切线水平（无折角）
+    path.cubicTo(71.0, 24.0, 57.2, 30.4, 48.0, 30.2)
     # 额顶 → 左耳尖（严格镜像）
-    path.cubicTo(40.6, 30.4, 28.0, 23.2, 22.0, 16.0)
-    # 左耳尖 → 左颊最宽
-    path.cubicTo(21.2, 31.6, 20.4, 44.6, 20.4, 55.0)
+    path.cubicTo(38.8, 30.4, 25.0, 24.0, 22.8, 16.6)
+    # 左耳尖 → 左耳根
+    path.cubicTo(22.8, 23.6, 22.6, 32.2, 22.4, 40.0)
+    # 左耳根 → 左颊最宽
+    path.cubicTo(21.8, 43.2, 21.0, 48.2, 21.0, 56.6)
     # 左颊 → 左下
-    path.cubicTo(20.4, 64.8, 23.6, 73.6, 29.0, 78.2)
-    path.cubicTo(34.0, 82.6, 41.4, 84.8, 48.0, 84.6)
+    path.cubicTo(21.0, 65.2, 23.8, 73.4, 29.4, 78.2)
+    path.cubicTo(34.6, 82.6, 41.8, 84.8, 48.0, 84.4)
     path.closeSubpath()
     return path
 
@@ -233,27 +247,54 @@ def _paint_mark(p: QPainter, side: float, base: QColor, hot: QColor,
             p.setBrush(hot)
             p.drawEllipse(tip, r, r)
 
-    # 4) 两块斑：墨线走到哪、哪块斑就晕开——不是一起亮，而是一个个被点到
+    # 4) 五官与豹斑：轮廓写到后半段，一个个被点亮（不是一起亮）
     progress = min(1.0, t / 0.80)
-    min_dot = 0.95 / max(k, 1e-6)
-    for (cx, cy, r), u in zip(DOTS, DOT_U):
-        local = _clamp((progress - u) / 0.16)
-        bloom = _out_back(local)
-        radius = max(r * (1.0 + 0.26 * bloom), min_dot)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(_mix(base, hot, local))
-        p.setOpacity(0.45 + 0.55 * max(local, 0.0))
-        p.drawEllipse(QPointF(cx, cy), radius, radius)
-        p.setOpacity(1.0)
 
-        # 被点到的一瞬，斑点周围晕开一团柔光（不描圈，免得读成眼镜）
-        if 0.0 < local < 1.0:
-            g = QRadialGradient(QPointF(cx, cy), radius * 2.6)
-            g.setColorAt(0.0, _alpha(hot, 0.13 * math.sin(math.pi * local)))
-            g.setColorAt(1.0, _alpha(hot, 0.0))
+    def lit(u: float) -> float:
+        return _clamp((progress - u) / 0.14)
+
+    min_r = 0.95 / max(k, 1e-6)      # 小尺寸下别细到看不见
+
+    # 眼睛：一直有（这是最小尺寸下唯一保住的表情）
+    for (cx, cy, rx, ry) in EYES:
+        lv = lit(EYE_U)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(_alpha(_mix(base, hot, lv), 0.90))
+        b = _out_back(lv)
+        p.drawEllipse(QPointF(cx, cy), max(rx * (1.0 + 0.26 * b), min_r),
+                      max(ry * (1.0 + 0.26 * b), min_r))
+
+    # 鼻：小尺寸省掉，免得跟眼睛挤成一坨
+    if side >= DETAIL_MIN:
+        cx, cy, hw, h = NOSE
+        lv = lit(NOSE_U)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(_alpha(_mix(base, hot, lv), 0.90))
+        grow = 1.0 + 0.20 * _out_back(lv)
+        # 猫鼻是倒三角：上宽下尖
+        p.drawPolygon(QPolygonF([
+            QPointF(cx - hw * grow, cy - h * grow),
+            QPointF(cx + hw * grow, cy - h * grow),
+            QPointF(cx, cy),
+        ]))
+
+    # 豹斑：只有大尺寸才画（32~44 之间先只留鼻子）
+    if side >= SPOT_MIN:
+        for (cx, cy, r), u in zip(SPOTS, SPOT_U):
+            lv = lit(u)
+            b = _out_back(lv)
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(g)
-            p.drawEllipse(QPointF(cx, cy), radius * 2.6, radius * 2.6)
+            p.setBrush(_alpha(_mix(base, hot, lv), 0.90))
+            p.drawEllipse(QPointF(cx, cy), max(r * (1.0 + 0.22 * b), min_r),
+                          max(r * (1.0 + 0.22 * b), min_r))
+            # 被点到的一瞬，斑周围晕开一团柔光（不描圈，免得读成眼镜）
+            if 0.0 < lv < 1.0:
+                g = QRadialGradient(QPointF(cx, cy), r * 2.6)
+                g.setColorAt(0.0, _alpha(hot, 0.13 * math.sin(math.pi * lv)))
+                g.setColorAt(1.0, _alpha(hot, 0.0))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(g)
+                p.drawEllipse(QPointF(cx, cy), r * 2.6, r * 2.6)
 
     p.restore()
 

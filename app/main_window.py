@@ -518,7 +518,7 @@ class WelcomeView(QWidget):
         col.addStretch(2)
 
         # 空状态就是品牌展示位：进软件先演一遍描边动画
-        self.mark = BrandMark(62, token="text", hover_token="accent",
+        self.mark = BrandMark(78, token="text", hover_token="accent",
                               autoplay=True, tooltip=APP_NAME)
         holder = HBox(1, self.mark, 1)
         col.addWidget(holder)

@@ -1,9 +1,9 @@
-"""v1.0.61 品牌标识专项自测。
+"""v1.0.62 品牌标识专项自测。
 
 覆盖：细线几何（尖耳 / 圆颊 / 窄下颌，额顶一阶连续、下颌不是平底、侧壁不直）、
-位图真的画出了东西、白底应用图标、墨线描出动画真的在推进（而不是一次点亮）、
-笔尖拖影与斑点柔光的时机、悬停写完会轻轻回位、五处接线（标题栏 / 欢迎页 /
-关于页 / 响应空状态 / 窗口图标）、主题色随主题变化。
+五官（竖椭圆眼 / 倒三角鼻 / 两颗豹斑）与按尺寸分级、位图真的画出了东西、
+白底应用图标、墨线描出动画真的在推进、笔尖拖影与细节点亮的时机、
+悬停写完会轻轻回位、五处接线、主题色随主题变化。
 """
 from __future__ import annotations
 
@@ -95,20 +95,53 @@ check("下颌比脸颊窄（收进去）",
       abs(path.pointAtPercent(0.06).x() - 48.0) < (bounds.width() / 2) * 0.78,
       f"{abs(path.pointAtPercent(0.06).x() - 48.0):.1f}")
 
-# 两块斑的墨线时机必须贴它们在轮廓上的真实位置
-from app.brand import DOT_U  # noqa: E402
-
-for (x, y, _r), u in zip(brand.DOTS, DOT_U):
-    near = min((abs(path.pointAtPercent(i / 400.0).x() - x)
-                + abs(path.pointAtPercent(i / 400.0).y() - y), i / 400.0)
-               for i in range(401))
-    check(f"斑点 ({x:.0f},{y:.0f}) 的亮起时机跟着笔尖", abs(near[1] - u) < 0.10,
-          f"{u:.2f} vs {near[1]:.2f}")
-check("两块斑在脸内部",
-      all(abs(x - 48.0) < 24 and 30 < y < 72 for x, y, _r in brand.DOTS),
-      str(brand.DOTS))
-check("两块斑一大一小", brand.DOTS[0][2] > brand.DOTS[1][2], str(brand.DOTS))
 check("标识带静息呼吸", hasattr(brand.BrandMark(48), "_breathe"))
+
+# ---------------------------------------------------------------- 五官
+print("\n[五官]")
+
+
+def at(pm, x: float, y: float, side: float):
+    img = pm.toImage()
+    ratio = pm.devicePixelRatio()
+    k = side / brand.BOX * 0.94
+    px = int(round((side / 2.0 + (x - brand.CENTER) * k) * ratio))
+    py = int(round((side / 2.0 + (y - brand.VIEW_CY) * k) * ratio))
+    return img.pixelColor(px, py)
+
+
+def lit(pm, x, y, side) -> bool:
+    return at(pm, x, y, side).alpha() > 150
+
+
+check("两只眼睛一样大", brand.EYES[0][2:] == brand.EYES[1][2:], str(brand.EYES))
+check("眼睛是竖椭圆（比宽高）",
+      all(ry > rx for _cx, _cy, rx, ry in brand.EYES), str(brand.EYES))
+check("鼻子是倒三角参数（有宽有高）",
+      brand.NOSE[2] > 1.0 and brand.NOSE[3] > 1.5, str(brand.NOSE))
+check("两颗豹斑一大一小", brand.SPOTS[0][2] > brand.SPOTS[1][2], str(brand.SPOTS))
+check("五官都在脸内部",
+      all(path.contains(QPointF(cx, cy)) for cx, cy, *_ in brand.EYES)
+      and path.contains(QPointF(brand.NOSE[0], brand.NOSE[1] - brand.NOSE[3] / 2))
+      and all(path.contains(QPointF(cx, cy)) for cx, cy, _r in brand.SPOTS))
+
+big = brand.mark_pixmap(96, "#FFFFFF")
+check("96px 画得出眼睛", all(lit(big, cx, cy, 96) for cx, cy, _a, _b in brand.EYES))
+_nx, _ny, _nhw, _nh = brand.NOSE
+_ny_base = _ny - _nh + 0.25          # 三角底边内侧，取样最稳
+check("96px 画得出鼻", lit(big, _nx, _ny_base, 96))
+check("96px 画得出两颗豹斑",
+      all(lit(big, cx, cy, 96) for cx, cy, _r in brand.SPOTS))
+
+# 按尺寸分级：小尺寸只留眼睛，放大才补鼻和斑
+tiny = brand.mark_pixmap(21, "#FFFFFF")
+check("21px 仍画眼睛", lit(tiny, brand.EYES[0][0], brand.EYES[0][1], 21))
+check("21px 省掉鼻子", not lit(tiny, _nx, _ny_base, 21))
+mid = brand.mark_pixmap(36, "#FFFFFF")
+check("36px 补上鼻子", lit(mid, _nx, _ny_base, 36))
+check("36px 还不画豹斑", not lit(mid, brand.SPOTS[0][0], brand.SPOTS[0][1], 36))
+large = brand.mark_pixmap(56, "#FFFFFF")
+check("56px 才画豹斑", lit(large, brand.SPOTS[0][0], brand.SPOTS[0][1], 56))
 
 # ---------------------------------------------------------------- 位图
 print("\n[位图]")
@@ -164,6 +197,7 @@ check("写完时整条线都亮", r9 > 0.85, f"{r9:.3f}")
 _src = (ROOT / "app" / "brand.py").read_text(encoding="utf-8")
 check("虚线单位按笔宽换算", "units = length / max(width" in _src)
 check("笔尖带拖尾（书写有速度感）", "尾迹" in _src)
+check("细节点亮按尺寸分级", "DETAIL_MIN" in _src and "SPOT_MIN" in _src)
 check("斑点亮起是柔光，不是描圈", "柔光" in _src)
 check("悬停写完会轻轻回位", "self._run(0.88" in _src)
 
@@ -236,11 +270,13 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.61", VERSION == "1.0.61", VERSION)
-check("更新内容是 1.0.61", CHANGELOG[0]["version"] == "1.0.61")
+check("版本 1.0.62", VERSION == "1.0.62", VERSION)
+check("更新内容是 1.0.62", CHANGELOG[0]["version"] == "1.0.62")
 check("更新内容写了品牌标识", any("标识" in x for x in CHANGELOG[0]["items"]))
 check("更新内容写了墨线动画",
       any("墨线" in x or "描出" in x for x in CHANGELOG[0]["items"]))
+check("更新内容写了五官",
+      any("眼睛" in x or "鼻" in x for x in CHANGELOG[0]["items"]))
 check("更新内容写了白底图标",
       any("白底" in x for x in CHANGELOG[0]["items"]))
 mw_src = (ROOT / "app" / "main_window.py").read_text(encoding="utf-8")
