@@ -443,10 +443,11 @@ class ResponsePanel(QWidget):
         tl.addWidget(self.tabs, 0)
         tl.addStretch(1)
         # 格式 / 编码切换：与主题其他小按钮同一套自绘样式；只在「美化」页出现。
-        self.fmt_btn = Button("Auto", "chevron_down", kind="subtle", height=24,
+        # 去掉胶囊边框和填充，只留文字 + 箭头，和其余工具行保持同一套扁平语言。
+        self.fmt_btn = Button("Auto", "chevron_down", kind="ghost", height=24,
                               padding=8, icon_size=11, gap=4, font_size=11.5,
                               tooltip="响应格式：Auto / JSON / XML / HTML / Text")
-        self.enc_btn = Button("UTF-8", "chevron_down", kind="subtle", height=24,
+        self.enc_btn = Button("UTF-8", "chevron_down", kind="ghost", height=24,
                               padding=8, icon_size=11, gap=4, font_size=11.5,
                               tooltip="显示编码：UTF-8 / GBK / Base64 等")
         self.fmt_btn.clicked.connect(self._choose_format)

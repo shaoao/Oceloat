@@ -1,5 +1,20 @@
 # What's Changed
 
+## v1.0.56 — 2026-11-19
+
+**Fixed**
+- Trash folder detail: labels and values now share the same top alignment, so the three rows sit on one baseline instead of stepping down.
+- English UI: AI status line, API-key hint, model heading, variables note, history count, about-page data path and settings title were built by string concatenation at runtime, so the generic translator could not match them as whole sentences. They are now rebuilt from templates on language change, in both directions.
+- The conclusion block no longer has the text sitting above/below its side rule: the rule spans the full block and the text is vertically centred.
+
+**Changed**
+- Conclusion is now a theme-coloured quote block with a small theme-coloured dot before each section heading.
+- Response panel's Auto / UTF-8 switches lost their pill border and fill, matching the rest of the toolbar.
+- Hovering "Cached" shows the real expiry time (30 minutes) and a hint to re-analyse; translated in English too.
+
+**Verified**
+- Targeted and full smoke checks pass.
+
 ## v1.0.55 — 2026-11-19
 
 **Fixed**

@@ -1673,3 +1673,11 @@ _EN.update({
     "来自缓存": "Cached",
     "AI 生成 · 请结合原始响应核对": "AI-generated · verify against the raw response",
 })
+
+# v1.0.56：拼接文案的模板与缓存悬浮提示
+_EN.update({
+    "模型 · {name}（点一下切换，立即生效）":
+        "Models · {name} (click to switch, applies immediately)",
+    "缓存 {n} 分钟后自动过期；点「重新分析」可刷新":
+        "Cached result expires after {n} minutes; click Analyze again to refresh",
+})

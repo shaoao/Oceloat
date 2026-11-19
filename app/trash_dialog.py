@@ -512,8 +512,10 @@ class TrashDetail(QWidget):
         lab.setFixedWidth(self._label_width())
         val = Label(value, 11.2, color or t.text, mono_font=mono_value)
         val.setWordWrap(True)
+        # 标签和值必须同一条基线：之前标签 AlignTop、值用默认垂直居中，
+        # 单行数值就被往下推半行，看起来「标签在上、值在下」整体错位。
         hl.addWidget(lab, 0, Qt.AlignmentFlag.AlignTop)
-        hl.addWidget(val, 1)
+        hl.addWidget(val, 1, Qt.AlignmentFlag.AlignTop)
         self._lay.addWidget(row)
 
     def _pill_row(self, pills: List) -> None:

@@ -671,6 +671,19 @@ class MainWindow(QWidget):
                     pass
 
         i18n.apply_language(self, visit=visit)
+        # 动态拼接的文案（设置页里的 AI 状态、历史条数等）必须等通用翻译全部跑完
+        # 再按模板重设，否则会被各控件记下的中文整句原文覆盖回去。
+        def refresh_dynamic(w):
+            fn = getattr(w, "refresh_i18n", None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        refresh_dynamic(self)
+        for widget in self.findChildren(QWidget):
+            refresh_dynamic(widget)
 
     # -------------------------------------------------- 构建
     def _build(self) -> None:

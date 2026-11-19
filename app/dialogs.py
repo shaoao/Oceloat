@@ -195,6 +195,14 @@ class GlassDialog(QDialog):
         # 对话框多半是在语言切完以后才建的，这里补一次翻译，否则英文界面里会混着中文
         if i18n.current() == "en":
             i18n.apply_language(self)
+            # 通用翻译只认整句词条；运行时拼接的文案要等它跑完再按模板重设，
+            # 否则刚写好的英文会被 i18n_src_text 里的中文整句覆盖回去。
+            fn = getattr(self, "refresh_i18n", None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:             # noqa: BLE001
+                    pass
             nav = getattr(self, "nav", None)
             if nav is not None:
                 nav.sync_width()
@@ -374,6 +382,7 @@ class AiAnswerDialog(GlassDialog):
         self._timer.stop()
         self.view.clear()
         self.state.setText("")
+        self.state.setToolTip("")
         self.state.setStyleSheet("")
 
     def set_busy(self, busy: bool, text: str = "") -> None:
@@ -382,6 +391,7 @@ class AiAnswerDialog(GlassDialog):
             self._state_text = i18n.tr(text or "正在分析")
             # 状态文字写死一次，之后 render 只动 spinner —— 这是「正在分析一直抖」的根治点。
             self.state.setText(self._state_text)
+            self.state.setToolTip("")
             self.state.setStyleSheet("")
         else:
             self.spinner.stop()
@@ -403,10 +413,15 @@ class AiAnswerDialog(GlassDialog):
         t = theme()
         if error:
             label, color = i18n.tr("分析失败"), t.danger
+            self.state.setToolTip("")
         elif cached:
             label, color = i18n.tr("来自缓存"), t.text_faint
+            minutes = max(1, ai_mod.AnalysisCache.TTL // 60)
+            self.state.setToolTip(i18n.trf("缓存 {n} 分钟后自动过期；点「重新分析」可刷新",
+                                           n=minutes))
         else:
             label, color = i18n.tr("分析完成"), t.success
+            self.state.setToolTip("")
         self.state.setText(label)
         self.state.setStyleSheet(f"color: {color}; background: transparent;")
         if cached and self._buf:
@@ -1880,12 +1895,13 @@ class SettingsDialog(GlassDialog):
         self.trash_days_seg.set_current(str(days) if str(days) in ("7", "30", "90") else "30",
                                         emit=False)
         self.trash_days_seg.changed.connect(self._on_trash_days)
+        # 这条说明带运行时数字，整句不是固定词条；保存引用，切语言时用 trf 重设。
+        self.history_note = Label(
+            i18n.tr("当前 {n} 条，超出后自动丢弃最旧的。").format(
+                n=len(self.store.history or [])), 11, theme().text_faint)
         block = self._card(
             self._row("本地数据", path, open_dir, mono_desc=True),
-            self._row("历史记录上限",
-                  i18n.tr("当前 {n} 条，超出后自动丢弃最旧的。").format(
-                      n=len(self.store.history or [])),
-                      self.limit_seg),
+            self._row("历史记录上限", "", self.limit_seg, desc_label=self.history_note),
             self._row("清空历史", "只删历史记录，集合与环境变量不受影响。", clear_hist),
             self._row("回收站自动清理",
                       "开启后按保留天数清除过期条目，默认开、保留 30 天。",
@@ -2059,9 +2075,10 @@ class SettingsDialog(GlassDialog):
         flow.setWordWrap(True)
         al.addWidget(HBox(flow, 1, margins=(0, 10, 0, 0)))
 
-        foot = Label(f"{i18n.tr('数据目录')} · {APP_DIR}", 10.4, t.text_faint, mono_font=True)
+        self.about_foot = Label(f"{i18n.tr('数据目录')} · {APP_DIR}", 10.4,
+                                t.text_faint, mono_font=True)
         return self._page_shell("关于 Ocelot", "它是什么、能做什么、为什么这么做。",
-                                hero, env_card, grid, grid2, arch, actions, foot)
+                                hero, env_card, grid, grid2, arch, actions, self.about_foot)
 
     def _ability(self, title: str, desc: str) -> QWidget:
         """关于页的能力条目：一行标题 + 两行说明，宽度自适应两列。"""
@@ -2093,17 +2110,20 @@ class SettingsDialog(GlassDialog):
         button.setText("已复制")
 
     # -------------------------------------------------- 行
-    def _row(self, title: str, desc: str, control: QWidget, mono_desc: bool = False) -> QWidget:
+    def _row(self, title: str, desc: str, control: QWidget, mono_desc: bool = False,
+             desc_label: Optional[Label] = None) -> QWidget:
         """左右一行：左边标题+说明，右边控件。
 
         说明文字必须可换行 —— 窄窗口下不许把控件挤出卡片边界（云同步页的输入框
         之前就是被顶出右边界的）。
+        desc_label：外部已建好的说明标签，用于保存引用、语言切换时重设动态文案。
         """
         w = QWidget()
         h = QHBoxLayout(w)
         h.setContentsMargins(2, 11, 2, 11)
         h.setSpacing(16)
-        d = Label(desc, 11, theme().text_faint, mono_font=mono_desc)
+        d = desc_label if desc_label is not None else Label(
+            desc, 11, theme().text_faint, mono_font=mono_desc)
         d.setWordWrap(True)
         text = VBox(Label(title, 12.5, theme().text), d, spacing=3)
         text.setMaximumWidth(330)
@@ -2127,6 +2147,40 @@ class SettingsDialog(GlassDialog):
     def _apply_page_title(self) -> None:
         label = dict((k, l) for k, l, _i in self.NAV).get(self.nav.current_key(), "设置")
         self._title_label.setText(i18n.trf("设置 · {name}", name=label))
+
+    def refresh_i18n(self) -> None:
+        """重设运行时拼接的文案。
+
+        AI 状态行 / Key 提示 / 模型标题、变量页说明、历史条数、关于页路径都是
+        「模板 + 动态值」当场拼出来的中文整句，通用 apply_language 用 tr(整句)
+        查不到词条，于是英文界面里这几处一直是中文。这里按模板重新走 trf。
+        """
+        try:
+            preset = ai_mod.PROVIDERS["glm"]
+            self._set_ai_hint(preset)
+            self._sync_model_title()
+            self._refresh_ai_state()
+        except Exception:             # noqa: BLE001
+            pass
+        try:
+            self._on_vars_seg(self.vars_seg.current())
+        except Exception:             # noqa: BLE001
+            pass
+        try:
+            self.history_note.setText(
+                i18n.tr("当前 {n} 条，超出后自动丢弃最旧的。").format(
+                    n=len(self.store.history or [])))
+        except Exception:             # noqa: BLE001
+            pass
+        try:
+            self._apply_page_title()
+        except Exception:             # noqa: BLE001
+            pass
+        try:
+            from .store import APP_DIR
+            self.about_foot.setText(f"{i18n.tr('数据目录')} · {APP_DIR}")
+        except Exception:             # noqa: BLE001
+            pass
 
     # -------------------------------------------------- 事件
     def _on_nav(self, key: str) -> None:

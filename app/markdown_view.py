@@ -615,7 +615,12 @@ class AnalysisView(MarkdownView):
         row = QWidget()
         hl = QHBoxLayout(row)
         hl.setContentsMargins(0, 0, 0, 0)
-        hl.setSpacing(11)
+        hl.setSpacing(9)
+        # 主题色原色小圆点：给纯黑界面一点克制的色彩锚点。
+        dot = QWidget()
+        dot.setFixedSize(5, 5)
+        dot.setStyleSheet(f"background: {t.accent}; border-radius: 2px;")
+        hl.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
         lab = QLabel(text)
         lab.setFont(font(12.4, QFont.Weight.DemiBold))
         lab.setStyleSheet(f"color: {t.text}; background: transparent;")
@@ -648,10 +653,13 @@ class AnalysisView(MarkdownView):
         hl = QHBoxLayout(card)
         hl.setContentsMargins(14, 11, 14, 11)
         hl.setSpacing(12)
+        # 主题色竖条贯穿整块高度 = 标准引用块；让它在 QHBoxLayout 里自然拉伸，
+        # 文字用 AlignVCenter，单行 / 多行都和竖条垂直对齐，不再出现「字在上、条在下」。
         bar = QWidget()
-        bar.setFixedSize(2, 24)
-        bar.setStyleSheet(f"background: {t.accent_dim}; border-radius: 1px;")
-        hl.addWidget(bar, 0, Qt.AlignmentFlag.AlignTop)
+        bar.setFixedWidth(3)
+        bar.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        bar.setStyleSheet(f"background: {t.accent}; border-radius: 1px;")
+        hl.addWidget(bar, 0)
         lab = QLabel(self._answer_rich(text, t.text))
         lab.setTextFormat(Qt.TextFormat.RichText)
         lab.setWordWrap(True)
@@ -659,7 +667,7 @@ class AnalysisView(MarkdownView):
         lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
                                    | Qt.TextInteractionFlag.LinksAccessibleByMouse)
         lab.setStyleSheet("background: transparent; font-size: 13.4px;")
-        hl.addWidget(lab, 1, Qt.AlignmentFlag.AlignTop)
+        hl.addWidget(lab, 1, Qt.AlignmentFlag.AlignVCenter)
         return card
 
     def _paragraph(self, text: str) -> QWidget:
