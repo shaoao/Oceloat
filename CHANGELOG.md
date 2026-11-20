@@ -1,5 +1,12 @@
 # What's Changed
 
+## v1.0.80 — 2026-11-20
+
+**Changed**
+- Moved the type dot to where it belongs: the response header pills ("Not connected", "200", …) now carry a small status light in their semantic colour. Removed the extra dots from the collection tree, history rows and tabs — they were visual noise.
+- The SSE control strip no longer takes its own row. Handshake result, event rate and the pause button now sit on the header line, so the event log starts right away.
+- Left/right split views now show a hairline divider that follows the split orientation (vertical for side-by-side, horizontal for stacked). Still draggable, double-click restores 50/50.
+
 ## v1.0.79 — 2026-11-20
 
 **Fixed**

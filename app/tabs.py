@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from . import icons
 from .anim import animations_on, running as _anim_running, stop as _anim_stop
-from .theme import C, font, method_color, method_short, mono, paint_kind_dot, theme
+from .theme import C, font, method_color, method_short, mono, theme
 
 TAB_H = 27
 MARGIN_Y = 6
@@ -500,9 +500,6 @@ class TabStrip(QWidget):
             mcol.setAlpha(int(150 + 105 * hot))
         p.setPen(mcol)
         p.drawText(br, int(Qt.AlignmentFlag.AlignCenter), method_short(method))
-        # 类型灯：画在徽标右上角小角标，不占方法文字的地方，和集合树 / 历史同一颗
-        paint_kind_dot(p, br.right() - 2.5, br.top() + 2.5,
-                       method_color(method, t), radius=2.0, halo=False)
         # 标题（预览态用斜体，仿 VSCode：单击=临时查看，双击=固定）
         if tab.get("preview"):
             pf = QFont(self._font)

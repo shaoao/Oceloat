@@ -314,17 +314,22 @@ class SseLogView(WsLogView):
         self.pause_btn.setToolTip(i18n.tr("暂停：先冻住列表，慢慢看已经收到的事件"))
         self.pause_btn.clicked.connect(self.toggle_pause)
 
+        # 这条控制条已合并到响应面板头部第一行（见 ResponsePanel），
+        # 这里保留构造以维持 status_label / pause_btn 的引用与更新逻辑，
+        # 但自身不再占一行：mety 容器会把它 take 走。
         strip = QWidget()
         sl = QHBoxLayout(strip)
-        sl.setContentsMargins(12, 4, 10, 2)
+        sl.setContentsMargins(0, 0, 0, 0)
         sl.setSpacing(8)
         sl.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
         sl.addWidget(self.status_label, 1)
         sl.addWidget(self.rate_label)
         sl.addWidget(self.pause_btn)
+        self.strip = strip
         lay = self.layout()
         lay.insertWidget(0, strip)
-        lay.insertWidget(1, Divider())
+        self.strip_div = Divider()
+        lay.insertWidget(1, self.strip_div)
 
     # -------------------------------------------------- 握手信息
     def set_stream(self, status: int = 0, ctype: str = "", headers: Optional[Dict[str, str]] = None) -> None:

@@ -1417,11 +1417,13 @@ class Pill(QWidget):
 
     def __init__(self, text: str = "", color: Optional[str] = None, parent=None,
                  font_size: float = 10.5, mono_font: bool = True, pad: int = 8,
-                 height: int = 19, radius: int = 6):
+                 height: int = 19, radius: int = 6, dot: bool = False):
         super().__init__(parent)
         self._text = text
         self._color = color
         self._token = infer_token(color)
+        # 响应状态胶囊左侧的状态灯：颜色跟着胶囊语义色走（灰=未连接、绿=2xx…）
+        self._dot = dot
         self._font = mono(font_size, QFont.Weight.DemiBold) if mono_font else font(font_size, QFont.Weight.DemiBold)
         self._pad = pad
         self._radius = radius
@@ -1440,6 +1442,8 @@ class Pill(QWidget):
         fm = QFontMetricsF(self._font)
         text = self._title()
         w = int(fm.horizontalAdvance(text) + self._pad * 2 + 6)
+        if self._dot:
+            w += 16                       # 给左侧状态灯腾位置
         self.setFixedWidth(max(w, self._pad * 2 + 12))
         h = max(self._min_height, int(fm.height() + 7))
         if self.height() != h:
@@ -1481,9 +1485,21 @@ class Pill(QWidget):
         p.setBrush(bg)
         r = QRectF(self.rect())
         p.drawRoundedRect(r, self._radius, self._radius)
+        text_rect = r
+        if self._dot:
+            # 左侧状态灯：一圈淡底 + 一颗实心点，颜色和胶囊语义色一致
+            cx, cy = r.left() + 9, r.center().y()
+            halo = QColor(col)
+            halo.setAlpha(50)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(halo)
+            p.drawEllipse(QRectF(cx - 4.5, cy - 4.5, 9, 9))
+            p.setBrush(col)
+            p.drawEllipse(QRectF(cx - 2.4, cy - 2.4, 4.8, 4.8))
+            text_rect = r.adjusted(14, 0, 0, 0)
         p.setFont(self._font)
         p.setPen(col)
-        p.drawText(r, int(Qt.AlignmentFlag.AlignCenter), self._title())
+        p.drawText(text_rect, int(Qt.AlignmentFlag.AlignCenter), self._title())
         p.end()
 
 

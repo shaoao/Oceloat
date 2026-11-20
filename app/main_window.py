@@ -338,7 +338,7 @@ class SplitHandle(QSplitterHandle):
         super().__init__(orientation, parent)
         self._hover = False
         self.setMouseTracking(True)
-        self.setToolTip("拖动调整高度 · 双击恢复 50 / 50")
+        self.setToolTip("拖动调整分栏 · 双击恢复 50 / 50")
 
     def mouseDoubleClickEvent(self, e):  # noqa: N802
         sp = self.splitter()
@@ -367,8 +367,14 @@ class SplitHandle(QSplitterHandle):
             p.setPen(QPen(C(t.border_strong), 1))
         else:
             p.setPen(QPen(C(t.border), 1))
-        y = self.height() // 2
-        p.drawLine(4, y, self.width() - 4, y)
+        # 手柄方向跟着分栏走：左右分栏画一条极细竖线，上下分栏画横线。
+        # 之前不管方向都画横线，水平分栏时那条线横躺在竖手柄上，几乎看不清。
+        if self.orientation() == Qt.Orientation.Horizontal:
+            x = self.width() // 2
+            p.drawLine(x, 4, x, self.height() - 4)
+        else:
+            y = self.height() // 2
+            p.drawLine(4, y, self.width() - 4, y)
         p.end()
 
 

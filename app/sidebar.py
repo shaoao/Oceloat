@@ -39,7 +39,7 @@ from . import i18n, icons
 from .code_editor import human_elapsed
 from .store import Store, new_folder, new_request
 from .anim import stop as _anim_stop
-from .theme import (C, method_color, method_short, paint_kind_dot, px,
+from .theme import (C, method_color, method_short, px,
                     status_color, font, mono, theme)
 from .widgets import Button, HBox, Label, Menu, animate, icon_button
 
@@ -425,10 +425,6 @@ class TreeDelegate(QStyledItemDelegate):
             if not selected and hover < 0.5:
                 mcol = QColor(mcol)
                 mcol.setAlpha(200)
-            # 类型灯：HTTP 显示方法色，WS / SIO / SSE 显示协议色，一眼分清请求类型
-            paint_kind_dot(p, x + 4, cy, method_color(method, t),
-                           radius=px(2.8))
-            x += px(14)
             p.setFont(mono(9, QFont.Weight.DemiBold))
             p.setPen(mcol)
             # 方法列宽按字号一起放大，否则 150% 下 POST 会被裁成 POS
@@ -633,34 +629,30 @@ class HistoryRow(QWidget):
             p.drawRoundedRect(r, 7, 7)
         e = self.entry
         status = int(e.get("status") or 0)
-        method = (e.get("method") or "GET").upper()
-        mcol = C(method_color(method, t))
-        # 类型灯：和集合树、标签页同一颗，历史里也能按颜色分清 HTTP / WS / SSE
-        paint_kind_dot(p, r.left() + 12, r.top() + 12,
-                       method_color(method, t), radius=px(2.8))
+        mcol = C(method_color(e.get("method", "GET"), t))
         p.setFont(mono(9, QFont.Weight.DemiBold))
         p.setPen(mcol)
-        p.drawText(QRectF(r.left() + 24, r.top() + 5, 36, 14),
+        p.drawText(QRectF(r.left() + 8, r.top() + 5, 36, 14),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                   method_short(method))
-        # URL（起点跟着方法列一起右移，给类型灯腾位置）
+                   method_short(e.get("method") or "GET"))
+        # URL
         p.setFont(mono(11.2))
         p.setPen(C(t.text) if self._hover_v > 0.4 else C(t.text_dim))
         url = e.get("url", "")
-        avail = r.width() - 62 - 22
+        avail = r.width() - 54 - 22
         text = QFontMetricsF(p.font()).elidedText(url, Qt.TextElideMode.ElideMiddle, avail)
-        p.drawText(QRectF(r.left() + 56, r.top() + 3, avail, 17),
+        p.drawText(QRectF(r.left() + 48, r.top() + 3, avail, 17),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), text)
         # 元信息
         p.setFont(mono(9.5))
         sc = C(status_color(status, t)) if status else C(t.text_faint)
         p.setPen(sc)
         meta = f"{status}" if status else "ERR"
-        p.drawText(QRectF(r.left() + 56, r.top() + 20, 42, 16),
+        p.drawText(QRectF(r.left() + 48, r.top() + 20, 42, 16),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), meta)
         p.setPen(C(t.text_faint))
         rel = time.strftime("%H:%M", time.localtime(e.get("ts", 0)))
-        p.drawText(QRectF(r.left() + 96, r.top() + 20, max(r.width() - 126, 40), 16),
+        p.drawText(QRectF(r.left() + 88, r.top() + 20, max(r.width() - 118, 40), 16),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                    f"{rel}  ·  {human_elapsed(int(e.get('elapsed') or 0))}")
         if self._hover_v > 0.25:

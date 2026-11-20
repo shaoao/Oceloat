@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.79", VERSION == "1.0.79", VERSION)
-check("更新内容是 1.0.79", CHANGELOG[0]["version"] == "1.0.79")
+check("版本 1.0.80", VERSION == "1.0.80", VERSION)
+check("更新内容是 1.0.80", CHANGELOG[0]["version"] == "1.0.80")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -698,10 +698,25 @@ check("分栏按钮挂在 content 与状态条同行", "parent=self.content" in 
 check("内容区右缘内缩 1px 对齐标题栏", "self.width() - 1, self.height() - 1" in _mw7)
 check("内容区画右下的圆角弧", "path.arcTo" in _mw7 and "radius * 2" in _mw7)
 check("SSE 未连接不重复", 'self.status_label.setText("")' in _sp7)
-check("类型灯共用一颗", "def paint_kind_dot" in _th7
-      and "paint_kind_dot" in _sb7 and "paint_kind_dot" in _tp7)
 check("更新内容写了五项修复", any("顶上去" in x for x in ALL_ITEMS)
       and any("类型灯" in x for x in ALL_ITEMS))
+
+# ---------------------------------------------------------------- 1.0.80 新增
+print("\n[1.0.80 新增]")
+_rp8 = (ROOT / "app" / "response_panel.py").read_text(encoding="utf-8")
+_wg8 = (ROOT / "app" / "widgets.py").read_text(encoding="utf-8")
+
+check("响应胶囊状态灯可复用", "dot: bool = False" in _wg8
+      and "if self._dot:" in _wg8 and "dot=True" in _rp8)
+check("侧栏和标签页不再画小点", "paint_kind_dot" not in _sb7
+      and "paint_kind_dot" not in _tp7)
+check("SSE 控制条并进头部第一行", "self._meta_layout.addWidget(self.sse_view.strip)" in _rp8
+      and "self.strip = strip" in _sp7)
+check("分栏手柄按方向画线", 'if self.orientation() == Qt.Orientation.Horizontal:' in _mw7
+      and 'p.drawLine(x, 4, x, self.height() - 4)' in _mw7)
+check("更新内容写了这轮调整", any("状态灯放到" in x for x in ALL_ITEMS)
+      and any("控制条不再单独占一行" in x for x in ALL_ITEMS)
+      and any("左右分栏看得清" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

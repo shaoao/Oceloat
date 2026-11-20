@@ -370,7 +370,7 @@ class ResponsePanel(QWidget):
         self._detail = None
 
         # ---------- 头部
-        self.pill = Pill("—", theme().text_faint, font_size=10.5, pad=10)
+        self.pill = Pill("—", theme().text_faint, font_size=10.5, pad=10, dot=True)
         self.time_label = Label("", 11, theme().text_dim, mono_font=True)
         self.size_label = Label("", 11, theme().text_faint, mono_font=True)
         self.type_label = Label("", 11, theme().text_faint, mono_font=True)
@@ -390,6 +390,7 @@ class ResponsePanel(QWidget):
         ml = QHBoxLayout(self.meta)
         ml.setContentsMargins(0, 0, 0, 0)
         ml.setSpacing(8)
+        self._meta_layout = ml
         ml.addWidget(self.pill, 0, Qt.AlignmentFlag.AlignVCenter)
         ml.addSpacing(2)
         ml.addWidget(self.time_label)
@@ -595,6 +596,13 @@ class ResponsePanel(QWidget):
         self.center.addWidget(self.sio_view)
         self.sse_view = SseLogView()
         self.center.addWidget(self.sse_view)
+        # SSE 控制条（握手结果 / 速率 / 暂停）并入头部第一行，
+        # 不再单独占一条：把 strip 从视图里 take 出来塞进 meta。
+        self.sse_view.layout().removeWidget(self.sse_view.strip)
+        self.sse_view.strip_div.hide()
+        self.sse_view.dot.hide()          # 顶部胶囊左侧的灯已经指示状态，别亮两颗
+        self._meta_layout.addWidget(self.sse_view.strip)
+        self.sse_view.strip.hide()
         self._is_ws = False
         self._realtime_kind = "ws"
         self._stale_notice = True
@@ -980,6 +988,7 @@ class ResponsePanel(QWidget):
         self.tabs_row.hide()
         self._set_head_visible(True)
         self.meta.show()
+        self.sse_view.strip.setVisible(self._realtime_kind == "sse")
         self._set_actions_enabled(False)
         self.url_label.setVisible(bool(url))
         self.url_label.setText(url)
@@ -1246,6 +1255,7 @@ class ResponsePanel(QWidget):
         self._set_actions_enabled(True)
         self._set_head_visible(True)
         self.meta.show()
+        self.sse_view.strip.hide()
         self._set_metrics_visible(True)
         self._set_dots(True)
         self.url_label.show()

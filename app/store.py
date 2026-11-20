@@ -26,9 +26,21 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.79"
+VERSION = "1.0.80"
 
 CHANGELOG = [
+    {
+        "version": "1.0.80",
+        "date": "2026-11-20",
+        "items": [
+            "状态灯放到该在的地方：响应顶部的「未连接」「200」胶囊前面各带一颗灯，"
+            "按状态亮对应颜色；集合树、历史记录、标签页里那些多余的小点去掉了",
+            "SSE 的控制条不再单独占一行：握手结果、事件速率、暂停按钮并进顶部第一行，"
+            "日志区直接从第二行开始，不留空条",
+            "左右分栏看得清了：中间一条极细的分隔线跟着分栏方向走，左右并排时是竖线、"
+            "上下堆叠时是横线，拖得动，双击还能恢复 50/50",
+        ],
+    },
     {
         "version": "1.0.79",
         "date": "2026-11-20",
