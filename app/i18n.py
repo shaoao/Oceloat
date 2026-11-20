@@ -2054,4 +2054,28 @@ _EN.update({
     "导出失败：{err}": "Export failed: {err}",
     "地址要以 http:// 或 https:// 开头": "The URL must start with http:// or https://",
     "✓ 已识别 {fmt}：{detail}": "✓ Recognised {fmt}: {detail}",
+    # ---------------------------------------------------------------- v1.0.77
+    "切换为上下分栏": "Switch to stacked layout",
+    "切换为左右分栏": "Switch to side-by-side layout",
+    "分栏已恢复 50 / 50": "Split reset to 50 / 50",
+    "已连接 · {code}{ctype}": "Connected · {code}{ctype}",
+    "第 {n} 次重连 · {s}s 后重试": "Reconnect #{n} in {s}s",
+    "连接中…": "Connecting…",
+    "连接失败 · HTTP {code}": "Connection failed · HTTP {code}",
+    "暂停：先冻住列表，慢慢看已经收到的事件":
+        "Pause: freeze the list and inspect what already arrived",
+    "继续：把暂停期间收到的事件一次性放出来":
+        "Resume: release the events buffered while paused",
+    "没有符合条件的事件。换个筛选或清空搜索试试。":
+        "No events match. Try another filter or clear the search.",
+    "还没有事件。连上之后服务器推送的每一条都会出现在这里。":
+        "No events yet. Every push from the server shows up here once connected.",
+    "{n} 条/分": "{n} /min",
+    "{n} 条事件 · {size}": "{n} events · {size}",
+    " · {k} 种事件": " · {k} kinds",
+    " · 暂停中，缓冲 {b} 条": " · paused, {b} buffered",
+    "过滤事件内容": "Filter events",
+    "单击展开这条事件（可同时展开多条）":
+        "Click to expand this event (multiple can stay open)",
+    "服务端返回的 Content-Type": "Content-Type returned by the server",
 })

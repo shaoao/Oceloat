@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import (
     QEasingCurve,
-    QObject,
     QEvent,
     QPoint,
     QPointF,
@@ -24,14 +23,15 @@ from PyQt6.QtCore import (
     pyqtSignal,
 )
 from PyQt6.QtGui import (
+    QBitmap,
     QColor,
     QFont,
     QFontMetricsF,
     QGuiApplication,
+    QImage,
     QKeySequence,
     QPainter,
     QPen,
-    QRegion,
     QShortcut,
 )
 from PyQt6.QtWidgets import (
@@ -47,7 +47,7 @@ from PyQt6.QtWidgets import (
 
 from . import i18n, icons
 from .brand import BrandMark, app_icon as brand_icon
-from .code_editor import CodeView, human_elapsed, human_size
+from .code_editor import CodeView, human_elapsed
 from .dialogs import CodeDialog, CommandPalette, EnvDialog, ImportCurlDialog, SettingsDialog
 from .http_client import ApiClient, Response
 from .ws_client import WsClient
@@ -58,7 +58,7 @@ from .response_panel import ResponsePanel
 from .sidebar import Sidebar
 from .store import Store, kv, new_request, resolve_vars, uid
 from .tabs import TabStrip
-from .anim import set_animations, stop as _anim_stop
+from .anim import animations_on, set_animations, stop as _anim_stop
 from .theme import (C, apply_theme, font, mono, px, set_accent, set_ui_scale,
                     theme, theme_by_name)
 from .widgets import (Divider, HBox, Label, Menu, VBox, animate, fade_window,
@@ -372,9 +372,16 @@ class SplitHandle(QSplitterHandle):
 
 class PanelSplitter(QSplitter):
     resetRequested = pyqtSignal()
+    resized = pyqtSignal()
 
     def createHandle(self):  # noqa: N802
         return SplitHandle(self.orientation(), self)
+
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        # 分栏尺寸只有它自己知道得最准：窗口 resizeEvent 时子控件还没排完，
+        # 那时候定位「分栏右下角那颗小按钮」会算到旧尺寸上。
+        self.resized.emit()
 
 
 class SideSplitter(QSplitter):
@@ -409,55 +416,40 @@ class SideHandle(QSplitterHandle):
         p.end()
 
 
-def _rounded_region(w: int, h: int, radius: int) -> QRegion:
-    """按解析圆裁出窗口遮罩。
+def _rounded_mask(w: int, h: int, radius: int) -> QBitmap:
+    """把窗口裁成圆角：用「抗锯齿圆角图 → 1bit 掩码」而不是 QRegion。
 
-    以前把圆角路径压成多边形再转 QRegion：弧线只剩几段折线，
-    圆弧只剩几段折线，实际显示就是右下角「缺一小块」的台阶（用户截图）。
-    这里改成「整块矩形减去四角的『方角减圆角』」：QRegion 的椭圆是逐扫描线
-    解析出来的，每一行只差 1px，边缘看起来才是连续的弧。
+    前两版都栽在同一件事上 —— 窗口掩码只有 1bit，谁能把边缘算准谁就好看：
+      · 把圆角路径压成多边形再转区域：圆弧只剩四五段折线，肉眼就是台阶；
+      · 用 QRegion 的椭圆：Qt 内部的椭圆同样是多边形近似，
+        radius=12 时一个角只有几段，裁出来就是「缺一小块」的方角（用户截图）。
+    这里换个思路：先把圆角矩形画到 8 倍大的图上（这时 AntiAliasing 是真的
+    平滑），缩回原尺寸得到带透明度的灰度边缘，再取 alpha 掩码（阈值 128）。
+    边缘位置精确到 1/8 像素，四个角就是真正连续的弧。
     """
-    region = QRegion(0, 0, max(1, w), max(1, h))
+    w, h = max(1, w), max(1, h)
     r = max(0, min(int(radius), w // 2, h // 2))
     if r <= 0:
-        return region
-    for cx, cy in ((0, 0), (w - 2 * r, 0), (0, h - 2 * r), (w - 2 * r, h - 2 * r)):
-        square = QRegion(cx, cy, 2 * r, 2 * r)
-        circle = QRegion(cx, cy, 2 * r, 2 * r, QRegion.RegionType.Ellipse)
-        region = region.subtracted(square.subtracted(circle))
-    return region
-
-
-class _UrlFetcher(QObject):
-    """后台抓一个集合地址（最多 8 MB），抓完用信号把文本丢回主线程。
-
-    只为一个「从 URL 导入」开线程不值得建类，但网络请求绝不能在界面线程里
-    urllib.urlopen —— 网慢一点整个窗口就假死。
-    """
-
-    done = pyqtSignal(str, str)          # (文本, 错误)
-
-    def start(self, url: str) -> None:
-        def worker():
-            text, error = "", ""
-            try:
-                import urllib.request
-
-                req = urllib.request.Request(url, headers={"User-Agent": "Ocelot"})
-                with urllib.request.urlopen(req, timeout=20) as resp:   # noqa: S310
-                    raw = resp.read(8 * 1024 * 1024 + 1)
-                if len(raw) > 8 * 1024 * 1024:
-                    error = "文件超过 8 MB，请先下载到本地再导入"
-                else:
-                    text = raw.decode("utf-8", "replace")
-            except Exception as exc:      # noqa: BLE001
-                error = str(exc)
-            try:
-                self.done.emit(text, error)
-            except RuntimeError:          # 窗口已经销毁
-                pass
-
-        threading.Thread(target=worker, daemon=True).start()
+        # 全可见：掩码里 1 = 显示，所以整块填 1（0 会把窗口整个藏起来）
+        full = QImage(w, h, QImage.Format.Format_Mono)
+        full.fill(1)
+        return QBitmap.fromImage(full)
+    ss = 8                      # 超采样倍数：8 倍已经肉眼看不出台阶
+    img = QImage(w * ss, h * ss, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(QColor(0, 0, 0, 0))
+    p = QPainter(img)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(0, 0, 0, 255))
+    p.drawRoundedRect(QRectF(0, 0, w * ss, h * ss), r * ss, r * ss)
+    p.end()
+    img = img.scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio,
+                     Qt.TransformationMode.SmoothTransformation)
+    mono = img.createAlphaMask()
+    # createAlphaMask 把「透明」记成 1、「不透明」记成 0，正好和 QWidget 掩码
+    # 的语义相反（1 才是可见）。不反转的话圆角很「漂亮」，整块窗口却是空的。
+    mono.invertPixels()
+    return QBitmap.fromImage(mono)
 
 
 class CardRoot(QWidget):
@@ -745,7 +737,6 @@ class MainWindow(QWidget):
         # 误关标签的兜底：草稿留 60 秒，重开同一个请求就接上；最近关掉的几个
         # 还能用 ⌘⇧T 整条捡回来（含响应）。
         self._closed_tabs: List[Dict[str, Any]] = []
-        self._last_import_url = ""
         self.DRAFT_TTL = 60
         self.DRAFT_MAX = 6
         self._sidebar_target = int(store.settings.get("sidebar_width", 268))
@@ -867,9 +858,7 @@ class MainWindow(QWidget):
         self.sidebar.requestDeleted.connect(self._on_request_deleted)
         self.sidebar.changed.connect(self._on_store_changed)
         self.sidebar.runFolder.connect(self.run_collection)
-        # 侧栏那颗导入/导出：菜单贴着那颗按钮弹，不再铺一层全屏模糊
-        self.sidebar.transferRequested.connect(
-            lambda: self.open_transfer("import", self.sidebar.transfer_btn))
+        self.sidebar.transferRequested.connect(self.open_transfer)
         self.sidebar.trashRequested.connect(self.open_trash)
         self.sidebar.notify.connect(lambda msg: self.toast.show_message(msg, "success"))
 
@@ -933,6 +922,9 @@ class MainWindow(QWidget):
         self.splitter.addWidget(self.response)
         self.splitter.setSizes([380, 420])
         wl.addWidget(self.splitter, 1)
+        # 请求区 / 响应区能不能改成左右并排：一颗小按钮，图标跟着转 90°
+        self._build_layout_toggle()
+        self._restore_layout()
 
         self.welcome = WelcomeView()
         self.welcome.newRequest.connect(self.new_request)
@@ -1099,9 +1091,9 @@ class MainWindow(QWidget):
         elif chosen is a_curl:
             self.import_curl()
         elif chosen is a_import:
-            self.open_transfer("import", anchor)
+            self.import_collection()
         elif chosen is a_export:
-            self.open_transfer("export", anchor)
+            self.export_collection()
         elif chosen is a_quit:
             self.close()
 
@@ -1151,7 +1143,7 @@ class MainWindow(QWidget):
         if getattr(self, "_mask_size", None) == (w, h):
             return
         self._mask_size = (w, h)
-        self.setMask(_rounded_region(w, h, self.CARD_RADIUS))
+        self.setMask(_rounded_mask(w, h, self.CARD_RADIUS))
         self.root.clearMask()
 
     def paintEvent(self, _e):
@@ -2276,6 +2268,9 @@ class MainWindow(QWidget):
         if tab is not None and self.tabstrip.current() == tab["id"]:
             self.response.ws_set_state("open", client.stats())
         if sse:
+            # 握手结果（状态码 / Content-Type / 响应头）交给事件视图顶部那一条
+            self.response.sse_stream(self.sse_client.status, protocol or "",
+                                     self.sse_client.headers)
             self.toast.show_message(i18n.tr("已连上 SSE 事件流，等服务器推送"), "success")
         elif sio:
             self.toast.show_message(
@@ -2310,6 +2305,7 @@ class MainWindow(QWidget):
         self._on_ws_frame(frame)
         if tab is not None and self.tabstrip.current() == tab["id"]:
             self.editor.set_ws_state("connecting")
+            self.response.sse_retry(attempt, delay_ms)
 
     def _on_ws_failed(self, message: str) -> None:
         self.editor.set_ws_state("idle")
@@ -2805,220 +2801,13 @@ class MainWindow(QWidget):
     def export_collection(self) -> None:
         self.open_transfer("export")
 
-    def open_transfer(self, page: str = "import", anchor: Optional[QWidget] = None) -> None:
-        """导入 / 导出：一颗按钮弹出的小菜单，不再开一个带背景模糊的大窗口。
-
-        以前这里是一个 580×660 的模态窗，铺一层全屏模糊遮罩，切页签时还要
-        在窗里翻页；实际每次只是「选个来源 → 选个文件」。现在做成贴着按钮的
-        小弹层：菜单里直接列来源与导出格式，点完就进系统文件选择框，结果用
-        toast 报一句，整个主界面不动。
-        """
-        from .transfer import EXPORT_TARGETS, IMPORT_SOURCES
-
-        t = theme()
-        menu = Menu(self)
-        imp = Menu(menu, "导入集合")
-        imp.setIcon(icons.icon("download", t.text, 14))
-        menu.addMenu(imp)
-        for key, title, desc in IMPORT_SOURCES:
-            act = imp.addAction(icons.icon("file", t.text_dim, 13, 1.5), title)
-            act.setToolTip(desc)
-            act.triggered.connect(lambda _c=False, k=key, ti=title: self._import_file(k, ti))
-        imp.addSeparator()
-        a_clip = imp.addAction(icons.icon("paste", t.text_dim, 13, 1.5), "从剪贴板导入")
-        a_clip.setToolTip("自动识别 JSON 集合或 cURL 命令，直接粘过来")
-        a_clip.triggered.connect(self._import_clipboard)
-        a_url = imp.addAction(icons.icon("link", t.text_dim, 13, 1.5), "从 URL 导入")
-        a_url.setToolTip("填一个远程 JSON / YAML 地址，自动下载并识别来源")
-        a_url.triggered.connect(self._import_url)
-
-        exp = Menu(menu, "导出集合")
-        exp.setIcon(icons.icon("file", t.text, 14))
-        menu.addMenu(exp)
-        for key, title, desc in EXPORT_TARGETS:
-            act = exp.addAction(icons.icon("download", t.text_dim, 13, 1.5), title)
-            act.setToolTip(desc)
-            act.triggered.connect(lambda _c=False, k=key: self._export_bundle(k))
-
-        menu.addSeparator()
-        a_more = menu.addAction(icons.icon("transfer", t.text, 14), "打开导入导出面板…")
-        a_more.setToolTip("需要拖放文件、逐个勾选时可以打开完整面板")
-        a_more.triggered.connect(lambda: self._open_transfer_window(page))
-
-        if anchor is not None:
-            pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
-        else:
-            # 没有锚点（命令面板 / 快捷键触发）就贴着鼠标弹，仍在主窗口范围内
-            from PyQt6.QtGui import QCursor
-
-            pos = QCursor.pos()
-        menu.exec(pos)
-
-    def _open_transfer_window(self, page: str) -> None:
+    def open_transfer(self, page: str = "import") -> None:
+        """集合的导入 / 导出：一个对话框里切换来源、选文件、导出。"""
         from .dialogs import TransferDialog
 
         dlg = TransferDialog(self.store, self)
         dlg.imported.connect(self._on_imported)
         dlg.exec()
-
-    # -------------------------------------------------- 导入 / 导出（小弹层）
-    def _import_file(self, key: str, title: str) -> None:
-        """选文件 → 识别 → 追加到集合列表，一步到位。"""
-        from PyQt6.QtWidgets import QFileDialog
-
-        path, _ = QFileDialog.getOpenFileName(
-            self, i18n.tr(title), "",
-            "集合文件 (*.json *.yaml *.yml *.har);;所有文件 (*)")
-        if not path:
-            return
-        try:
-            text = open(path, encoding="utf-8").read()
-        except UnicodeDecodeError:
-            try:
-                text = open(path, encoding="utf-8-sig").read()
-            except Exception as exc:      # noqa: BLE001
-                self.toast.show_message(i18n.trf("读取失败：{err}", err=exc), "error")
-                return
-        except Exception as exc:          # noqa: BLE001
-            self.toast.show_message(i18n.trf("读取失败：{err}", err=exc), "error")
-            return
-        stem = os.path.splitext(os.path.basename(path))[0]
-        self._finish_import(text, stem)
-
-    def _import_clipboard(self) -> None:
-        from .importer import parse_curl
-        from .transfer import count_requests, parse_text
-
-        text = QApplication.clipboard().text() or ""
-        if not text.strip():
-            self.toast.show_message(i18n.tr("剪贴板是空的"), "info")
-            return
-        if text.strip().lower().startswith("curl"):
-            req, err = parse_curl(text)
-            if err or req is None:
-                self.toast.show_message(err or i18n.tr("cURL 解析失败"), "error")
-                return
-            self.store.collections.append(req)
-            self.store.save()
-            self._on_imported(1)
-            self.toast.show_message(i18n.tr("已从剪贴板导入 1 个请求"), "success")
-            return
-        nodes, _fmt, err = parse_text(text, fallback_name=i18n.tr("剪贴板集合"))
-        if err or not nodes:
-            self.toast.show_message(err or i18n.tr("剪贴板内容不是可识别的集合"), "error")
-            return
-        self.store.collections.extend(nodes)
-        self.store.save()
-        total = count_requests(nodes)
-        self._on_imported(total)
-        self.toast.show_message(i18n.trf("已从剪贴板导入 {n} 个请求", n=total), "success")
-
-    def _import_url(self) -> None:
-        from .dialogs import PromptDialog
-
-        clip = QApplication.clipboard().text() or ""
-        dlg = PromptDialog(i18n.tr("从 URL 导入"), i18n.tr("集合 JSON / YAML 的地址"),
-                           clip.strip() if clip.strip().startswith("http") else "https://", self)
-        if dlg.exec() != dlg.DialogCode.Accepted:
-            return
-        url = dlg.value().strip()
-        if not url.lower().startswith(("http://", "https://")):
-            self.toast.show_message(i18n.tr("地址要以 http:// 或 https:// 开头"), "error")
-            return
-        self.toast.show_message(i18n.tr("正在下载…"), "info")
-        self._last_import_url = url
-        fetcher = _UrlFetcher(self)
-        fetcher.done.connect(self._on_url_text)
-        fetcher.start(url)
-
-    def _on_url_text(self, text: str, error: str) -> None:
-        if error or not text.strip():
-            self.toast.show_message(
-                i18n.trf("下载失败：{err}", err=error or "内容为空"), "error")
-            return
-        stem = ""
-        try:
-            from urllib.parse import urlparse
-
-            tail = urlparse(self._last_import_url).path.rstrip("/").split("/")[-1]
-            stem = tail.rsplit(".", 1)[0] if "." in tail else tail
-        except Exception:      # noqa: BLE001
-            stem = ""
-        self._finish_import(text, stem or i18n.tr("远程集合"))
-
-    def _finish_import(self, text: str, stem: str) -> None:
-        """识别文本 → 落库 → toast。识别失败时给的是模型的原始错误说明。"""
-        from .transfer import FORMAT_LABELS, environments_of, parse_text, summarize
-
-        nodes, fmt, err = parse_text(text, fallback_name=stem)
-        if err or not nodes:
-            self.toast.show_message(err or i18n.tr("文件里没有可导入的请求"), "error")
-            return
-        self.store.collections.extend(nodes)
-        existing = {e.get("name") for e in self.store.environments}
-        added_envs = 0
-        for env in environments_of(text):
-            if env.get("name") in existing:
-                continue
-            env["id"] = uid()
-            self.store.environments.append(env)
-            existing.add(env.get("name"))
-            added_envs += 1
-        self.store.save()
-        stats = summarize(nodes)
-        self._on_imported(stats["requests"])
-        bits = [i18n.trf("{n} 个请求", n=stats["requests"])]
-        if stats["folders"]:
-            bits.append(i18n.trf("{n} 个文件夹", n=stats["folders"]))
-        if added_envs:
-            bits.append(i18n.trf("{n} 套环境变量", n=added_envs))
-        self.toast.show_message(
-            i18n.trf("✓ 已识别 {fmt}：{detail}", fmt=FORMAT_LABELS.get(fmt, fmt),
-                     detail=" · ".join(bits)), "success")
-
-    def _export_bundle(self, key: str) -> None:
-        """导出到文件：选路径 → 写盘 → toast，不再进「完成」页。"""
-        from PyQt6.QtWidgets import QFileDialog
-
-        from .transfer import EXT, to_har, to_ocelot, to_openapi, to_postman, to_yaml
-
-        stem = self._export_stem()
-        suffix = "YAML (*.yaml)" if key == "openapi-yaml" else (
-            "HAR (*.har)" if key == "har" else "JSON (*.json)")
-        path, _ = QFileDialog.getSaveFileName(
-            self, i18n.tr("导出集合"), stem + EXT.get(key, ".json"), suffix)
-        if not path:
-            return
-        if key == "openapi-yaml" and not path.lower().endswith((".yaml", ".yml")):
-            path += ".yaml"
-        try:
-            if key == "ocelot":
-                text = json.dumps(to_ocelot(self.store), ensure_ascii=False, indent=2)
-            elif key == "postman":
-                text = json.dumps(to_postman(self.store), ensure_ascii=False, indent=2)
-            elif key == "openapi-json":
-                text = json.dumps(to_openapi(self.store), ensure_ascii=False, indent=2)
-            elif key == "openapi-yaml":
-                text = to_yaml(to_openapi(self.store))
-            else:
-                text = json.dumps(to_har(self.store), ensure_ascii=False, indent=2)
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(text)
-        except Exception as exc:              # noqa: BLE001
-            self.toast.show_message(i18n.trf("导出失败：{err}", err=exc), "error")
-            return
-        self.toast.show_message(
-            i18n.trf("已导出 {name} · {size}", name=os.path.basename(path),
-                     size=human_size(len(text.encode("utf-8")))), "success")
-
-    def _export_stem(self) -> str:
-        import re
-
-        names = [str(c.get("name") or "").strip() for c in self.store.collections
-                 if str(c.get("name") or "").strip()]
-        stem = names[0] if len(names) == 1 else ""
-        stem = re.sub(r'[\\/:*?"<>|\n\r\t]+', "-", stem).strip(" .-")
-        return stem[:60] or "ocelot-collection"
 
     def open_trash(self) -> None:
         """回收站：恢复误删的集合 / 请求，恢复后立即回到原位置。"""
@@ -3343,24 +3132,109 @@ class MainWindow(QWidget):
             QTimer.singleShot(700, lambda: self.toast.show_message(
                 "上次异常退出，本次已临时关闭动画", "info"))
 
+    # -------------------------------------------------- 分栏方向
+    def _build_layout_toggle(self) -> None:
+        """请求区 / 响应区之间的一颗小按钮：上下分栏 ↔ 左右分栏。
+
+        以前「上下」是写死的：响应宽表格（JSON、事件日志）摆在大屏上左右空一大片。
+        这颗按钮挂在分栏右下角，24px，鼠标扫过去才有底色，不抢视线。
+        """
+        # 必须挂在 workspace 上：QSplitter 会把任何子控件都当成一个「窗格」，
+        # 挂上去就变成三栏，分栏最大宽度还被算成 24px。
+        self.layout_btn = icon_button("split", "", 24, 13, kind="subtle",
+                                      parent=self.workspace)
+        self.layout_btn.setFixedWidth(24)
+        self.layout_btn.clicked.connect(self.toggle_layout)
+        self.layout_btn.raise_()
+        self.splitter.resized.connect(self._place_layout_btn)
+        self.splitter.splitterMoved.connect(lambda *_: self._place_layout_btn())
+        self._sync_layout_btn()
+
+    def _sync_layout_btn(self) -> None:
+        horiz = self.splitter.orientation() == Qt.Orientation.Horizontal
+        self.layout_btn.setToolTip(
+            i18n.tr("切换为上下分栏") if horiz else i18n.tr("切换为左右分栏"))
+        # 左右分栏时图标转 90°：两条竖线 → 两条横线，一眼看出当前方向
+        self.layout_btn.set_icon_rotation(90.0 if horiz else 0.0)
+
+    def _place_layout_btn(self) -> None:
+        btn = getattr(self, "layout_btn", None)
+        if btn is None or not hasattr(self, "splitter"):
+            return
+        # 用 workspace 的尺寸兜底：刚 setOrientation 的那一瞬间分栏自己的
+        # geometry 还是旧值（甚至比父控件宽），直接算会把按钮推到窗口外面。
+        w = min(self.splitter.geometry().right() + 1, self.workspace.width())
+        h = min(self.splitter.geometry().bottom() + 1, self.workspace.height())
+        if w < 80 or h < 80:
+            return
+        btn.move(w - btn.width() - 10, h - btn.height() - 10)
+        btn.raise_()
+
+    def _restore_layout(self) -> None:
+        if self.store.settings.get("split_layout") == "h":
+            self.splitter.setOrientation(Qt.Orientation.Horizontal)
+        self._sync_layout_btn()
+        self._sync_pane_limits()
+
+    def _sync_pane_limits(self) -> None:
+        """左右分栏时把两块的最小宽度压到 300。
+
+        两个面板内部的 minimumSizeHint 都在 530~630（地址栏 + 页签一行摆开），
+        直接左右并排会让内容区向侧栏「抢」宽度，侧栏被挤到 200 宽，标题都截了。
+        显式给一个更小的最小宽度，侧栏就能保持原样。
+        """
+        horiz = self.splitter.orientation() == Qt.Orientation.Horizontal
+        for pane in (self.editor, self.response):
+            pane.setMinimumWidth(300 if horiz else 0)
+
+    def _split_total(self) -> int:
+        sp = self.splitter
+        span = sp.width() if sp.orientation() == Qt.Orientation.Horizontal else sp.height()
+        return max(240, span - sp.handleWidth())
+
+    def _set_split_ratio(self, ratio: float) -> None:
+        total = self._split_total()
+        first = int(total * max(0.12, min(0.88, ratio)))
+        self.splitter.setSizes([first, max(1, total - first)])
+
+    def toggle_layout(self) -> None:
+        """切换分栏方向：图标转 90°，分栏从「收窄」滑到目标比例。"""
+        sp = self.splitter
+        horiz = sp.orientation() == Qt.Orientation.Horizontal
+        sizes = sp.sizes() or [1, 1]
+        total = max(1, sizes[0] + sizes[1])
+        ratio = max(0.22, min(0.78, sizes[0] / total))
+        sp.setOrientation(Qt.Orientation.Vertical if horiz
+                          else Qt.Orientation.Horizontal)
+        self.store.settings["split_layout"] = "v" if horiz else "h"
+        self._autosave.start()
+        self._sync_layout_btn()
+        self._sync_pane_limits()
+        self.layout_btn.rotate_icon(0.0 if horiz else 90.0, 260)
+        self._place_layout_btn()
+        if not animations_on() or self._split_total() < 520:
+            self._set_split_ratio(ratio)
+            return
+        # 从 0.18 张开到目标比例：视觉上就是响应区从边缘滑进来
+        animate(self, 0.18, ratio, 280,
+                lambda v: self._set_split_ratio(float(v)),
+                QEasingCurve.Type.OutCubic,
+                on_done=self._place_layout_btn)
+
     def _reset_split(self) -> None:
-        total = max(300, self.splitter.height() - self.splitter.handleWidth())
-        top = total // 2
-        self.splitter.setSizes([top, total - top])
+        self._set_split_ratio(0.5)
         self.store.settings["split_ratio"] = 0.5
         self._autosave.start()
         self.toast.show_message("分栏已恢复 50 / 50")
 
     def _apply_split(self) -> None:
-        total = max(300, self.splitter.height() - self.splitter.handleWidth())
         ratio = self.store.settings.get("split_ratio", 0.46)
         try:
             ratio = float(ratio)
         except (TypeError, ValueError):
             ratio = 0.46
-        ratio = max(0.22, min(0.78, ratio))
-        top = int(total * ratio)
-        self.splitter.setSizes([top, total - top])
+        self._set_split_ratio(ratio)
+        self._place_layout_btn()
 
     def closeEvent(self, e):
         if self._autosave.isActive():
@@ -3383,6 +3257,10 @@ class MainWindow(QWidget):
             pass
         try:
             self.sio.abort()          # Socket.IO 连接同样不能留成孤儿
+        except Exception:             # noqa: BLE001
+            pass
+        try:
+            self.sse_client.abort()   # SSE 长连接也是一条在途 HTTP，必须主动断
         except Exception:             # noqa: BLE001
             pass
         # 分析结果只缓存在内存里，关窗即丢弃，不留常驻占用。
@@ -3438,6 +3316,10 @@ class MainWindow(QWidget):
             self.sio.abort()
         except Exception:                 # noqa: BLE001
             pass
+        try:
+            self.sse_client.abort()
+        except Exception:                 # noqa: BLE001
+            pass
 
     def _cloud_upload_on_exit(self) -> None:
         """开了「退出时自动上传」就趁关窗把最新快照推上去，最多等 2 秒不拖住退出。"""
@@ -3451,8 +3333,7 @@ class MainWindow(QWidget):
             text = self.store.snapshot_text()
         except Exception:  # noqa: BLE001
             return
-        import threading
-
+        
         def run():
             try:
                 client.push(text)
@@ -3466,6 +3347,7 @@ class MainWindow(QWidget):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._round_corners()
+        self._place_layout_btn()
         if hasattr(self, "toast") and self.toast.isVisible():
             self.toast._place()
         if hasattr(self, "palette") and self.palette.isVisible():

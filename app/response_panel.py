@@ -1011,6 +1011,30 @@ class ResponsePanel(QWidget):
         self._set_metrics_visible(bool(up >= 0.05))
         self._set_dots(True)
         self.dot3.hide()
+        if self._realtime_kind == "sse":
+            self.sse_view.set_state(state)
+            if state == "open":
+                self.sse_view.set_stream(
+                    int(getattr(self, "_sse_status", 0) or 0),
+                    getattr(self, "_sse_ctype", ""),
+                    getattr(self, "_sse_headers", {}))
+
+    # -------------------------------------------------- SSE 握手信息
+    def sse_stream(self, status: int, ctype: str, headers: Optional[dict] = None) -> None:
+        """把 SSE 的 HTTP 状态码 / Content-Type / 响应头交给 SSE 视图。
+
+        这几个字段是 SSE 唯一能看出「为什么没有事件」的证据：401 是没带上
+        token，200 但 Content-Type 是 text/html 多半是被登录页或代理拦截了。
+        """
+        self._sse_status = int(status or 0)
+        self._sse_ctype = ctype or ""
+        self._sse_headers = dict(headers or {})
+        self.sse_view.set_stream(self._sse_status, self._sse_ctype, self._sse_headers)
+        self.sse_view.set_state(getattr(self, "_ws_state", "idle") or "idle")
+
+    def sse_retry(self, attempt: int, delay_ms: int) -> None:
+        self.sse_view.set_retry(attempt, delay_ms)
+        self.sse_view.set_state("connecting")
 
     def _active_realtime_view(self):
         if self._realtime_kind == "sse":

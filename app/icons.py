@@ -410,6 +410,26 @@ def _panel_left(p):
     p.restore()
 
 
+def _pause(p):
+    """暂停：两根竖条。SSE 事件刷屏时先冻住列表，慢慢看。"""
+    from PyQt6.QtGui import QBrush
+
+    p.save()
+    p.setBrush(QBrush(p.pen().color()))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawRoundedRect(QRectF(7.0, 5.0, 3.4, 14.0), 1.2, 1.2)
+    p.drawRoundedRect(QRectF(13.6, 5.0, 3.4, 14.0), 1.2, 1.2)
+    p.restore()
+
+
+def _split(p):
+    """分栏图标：一个圆角外框 + 中间一条线（两个窗格）。"""
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(3.4, 4.4, 17.2, 15.2), 3.0, 3.0)
+    p.drawPath(path)
+    p.drawLine(QPointF(12.0, 5.6), QPointF(12.0, 18.4))
+
+
 def _image(p):
     path = QPainterPath()
     path.addRoundedRect(QRectF(3.4, 5.0, 17.2, 14.0), 2.6, 2.6)
@@ -507,7 +527,8 @@ ICONS: Dict[str, Callable[[QPainter], None]] = {
     "alert": _alert, "transfer": _transfer, "link": _link,
     "undo": _undo, "redo": _redo, "cut": _cut, "paste": _paste,
     "panel_left": _panel_left, "image": _image, "audio": _audio, "node": _node,
-    "cloud": _cloud, "sync": _sync, "spark": _spark,
+    "cloud": _cloud, "sync": _sync, "spark": _spark, "split": _split,
+    "pause": _pause,
 }
 
 _cache: Dict[tuple, QIcon] = {}

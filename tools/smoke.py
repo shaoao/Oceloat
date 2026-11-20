@@ -4156,8 +4156,113 @@ def main() -> int:
             _time.sleep(0.02)
         check("SSE 客户端能收到事件", any(f.dir == "in" and f.text() == "hello" for f in got),
               str([(f.dir, f.kind) for f in got]))
+        check("SSE 记下握手状态码与类型", client.status == 200
+              and client.content_type == "text/event-stream",
+              f"{client.status} {client.content_type}")
         client.disconnect_ws()
         srv.shutdown()
+
+        # ---- 401 的 SSE：正文要变成一条系统日志，而不是只说一句「失败」
+        class _SSE401(_BHH):
+            def log_message(self, *_a):
+                pass
+
+            def do_GET(self):
+                body = b'{"error":"missing token"}'
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        srv401 = _THS(("127.0.0.1", 0), _SSE401)
+        _th.Thread(target=srv401.serve_forever, daemon=True).start()
+        fail_frames = []
+        c401 = SseClient()
+        c401.frame.connect(lambda f: fail_frames.append(f))
+        c401.connect_to(f"127.0.0.1:{srv401.server_address[1]}/s", [], "", auto_reconnect=False)
+        for _ in range(80):
+            app.processEvents()
+            if fail_frames:
+                break
+            _time.sleep(0.02)
+        check("SSE 失败时把错误正文写进日志",
+              any(f.kind == "error" and "401" in f.text() and "missing token" in f.text()
+                  for f in fail_frames),
+              str([(f.kind, f.text()[:40]) for f in fail_frames]))
+        check("SSE 失败时记下状态码", c401.status == 401, str(c401.status))
+        c401.disconnect_ws()
+        srv401.shutdown()
+
+        # ---- SSE 事件视图：握手信息 / 动态事件名筛选 / 暂停缓冲
+        from app.sse_client import SseFrame as _SF
+
+        view = w.response.sse_view
+        view.clear()
+        for kind, body in (("message", b'{"a":1}'), ("update", b'{"b":2}'),
+                           ("message", b'{"a":3}'), ("ping", b"keepalive")):
+            view.add_frame(_SF(dir="in", kind=kind, data=body, size=len(body)))
+        chips = [i["key"] for i in view.filter._items]
+        check("SSE 按收到的事件名动态生成筛选",
+              "message" in chips and "update" in chips and "all" in chips, str(chips))
+        check("SSE 心跳默认不进列表",
+              view._match(_SF(dir="sys", kind="ping")) is False
+              and view._match(_SF(dir="in", kind="message")))
+        view.set_state("open")
+        view.set_stream(200, "text/event-stream", {"cache-control": "no-cache"})
+        check("SSE 顶部显示状态码与类型",
+              "200" in view.status_label._full and "text/event-stream" in view.status_label._full,
+              view.status_label._full)
+        view.set_retry(3, 2000)
+        view.set_state("connecting")
+        check("SSE 重连有次数和倒计时",
+              "3" in view.status_label._full and "2.0" in view.status_label._full,
+              view.status_label._full)
+        view.set_state("open")
+        before = len(view._frames)
+        view.toggle_pause()
+        view.add_frame(_SF(dir="in", kind="message", data=b'{"c":4}', size=7))
+        check("SSE 暂停时先缓冲不刷列表",
+              len(view._frames) == before and len(view._pending) == 1,
+              f"{len(view._frames)} / {len(view._pending)}")
+        view.toggle_pause()
+        check("SSE 恢复后把缓冲放出来", len(view._frames) == before + 1)
+
+        # ---- 连接后的「断开」按钮一律红色（WS / Socket.IO / SSE 共用一颗）
+        w.new_sse()
+        w.editor.set_ws_state("open")
+        check("SSE 断开按钮是红色", w.editor.urlbar.send_btn._kind == "danger",
+              w.editor.urlbar.send_btn._kind)
+        check("SSE 断开按钮文案是断开", w.editor.urlbar.send_btn.text() == "断开",
+              w.editor.urlbar.send_btn.text())
+        w.editor.set_ws_state("idle")
+        check("没连上时按钮回到主色", w.editor.urlbar.send_btn._kind == "primary",
+              w.editor.urlbar.send_btn._kind)
+
+        # ---- 分栏方向：上下 ↔ 左右，按钮图标跟着转
+        from PyQt6.QtCore import Qt as _Qt
+
+        w.splitter.setOrientation(_Qt.Orientation.Vertical)
+        w._sync_layout_btn()
+        w.toggle_layout()
+        for _ in range(30):
+            app.processEvents()
+            _time.sleep(0.02)
+        check("分栏切成左右", w.splitter.orientation() == _Qt.Orientation.Horizontal)
+        check("切换后记进设置", w.store.settings.get("split_layout") == "h",
+              str(w.store.settings.get("split_layout")))
+        check("分栏按钮图标转了 90°", abs(w.layout_btn._icon_rotation - 90) < 0.5,
+              str(w.layout_btn._icon_rotation))
+        check("切换后两块最小宽度收窄", w.editor.minimumWidth() == 300,
+              str(w.editor.minimumWidth()))
+        w.toggle_layout()
+        for _ in range(30):
+            app.processEvents()
+            _time.sleep(0.02)
+        check("分栏切回上下", w.splitter.orientation() == _Qt.Orientation.Vertical)
+        check("切回后设置跟着变", w.store.settings.get("split_layout") == "v")
+        check("切回后图标转回 0°", abs(w.layout_btn._icon_rotation) < 0.5,
+              str(w.layout_btn._icon_rotation))
 
         # ---- 导入导出：SSE 往返 + 小弹层入口
         from app import transfer as _tr
@@ -4172,34 +4277,48 @@ def main() -> int:
               and (back_req.get("method") or "").upper() == "SSE"
               and isinstance(back_req.get("sse"), dict), str(back_req)[:80])
 
-        from app.widgets import Menu
-        orig_exec = Menu.exec
-        seen = {}
+        # ---- 导入导出：仍然是原来那个模态面板（不许换成别的入口）
+        from app.dialogs import TransferDialog
 
-        def fake_exec(self, *_a, **_k):
-            seen["titles"] = [a.text() for a in self.actions()]
-            return None
+        orig_exec_t = TransferDialog.exec
+        opened = {}
 
-        Menu.exec = fake_exec
+        def fake_exec_t(self, *_a, **_k):
+            opened["title"] = self.windowTitle()
+            return 0
+
+        TransferDialog.exec = fake_exec_t
         try:
-            w.open_transfer("import", w._settings_btn)
+            w.open_transfer("import")
         finally:
-            Menu.exec = orig_exec
-        check("导入导出是小弹层而不是窗口",
-              any("导入集合" in t for t in seen.get("titles", [])),
-              str(seen.get("titles")))
+            TransferDialog.exec = orig_exec_t
+        check("导入导出仍是完整面板窗口", bool(opened.get("title")), str(opened))
 
-        # ---- 圆角遮罩：角上被裁掉，中心保留
-        from app.main_window import _rounded_region
+        # ---- 圆角遮罩：抗锯齿超采样出来的位图掩码
+        from app.main_window import _rounded_mask
 
-        region = _rounded_region(200, 120, 12)
-        check("圆角遮罩裁掉四个角", not region.contains(QPoint(1, 1))
-              and not region.contains(QPoint(198, 118)))
-        check("圆角遮罩保留中心", region.contains(QPoint(100, 60)))
-        # 第 1 行从 x=7 开始、第 3 行从 x=5 开始：每行只差 1px，才是平滑的弧
-        check("圆角遮罩边缘是一像素台阶",
-              region.contains(QPoint(7, 1)) and not region.contains(QPoint(6, 1))
-              and region.contains(QPoint(5, 3)))
+        mask = _rounded_mask(200, 120, 12)
+        img = mask.toImage()
+
+        def _vis(x, y):
+            return img.pixel(x, y) == 4294967295       # 1 = 显示
+
+        check("圆角遮罩裁掉四个角",
+              not _vis(0, 0) and not _vis(199, 0) and not _vis(0, 119) and not _vis(199, 119))
+        check("圆角遮罩保留中心和边中点", _vis(100, 60) and _vis(100, 0) and _vis(0, 60))
+        # 每行的左边缘只差 1px（半径 12 的圆弧：9 6 5 4 3 2 1 1 1 0 …），
+        # 出现 3px 以上的跳变就是多边形近似那种「缺角」。
+        insets = []
+        for y in range(12):
+            x = 0
+            while x < 200 and not _vis(x, y):
+                x += 1
+            insets.append(x)
+        # 和理想圆逐行对比：偏差不超过 1.5px 才算真正的圆弧（多边形近似会差好几像素）
+        ideal = [12 - (max(0.0, 144 - (12 - (y + 0.5)) ** 2)) ** 0.5 for y in range(12)]
+        check("圆角遮罩是连续弧线而非方块",
+              max(abs(i - v) for i, v in zip(insets, ideal)) <= 1.5,
+              f"{insets} vs {[round(v, 1) for v in ideal]}")
 
         # ---- Mock：AI 生成入口 + 常用例子
         from app import mock_ai as _mai

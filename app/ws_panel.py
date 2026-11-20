@@ -1019,6 +1019,11 @@ class FrameList(QWidget):
             p.end()
             return
         start, end = self.visible_range()
+        # 时间列固定 62px 在 ui_scale 放大后会被切掉半位数字（显示成 22:00:3|）。
+        # 按当前字号量一次「00:00:00」的宽度，多出来的部分整体右移，行与行仍然对齐。
+        _tf = mono(9.4)
+        _tw = max(62.0, QFontMetricsF(_tf).horizontalAdvance("00:00:00") + 8)
+        pad = _tw - 62.0
         for i in range(start, end):
             frame = self.frames[i]
             top = self._tops[i]
@@ -1028,10 +1033,10 @@ class FrameList(QWidget):
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(C(t.selected if (i == self.index or opened) else t.hover))
                 p.drawRoundedRect(r, 6, 6)
-            p.setFont(mono(9.4))
+            p.setFont(_tf)
             p.setPen(C(t.text_faint))
             stamp = datetime.datetime.fromtimestamp(frame.at).strftime("%H:%M:%S")
-            p.drawText(QRectF(r.left() + 8, r.top(), 62, r.height()),
+            p.drawText(QRectF(r.left() + 8, r.top(), _tw, r.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), stamp)
             arrow = {"in": "↓", "out": "↑"}.get(frame.dir, "·")
             col = {"in": t.success, "out": t.info}.get(frame.dir, t.text_faint)
@@ -1039,7 +1044,7 @@ class FrameList(QWidget):
                 col = t.danger
             p.setFont(font(11.6, QFont.Weight.DemiBold))
             p.setPen(C(col))
-            p.drawText(QRectF(r.left() + 74, r.top(), 14, r.height()),
+            p.drawText(QRectF(r.left() + 74 + pad, r.top(), 14, r.height()),
                        int(Qt.AlignmentFlag.AlignCenter), arrow)
             tag = KIND_LABEL.get(frame.kind, frame.kind.upper())
             p.setFont(mono(9.0, QFont.Weight.DemiBold))
@@ -1048,16 +1053,16 @@ class FrameList(QWidget):
             # 固定 46px 会被后面的字节数盖住；按可用宽度省略，绝不重叠。
             tag = QFontMetricsF(p.font()).elidedText(
                 tag, Qt.TextElideMode.ElideRight, 44)
-            p.drawText(QRectF(r.left() + 92, r.top(), 46, r.height()),
+            p.drawText(QRectF(r.left() + 92 + pad, r.top(), 46, r.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), tag)
             p.setFont(mono(9.4))
             p.setPen(C(t.text_faint))
-            p.drawText(QRectF(r.left() + 138, r.top(), 60, r.height()),
+            p.drawText(QRectF(r.left() + 138 + pad, r.top(), 60, r.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                        human_size(frame.size) if frame.kind not in ("open", "close") else "—")
             p.setFont(mono(10.2))
             p.setPen(C(t.text_dim) if frame.dir != "sys" else C(t.text_faint))
-            left = r.left() + 202
+            left = r.left() + 202 + pad
             avail = max(20.0, r.right() - left - 24)
             p.drawText(QRectF(left, r.top(), avail, r.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),

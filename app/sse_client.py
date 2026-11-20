@@ -114,6 +114,11 @@ class SseClient(QObject):
         self._retry_ms = 1500
         self._url = ""
         self._state = STATE_IDLE
+        # 握手结果：SSE 直接复用 HTTP 响应，状态码 / Content-Type / 响应头
+        # 是排查「为什么一条事件都不来」的唯一线索（401、500、被代理拦）。
+        self.status = 0
+        self.content_type = ""
+        self.headers: Dict[str, str] = {}
         self._retry_timer = QTimer(self)
         self._retry_timer.setSingleShot(True)
         self._retry_timer.timeout.connect(self._reconnect)
@@ -140,7 +145,8 @@ class SseClient(QObject):
     def stats(self) -> Dict[str, Any]:
         return {"uptime": max(0.0, time.time() - self._opened_at) if self._opened_at else 0.0,
                 "bytes_in": self._bytes, "events": self._events,
-                "attempt": self._attempt}
+                "attempt": self._attempt, "status": self.status,
+                "content_type": self.content_type}
 
     # -------------------------------------------------- 连接
     def connect_to(self, url: str, headers: Optional[List[tuple]] = None,
@@ -161,6 +167,9 @@ class SseClient(QObject):
         self._buf = ""
         self._bytes = 0
         self._events = 0
+        self.status = 0
+        self.content_type = ""
+        self.headers = {}
         self._open()
         return True
 
@@ -194,11 +203,26 @@ class SseClient(QObject):
         self._reply.finished.connect(self._on_finished)
         self._reply.errorOccurred.connect(self._on_error)
 
+    def _stop_reply(self) -> None:
+        """收掉当前这条响应（不触发自动重连的判断逻辑）。"""
+        reply, self._reply = self._reply, None
+        if reply is not None:
+            try:
+                reply.finished.disconnect()
+            except TypeError:
+                pass
+            try:
+                reply.abort()
+                reply.deleteLater()
+            except RuntimeError:
+                pass
+        self._opened_at = 0.0
+        self._set_state(STATE_IDLE)
+
     def _reconnect(self) -> None:
         if self._stopped:
             return
         self._attempt += 1
-        self.retrying.emit(self._attempt, self._retry_ms)
         self._open()
 
     def disconnect_ws(self) -> None:
@@ -232,16 +256,27 @@ class SseClient(QObject):
         if self._state == STATE_CONNECTING:
             status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute) or 0
             ctype = bytes(reply.rawHeader(b"Content-Type")).decode("latin-1", "ignore")
-            if status and status >= 400:
+            self.status = int(status or 0)
+            self.content_type = ctype.split(";")[0].strip()
+            self.headers = {bytes(k).decode("latin-1", "ignore"):
+                            bytes(v).decode("latin-1", "ignore")
+                            for k, v in reply.rawHeaderPairs()}
+            if status and (status >= 400 or status not in (200, 201, 204, 206)):
+                # 失败响应往往是一段 JSON / HTML 错误说明：把它当一条系统日志
+                # 吐出来，用户才知道到底是 401 还是路径写错，而不是一句「失败」。
+                body = raw[:8192].decode("utf-8", "replace").strip()
+                msg = f"HTTP {status}"
+                if body:
+                    msg += " · " + re.sub(r"\s+", " ", body)[:600]
+                self._emit(SseFrame(dir="sys", kind="error", data=msg.encode("utf-8"),
+                                    size=len(msg.encode("utf-8"))))
                 self.failed.emit(f"服务端返回 {status}")
-                return
-            if status and status not in (200, 201, 204, 206):
-                self.failed.emit(f"服务端返回 {status}")
+                self._stop_reply()
                 return
             self._opened_at = time.time()
             self._attempt = 0
             self._set_state(STATE_OPEN)
-            self.opened.emit(ctype.split(";")[0])
+            self.opened.emit(self.content_type)
         self._buf += raw.decode("utf-8", "replace")
         self._drain()
 
@@ -318,9 +353,10 @@ class SseClient(QObject):
             return
         if self._auto:
             delay = min(15_000, self._retry_ms * (2 ** min(self._attempt, 4)))
-            self._attempt += 1
             self._set_state(STATE_CONNECTING)
-            self.retrying.emit(self._attempt, delay)
+            # 只在真正开始等待时报一次；_reconnect 里再报一次会让「第 n 次重连」
+            # 一秒钟跳两格，次数永远对不上。
+            self.retrying.emit(self._attempt + 1, delay)
             self._retry_timer.start(delay)
             return
         self._set_state(STATE_IDLE)

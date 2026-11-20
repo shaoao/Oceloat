@@ -1,5 +1,23 @@
 # What's Changed
 
+## v1.0.77 — 2026-11-20
+
+**Changed**
+- The window corners are actually round now. The mask is built by drawing the rounded rect at 8× with antialiasing, scaling it back down and taking the alpha channel as a 1-bit mask. The previous version approximated the arc with a polygon, which is why every corner looked like a small square had been bitten out of it.
+- The request and response panes can sit side by side. A small button in the bottom-right corner flips between stacked and side-by-side; the icon rotates 90° with an easing transition, the split itself slides into place, and the chosen direction is remembered in settings.
+- "Disconnect" is red everywhere once a connection is live — WebSocket, Socket.IO and SSE share the same button, and the mock server's "Stop service" follows the same rule.
+
+**Fixed**
+- Import and export are the original full panel again: drag & drop, per-item selection and page tabs all work as before. The popover from 1.0.76 is gone.
+
+**Added**
+- SSE has a page of its own instead of looking like WebSocket with the composer removed. A handshake strip shows the HTTP status code, `Content-Type` and the event rate; event names that actually arrive become filter chips; heartbeats get their own chip and stay out of the main list by default.
+- SSE can be paused. High-frequency streams freeze the list while events keep buffering, the buffered count is shown in the stats line, and resuming releases them in one go.
+- SSE failures explain themselves. A 401 or 500 now records the status code and writes the server's error body into the log, so "missing token" and "wrong path" look different.
+
+**Verified**
+- Smoke suite: 821 checks (new: handshake status, error body capture, dynamic event chips, pause buffering, red disconnect, layout toggle and icon rotation, bitmap corner mask). Brand suite: 268 checks. Bundled self-test: 8/8.
+
 ## v1.0.76 — 2026-11-20
 
 **Added**

@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.76", VERSION == "1.0.76", VERSION)
-check("更新内容是 1.0.76", CHANGELOG[0]["version"] == "1.0.76")
+check("版本 1.0.77", VERSION == "1.0.77", VERSION)
+check("更新内容是 1.0.77", CHANGELOG[0]["version"] == "1.0.77")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -399,10 +399,10 @@ check("更新内容写了 README 装修", any("README 重新排版" in x for x i
 print("\n[1.0.69 新增]")
 check("卡片铺满窗口，不留投影留白", "卡片铺满整个窗口" in _mw_src
       and "CARD_RADIUS = 12" in _mw_src)
-check("圆角改由窗口遮罩裁", "self.setMask(_rounded_region" in _mw_src
+check("圆角改由窗口遮罩裁", "self.setMask(_rounded_mask" in _mw_src
       and "self.root.clearMask()" in _mw_src)
-check("圆角按解析圆生成遮罩", "QRegion.RegionType.Ellipse" in _mw_src
-      and "toFillPolygon" not in _mw_src)
+check("圆角掩码走抗锯齿超采样", "_rounded_mask" in _mw_src
+      and "SmoothTransformation" in _mw_src and "toFillPolygon" not in _mw_src)
 check("最大化时清掉窗口遮罩", "if not self.mask().isEmpty():" in _mw_src
       and "self.clearMask()" in _mw_src)
 check("窗口边缘有 1px 细描边", "p.setPen(QPen(C(t.border), 1))" in _mw_src)
@@ -613,9 +613,11 @@ check("循环展开有上限", "MAX_REPEAT" in _ms4 and "MAX_PAGE_SIZE" in _ms4)
 check("AI 会写循环模板", "{{for size}}" in _ma4 and "BODY_PRESETS" in _ma4)
 check("AI 响应体对话框", "class BodyAiDialog" in _mp4 and "_ai_body" in _mp4)
 check("路由编辑器有例子菜单", "def _examples" in _mp4 and "BODY_SNIPPETS" in _mp4)
-check("导入导出是小弹层", "def open_transfer" in _mw4 and "_import_file" in _mw4
-      and "sidebar.transferRequested" in _mw4 and "TransferDialog(self.store, self)" in _mw4)
-check("圆角遮罩用解析圆", "_rounded_region" in _mw4 and "RegionType.Ellipse" in _mw4)
+check("导入导出恢复成完整面板", "def open_transfer" in _mw4
+      and "sidebar.transferRequested" in _mw4 and "TransferDialog(self.store, self)" in _mw4
+      and "_import_clipboard" not in _mw4)
+check("圆角遮罩用抗锯齿位图", "_rounded_mask" in _mw4 and "createAlphaMask" in _mw4
+      and "invertPixels" in _mw4)
 check("标题栏左右留白一致", "lay.setContentsMargins(16, 0, 16, 0)" in _mw4)
 check("改名统一为 Mock 服务", "Mock 数据…" not in (ROOT / "app" / "request_panel.py").read_text(
       encoding="utf-8") and '"Mock 服务…"' in _mw4)
@@ -624,6 +626,43 @@ check("更新内容写了 SSE", any("SSE 请求" in x for x in ALL_ITEMS))
 check("更新内容写了 Mock 循环", any("{{for size}}" in x for x in ALL_ITEMS))
 check("更新内容写了导入导出小弹层", any("小弹层" in x for x in ALL_ITEMS))
 check("更新内容写了圆角修复", any("圆角" in x for x in ALL_ITEMS))
+
+
+# ---------------------------------------------------------------- 1.0.77 新增
+print("\n[1.0.77 新增]")
+_mw5 = (ROOT / "app" / "main_window.py").read_text(encoding="utf-8")
+_sp5 = (ROOT / "app" / "sse_panel.py").read_text(encoding="utf-8")
+_sc5 = (ROOT / "app" / "sse_client.py").read_text(encoding="utf-8")
+_rp5 = (ROOT / "app" / "request_panel.py").read_text(encoding="utf-8")
+_rd5 = (ROOT / "README.md").read_text(encoding="utf-8")
+
+check("圆角掩码是抗锯齿超采样", "img.scaled(w, h" in _mw5
+      and "SmoothTransformation" in _mw5 and "createAlphaMask" in _mw5)
+check("掩码反转过（1 才是可见）", "mono.invertPixels()" in _mw5)
+check("不再用 QRegion 拼圆角", "RegionType.Ellipse" not in _mw5)
+check("导入导出恢复完整面板", "TransferDialog(self.store, self)" in _mw5
+      and "_import_clipboard" not in _mw5 and "_export_bundle" not in _mw5)
+check("分栏可切左右", "def toggle_layout" in _mw5 and "setOrientation(Qt.Orientation.Vertical if horiz" in _mw5)
+check("分栏方向记进设置", '"split_layout"' in _mw5)
+check("分栏切换有动画", "animate(self, 0.18, ratio, 280" in _mw5)
+check("分栏按钮图标会转", "rotate_icon(0.0 if horiz else 90.0, 260)" in _mw5)
+check("分栏按钮不挂在 splitter 上", "parent=self.workspace" in _mw5)
+check("断开按钮变红", 'self.send_btn.set_kind("danger")' in _rp5)
+check("Mock 停止服务也变红", "danger" in (ROOT / "app" / "mock_panel.py").read_text(
+      encoding="utf-8"))
+check("SSE 记下状态码与响应头", "self.status = int(status or 0)" in _sc5
+      and "rawHeaderPairs" in _sc5)
+check("SSE 失败写错误正文", 'kind="error"' in _sc5 and 'f"HTTP {status}"' in _sc5)
+check("SSE 顶部握手条", "def set_stream" in _sp5 and "text/event-stream" in _sp5)
+check("SSE 事件名动态筛选", "def _rebuild_chips" in _sp5 and "MAX_CHIPS" in _sp5)
+check("SSE 可暂停缓冲", "def toggle_pause" in _sp5 and "_pending" in _sp5)
+check("SSE 心跳默认不混进列表", 'if frame.kind == "ping":' in _sp5)
+check("SSE 重连显示次数", "def set_retry" in _sp5)
+check("README 写了分栏与 SSE 差异", "左右并排" in _rd5 and "握手结果" in _rd5)
+check("更新内容写了圆角修复", any("圆角" in x for x in ALL_ITEMS))
+check("更新内容写了分栏切换", any("分栏" in x for x in ALL_ITEMS))
+check("更新内容写了 SSE 暂停", any("暂停" in x for x in ALL_ITEMS))
+check("更新内容写了断开变红", any("断开" in x and "红" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

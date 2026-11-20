@@ -1940,7 +1940,8 @@ class MockDialog(GlassDialog):
         self.status_pill.set_color(t.success if running else t.text_faint)
         self.start_btn.setText(i18n.tr("停止服务") if running else i18n.tr("启动服务"))
         self.start_btn.set_icon("stop" if running else "play")
-        self.start_btn.set_kind("subtle" if running else "primary")
+        # 服务在跑时的「停止服务」也是断开语义，跟着变红
+        self.start_btn.set_kind("danger" if running else "primary")
         self.qr_btn.setEnabled(running)
         shown = srv.base if running else f"http://127.0.0.1:{inst.get('port') or DEFAULT_PORT}"
         nets = srv.lan_urls() if running else []

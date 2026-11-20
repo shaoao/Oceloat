@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import datetime
 import json
-from typing import Any, Dict, List
+import time
+from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -26,10 +27,12 @@ from .theme import mono, theme
 from .widgets import (
     Button,
     Divider,
+    ElideLabel,
     HBox,
     Label,
     SegmentedTabs,
     Switch,
+    icon_button,
 )
 from .ws_panel import WsLogView
 
@@ -231,34 +234,262 @@ class SseComposer(QWidget):
         self.changed.emit()
 
 
-class SseLogView(WsLogView):
-    """SSE 的事件日志：复用帧列表，筛选项换成「事件 / 心跳」。"""
+class _StatusDot(QWidget):
+    """连接状态点：一圈淡色底 + 中间一个实心点，颜色跟着状态走。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.filter.set_items([("all", "全部"), ("event", "事件"), ("ping", "心跳")],
-                              current="all")
-        self.empty_label.setText(i18n.tr("还没有事件。连接后服务器推送的事件会实时出现在这里。"))
+        self._token = "text_faint"
+        self.setFixedSize(12, 12)
+
+    def set_token(self, token: str) -> None:
+        if token != self._token:
+            self._token = token
+            self.update()
+
+    def paintEvent(self, _e):  # noqa: N802
+        from PyQt6.QtCore import QRectF as _QRectF
+        from PyQt6.QtGui import QColor as _QColor
+        from PyQt6.QtGui import QPainter as _QPainter
+        from PyQt6.QtGui import QPen as _QPen
+
+        t = theme()
+        col = _QColor(getattr(t, self._token, t.text_faint))
+        p = _QPainter(self)
+        p.setRenderHint(_QPainter.RenderHint.Antialiasing, True)
+        halo = _QColor(col)
+        halo.setAlpha(45)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(halo)
+        p.drawEllipse(_QRectF(0, 0, 12, 12))
+        p.setBrush(col)
+        p.drawEllipse(_QRectF(3.5, 3.5, 5, 5))
+        p.setPen(_QPen(col, 1))
+        p.end()
+
+
+class SseLogView(WsLogView):
+    """SSE 的事件日志。
+
+    和 WebSocket 页刻意不一样的地方（这些都是 SSE 独有、也最容易踩的坑）：
+      · 顶部一条「握手结果」：HTTP 状态码 + Content-Type + 事件速率。
+        SSE 就是一条 http 长连接，401 / 404 / 被代理缓冲时一条事件都不来，
+        没有这行字就只能看到一个空列表干瞪眼。
+      · 事件名是服务端的「频道」（message / update / price…），筛选按钮按
+        实际收到过的名字动态生成，而不是写死「接收 / 发出」。
+      · 暂停：行情类接口每秒几十条，先冻住列表再看，缓冲的条数写在按钮旁边。
+    """
+
+    MAX_CHIPS = 4           # 「全部」之外最多列 4 个事件名，再多就挤了
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._kinds: Dict[str, int] = {}
+        self._paused = False
+        self._pending: List[Any] = []
+        self._status = 0
+        self._ctype = ""
+        self._headers: Dict[str, str] = {}
+        self._retry: tuple = (0, 0)
+        self._stamps: List[float] = []
+
+        self.filter.set_items([("all", "全部"), ("__ping", "心跳")], current="all")
         self.search.setFixedWidth(150)
         i18n.placeholder(self.search, "过滤事件内容")
         self.list.setToolTip(i18n.tr("单击展开这条事件（可同时展开多条）"))
 
+        self.dot = _StatusDot()
+        # 状态行里的协议 / 地址可能很长：用会自己省略的标签，窄了打「…」，
+        # 不会把右边的速率和暂停按钮挤出屏幕。
+        self.status_label = ElideLabel(i18n.tr("未连接"), 10.8, theme().text_dim,
+                                       mono_font=True, mode=Qt.TextElideMode.ElideRight)
+        self.rate_label = Label("", 10.2, theme().text_faint, mono_font=True)
+        self.pause_btn = icon_button("pause", "", 22, 12)
+        self.pause_btn.setToolTip(i18n.tr("暂停：先冻住列表，慢慢看已经收到的事件"))
+        self.pause_btn.clicked.connect(self.toggle_pause)
+
+        strip = QWidget()
+        sl = QHBoxLayout(strip)
+        sl.setContentsMargins(12, 4, 10, 2)
+        sl.setSpacing(8)
+        sl.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        sl.addWidget(self.status_label, 1)
+        sl.addWidget(self.rate_label)
+        sl.addWidget(self.pause_btn)
+        lay = self.layout()
+        lay.insertWidget(0, strip)
+        lay.insertWidget(1, Divider())
+
+    # -------------------------------------------------- 握手信息
+    def set_stream(self, status: int = 0, ctype: str = "", headers: Optional[Dict[str, str]] = None) -> None:
+        self._status = int(status or 0)
+        self._ctype = ctype or ""
+        if headers is not None:
+            self._headers = dict(headers)
+        tips = [f"HTTP {self._status}"] if self._status else []
+        if self._ctype:
+            tips.append(f"Content-Type: {self._ctype}")
+        for key, value in list(self._headers.items())[:40]:
+            tips.append(f"{key}: {value}")
+        self.status_label.setToolTip(
+            "\n".join(tips) or i18n.tr("服务端返回的 Content-Type"))
+        self._render_status()
+
+    def set_retry(self, attempt: int, delay_ms: int) -> None:
+        self._retry = (int(attempt), int(delay_ms))
+        self._render_status()
+
+    def set_state(self, state: str) -> None:
+        self._state = state
+        self._render_status()
+        self._update_stats()
+
+    def _render_status(self) -> None:
+        state = getattr(self, "_state", "idle")
+        if state == "open":
+            self.dot.set_token("success")
+            # 「已连接」上面那颗胶囊已经写过了，这里只留握手结果，别重复
+            code = f"{self._status} · " if self._status else ""
+            self.status_label.setText(f"{code}{self._ctype or 'text/event-stream'}")
+            self.status_label._token = "success"
+        elif state in ("connecting", "closing"):
+            self.dot.set_token("warning")
+            attempt, delay = self._retry
+            if attempt:
+                self.status_label.setText(i18n.trf("第 {n} 次重连 · {s}s 后重试",
+                                                   n=attempt, s=round(delay / 1000, 1)))
+            else:
+                self.status_label.setText(i18n.tr("连接中…"))
+            self.status_label._token = "warning"
+        else:
+            self.dot.set_token("text_faint")
+            if self._status >= 400:
+                self.status_label.setText(i18n.trf("连接失败 · HTTP {code}", code=self._status))
+                self.status_label._token = "danger"
+                self.dot.set_token("danger")
+            else:
+                self.status_label.setText(i18n.tr("未连接"))
+                self.status_label._token = "text_faint"
+        self.status_label.refresh_theme()
+
+    # -------------------------------------------------- 暂停
+    def toggle_pause(self) -> None:
+        self._paused = not self._paused
+        self.pause_btn.set_icon("play" if self._paused else "pause")
+        self.pause_btn.setToolTip(
+            i18n.tr("继续：把暂停期间收到的事件一次性放出来") if self._paused
+            else i18n.tr("暂停：先冻住列表，慢慢看已经收到的事件"))
+        if self._paused:
+            self._update_stats()
+            return
+        pending, self._pending = self._pending, []
+        for frame in pending:
+            super().add_frame(frame)
+        self._pending = []
+        self._rebuild()
+
+    def add_frame(self, frame) -> None:
+        now = time.time()
+        self._stamps.append(now)
+        if len(self._stamps) > 1 and self._stamps[-1] - self._stamps[0] > 60:
+            self._stamps = [s for s in self._stamps if now - s <= 60]
+        if frame.dir == "in" and frame.kind not in ("ping", "open", "close", "error"):
+            if frame.kind not in self._kinds:
+                self._kinds[frame.kind] = 0
+                self._rebuild_chips()
+            self._kinds[frame.kind] += 1
+        if self._paused:
+            self._pending.append(frame)
+            if len(self._pending) > 4000:          # 缓冲别无限涨
+                self._pending = self._pending[-4000:]
+            self._update_stats()
+            return
+        super().add_frame(frame)
+        self._update_rate()
+
+    def set_frames(self, frames) -> None:
+        self._pending = []
+        self._kinds = {}
+        self._stamps = []
+        super().set_frames(frames)
+        for frame in self._frames:
+            if frame.dir == "in" and frame.kind not in ("ping", "open", "close", "error"):
+                self._kinds[frame.kind] = self._kinds.get(frame.kind, 0) + 1
+        self._rebuild_chips()
+        self._update_rate()
+
+    def clear(self) -> None:
+        self._pending = []
+        self._kinds = {}
+        self._stamps = []
+        super().clear()
+        self._rebuild_chips()
+        self._update_rate()
+
+    # -------------------------------------------------- 事件名筛选
+    def _rebuild_chips(self) -> None:
+        items = [("all", "全部")]
+        for name, _n in sorted(self._kinds.items(), key=lambda kv: (-kv[1], kv[0]))[:self.MAX_CHIPS]:
+            items.append((name, name if len(name) <= 7 else name[:6] + "…"))
+        items.append(("__ping", "心跳"))
+        keys = [k for k, _l in items]
+        current = self._filter if self._filter in keys else "all"
+        if keys == [i.get("key") for i in getattr(self.filter, "_items", [])]:  # 没变就不重建
+            return
+        self.filter.set_items(items, current=current)
+        self._filter = current
+
     def _match(self, frame) -> bool:      # noqa: D401 — 覆盖父类的方向筛选
-        if self._filter == "event" and frame.dir != "in":
+        if self._filter == "__ping":
+            return frame.kind == "ping"
+        if frame.kind == "ping":
+            # 心跳默认不进列表：15 秒一条，混在事件里会把真正的内容顶走
             return False
-        if self._filter == "ping" and frame.kind != "ping":
+        if self._filter != "all" and frame.kind != self._filter:
             return False
-        if self._filter == "all" and frame.kind == "ping":
-            return True
         if self._query:
             return self._query in frame.preview(4000).lower()
         return True
 
+    def _on_filter(self, key: str) -> None:
+        self._filter = key
+        self._rebuild()
+
+    def _update_empty(self, has_rows: bool) -> None:
+        self.body.setCurrentIndex(1 if has_rows else 0)
+        if has_rows:
+            return
+        if self._frames:
+            self.empty_label.setText(i18n.tr("没有符合条件的事件。换个筛选或清空搜索试试。"))
+        else:
+            self.empty_label.setText(
+                i18n.tr("还没有事件。连上之后服务器推送的每一条都会出现在这里。"))
+
+    # -------------------------------------------------- 统计
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        w = self.width()
+        # 窄了就先让统计和搜索退场，保住「筛选 + 三个图标」，绝不叠字
+        self.stats.setVisible(w >= 640)
+        self.search.setVisible(w >= 560)
+        self.rate_label.setVisible(w >= 420)
+
+    def _update_rate(self) -> None:
+        n = len(self._stamps)
+        self.rate_label.setText(
+            i18n.trf("{n} 条/分", n=n) if n else "")
+        self._update_stats()
+
     def _update_stats(self) -> None:
         from .code_editor import human_size
 
-        self.stats.setText(i18n.trf("{n} 条事件 · {size}", n=self._n_in,
-                                    size=human_size(self._size_in)))
+        buffered = len(self._pending)
+        text = i18n.trf("{n} 条事件 · {size}", n=self._n_in, size=human_size(self._size_in))
+        if self._kinds:
+            text += i18n.trf(" · {k} 种事件", k=len(self._kinds))
+        if buffered:
+            text += i18n.trf(" · 暂停中，缓冲 {b} 条", b=buffered)
+        self.stats.setText(text)
 
     def _export(self) -> None:
         if not self._frames:

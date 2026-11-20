@@ -539,6 +539,25 @@ class Button(QWidget):
             lambda v: (setattr(self, "_icon_rotation", float(v)), self.update()),
             QEasingCurve.Type.InOutCubic, on_done=_done)
 
+    def set_icon_rotation(self, deg: float) -> None:
+        """直接摆到位（不做动画）：启动恢复分栏方向时用。"""
+        _anim_stop(self._spin_anim)
+        self._icon_rotation = float(deg)
+        self.update()
+
+    def rotate_icon(self, to_deg: float, duration: int = 240) -> None:
+        """图标从当前角度转到 to_deg：用于「分栏方向」这类状态型图标。"""
+        _anim_stop(self._spin_anim)
+        start = float(getattr(self, "_icon_rotation", 0.0))
+        if abs(start - to_deg) < 0.5:
+            self._icon_rotation = to_deg
+            self.update()
+            return
+        self._spin_anim = animate(
+            self, start, float(to_deg), duration,
+            lambda v: (setattr(self, "_icon_rotation", float(v)), self.update()),
+            QEasingCurve.Type.OutCubic)
+
     def setEnabled(self, enabled: bool) -> None:  # noqa: N802
         self._enabled = enabled
         super().setEnabled(enabled)

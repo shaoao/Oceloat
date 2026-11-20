@@ -17,7 +17,7 @@ python3 main.py
 
 Python 3.10+，PyQt6 6.5+。macOS 上也可以双击 `启动 Ocelot.command`。第一次打开自带几条示例请求，点一下就能发。
 
-不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.76.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
+不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.77.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
 
 ## 发请求
 
@@ -29,7 +29,9 @@ GET / POST / PUT / PATCH / DELETE / HEAD / OPTIONS 都有。参数、请求头�
 
 WebSocket 和 Socket.IO 是独立的请求类型，有整页界面：文本 / JSON / 二进制收发、子协议、心跳与往返延迟、断线重连、帧日志。
 
-SSE（Server-Sent Events）也在里面：填一个 http(s) 地址连上，服务器推来的事件按行实时进日志，支持自动重连、`Last-Event-ID` 续传、按事件名 / 心跳筛选，日志能导出。它和 WebSocket 页同一套排版，只收不发。
+SSE（Server-Sent Events）也在里面：填一个 http(s) 地址连上，服务器推来的事件按行实时进日志，支持自动重连、`Last-Event-ID` 续传、按事件名 / 心跳筛选，日志能导出。SSE 页有自己的样子：顶部一条握手结果（HTTP 状态码 + Content-Type + 事件速率），事件名按实际收到的动态变成筛选按钮，事件太密可以先暂停、继续时一次性放出来；连不上时会把服务端返回的错误正文写进日志，而不是只说一句「失败」。
+
+请求区和响应区可以上下排，也可以左右并排：内容区右下角一颗小按钮切换，图标转 90°，分栏滑过去，方向记在设置里。
 
 前后置脚本是 JavaScript，能改请求、读响应、写环境变量、写断言，输出进响应面板的控制台。
 
@@ -136,7 +138,7 @@ corrupted/              读不出来的文件会被挪到这里，留着当证�
 代码在 `app/` 下，一个功能一个文件，界面全部用 QPainter 画，不引图片资源。
 
 ```bash
-python3 tools/smoke.py        # 802 项自测，会真起 HTTP / WebSocket 服务
+python3 tools/smoke.py        # 821 项自测，会真起 HTTP / WebSocket 服务
 python3 tools/check_brand.py  # 标识、版本与打包配方检查
 python3 tools/readme_shots.py # 重新生成上文截图
 python3 tools/build_app.py    # 打包成 Ocelot.app + dmg（约 62MB / 27MB）

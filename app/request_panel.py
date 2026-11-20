@@ -520,9 +520,10 @@ class UrlBar(QWidget):
         self._ws_state = state
         self.send_btn.set_busy(False)
         if state == "open":
+            # 断开 = 危险操作：红字 + 一层薄红底，和「发送 / 连接」一眼分开
             self.send_btn.setText("断开")
             self.send_btn.set_icon("stop")
-            self.send_btn.set_kind("subtle")
+            self.send_btn.set_kind("danger")
             self.send_btn.setToolTip("断开连接  ⌘↵")
         elif state in ("connecting", "closing"):
             self.send_btn.setText("取消")
