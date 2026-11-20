@@ -11,30 +11,9 @@ from dataclasses import dataclass, asdict
 from string import Template
 from typing import Union
 
-from PyQt6.QtGui import QColor, QFont, QFontDatabase, QPalette, QPainter
-from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QPalette
 
 Color = Union[str, tuple]
-
-
-def paint_kind_dot(p: QPainter, x: float, y: float, color: Color,
-                   radius: float = 3.2, halo: bool = True) -> None:
-    """画一颗「类型灯」：外圈半透明底 + 中心实心点，颜色跟请求方法 / 协议走。
-
-    请求项、历史行、标签页共用这一颗，HTTP 显示方法色、WS / SIO / SSE 显示
-    各自的协议色。纯 QPainter 绘制，不开图片、不占缓冲，重绘代价可以忽略。
-    """
-    c = C(color)
-    if halo:
-        bg = QColor(c)
-        bg.setAlpha(46)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(bg)
-        p.drawEllipse(QRectF(x - radius * 1.9, y - radius * 1.9,
-                             radius * 3.8, radius * 3.8))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(c)
-    p.drawEllipse(QRectF(x - radius, y - radius, radius * 2, radius * 2))
 
 
 def C(c: Color) -> QColor:

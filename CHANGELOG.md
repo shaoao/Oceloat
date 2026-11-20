@@ -1,5 +1,14 @@
 # What's Changed
 
+## v1.0.82 — 2026-11-21
+
+**Fixed**
+- Filled in English translations that were still showing Chinese in English mode: the "Don't remind again" button, the Options tab, the Mock Server page and its AI dialogs, New Group, cloud-sync snapshots and more. Also fixed the pre/post-request script docs and auth-field placeholders that were never translated.
+- The Collections shortcut strip in the resource manager now lists only collection folders. Requests saved at the top level (SSE / WebSocket / Socket.IO Request) no longer appear there.
+
+**Changed**
+- Removed the leftover `paint_kind_dot` helper and a couple of duplicate translation entries.
+
 ## v1.0.81 — 2026-11-21
 
 **Changed**

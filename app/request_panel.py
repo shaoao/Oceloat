@@ -951,7 +951,7 @@ class AuthPage(QWidget):
     def _field(self, placeholder: str, ph: str = "", password: bool = False) -> QLineEdit:
         e = QLineEdit()
         e.setObjectName("Field")
-        e.setPlaceholderText(ph or placeholder)
+        i18n.placeholder(e, ph or placeholder)
         e.setFont(mono(11.8))
         e.setFixedHeight(30)
         e.setMinimumWidth(260)

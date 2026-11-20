@@ -1996,6 +1996,11 @@ class MockDialog(GlassDialog):
                          port=port))
 
     # -------------------------------------------------- 树
+    def refresh_i18n(self) -> None:
+        """语言切换后重建路由树：分组标题是自绘文本，得重新走一遍 tr。"""
+        if hasattr(self, "routes_box"):
+            self._rebuild_tree()
+
     def _rebuild_tree(self) -> None:
         while self.routes_box.count() > 1:
             item = self.routes_box.takeAt(0)
@@ -2031,8 +2036,8 @@ class MockDialog(GlassDialog):
         def render(prefix: str, depth: int) -> None:
             for child in children.get(prefix, []):
                 collapsed = child in self._collapsed
-                row = GroupRow(child, child.split("/")[-1], count_under(child), depth,
-                               collapsed)
+                row = GroupRow(child, i18n.tr(child.split("/")[-1]), count_under(child),
+                               depth, collapsed)
                 row.toggled.connect(self._toggle_group)
                 row.menuRequested.connect(self._group_menu)
                 self.routes_box.insertWidget(self.routes_box.count() - 1, row)

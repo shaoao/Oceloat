@@ -1017,15 +1017,20 @@ _EN.update({
     "不联网，只在临时请求上执行当前脚本，查看日志与错误。":
         "Run the current script locally without sending a request, then show logs and errors.",
     "前置脚本在请求发送前用 JavaScript 运行。\n"
-    "可修改 req.url、req.headers 和 req.params，或用 pw.env.set() 把值存入当前环境。":
+    "可修改 req.url、req.headers 和 req.params，或用 pw.env.set() 把值存入当前环境。\n"
+    "console.log() 的输出会出现在响应面板的「控制台」页。":
         "Pre-request scripts run in JavaScript before the request is sent.\n"
         "Modify req.url, req.headers and req.params, or store values in the "
-        "active environment with pw.env.set().",
+        "active environment with pw.env.set().\n"
+        "console.log() output appears on the Console tab of the response panel.",
     "后置脚本在收到响应后用 JavaScript 运行。\n"
-    "可读取 res.status / res.body，解析结果，并用 pw.env.set() 把值存回当前环境。":
+    "可读取 res.status / res.json()，用 test() 写断言，或用 pw.env.set() 把值存回当前环境。\n"
+    "console.log() 与断言结果都会出现在响应面板的「控制台」页。":
         "Post-response scripts run in JavaScript after the response arrives.\n"
-        "Read res.status / res.body, parse JSON and save values back to the "
-        "active environment with pw.env.set().",
+        "Read res.status / res.json(), write assertions with test(), or store "
+        "values back to the active environment with pw.env.set().\n"
+        "console.log() and assertion results appear on the Console tab of the "
+        "response panel.",
     "✓ 运行成功 · 查看下方日志": "✓ Ran OK · see logs below",
     "Header 含状态行 · Body 为正文": "Header includes the status line · Body is the raw payload",
     "今天": "Today", "昨天": "Yesterday", "{n} 天前": "{n} days ago",
@@ -2078,4 +2083,84 @@ _EN.update({
     "单击展开这条事件（可同时展开多条）":
         "Click to expand this event (multiple can stay open)",
     "服务端返回的 Content-Type": "Content-Type returned by the server",
+})
+
+# v1.0.82：截图里仍显示中文的遗漏文案（英文模式下补齐）
+_EN.update({
+    # 响应面板 · 请求已修改提醒条
+    "不再提醒": "Don't remind again",
+    "以后不再显示这条提醒，仍可在设置里打开":
+        "Hide this reminder for now; you can turn it back on in Settings",
+    # 实时协议页签
+    "选项": "Options",
+    # Mock Server 主界面
+    "局域网": "LAN",
+    "无匹配时回显": "Echo when unmatched",
+    "新建分组": "New group",
+    "导入 OpenAPI / Postman": "Import OpenAPI / Postman",
+    "一键 Mock": "One-click Mock",
+    # 首次示例路由 / 分组名（末段走 tr，整体用于 tooltip）
+    "示例": "Examples",
+    "用户": "Users",
+    "调试": "Debug",
+    "示例/用户": "Examples/Users",
+    "示例/调试": "Examples/Debug",
+    "鉴权规则": "Auth rule",
+    "用户信息（动态）": "User profile (dynamic)",
+    "慢接口 2s": "Slow endpoint 2s",
+    "服务异常": "Server error",
+    # AI 生成弹窗通用按钮 / 占位 / 提示
+    "插入": "Insert",
+    "生成": "Generate",
+    "例如：分页的商品列表，带价格、状态和创建时间":
+        "e.g. a paginated product list with price, status and created time",
+    "还没有请求。启动本地服务后，任何打到它的请求都会出现在这里 —— "
+    "包括方法、路径、状态码、耗时、体积与来源 IP。":
+        "No requests yet. Once the local server is running, every request it "
+        "receives shows up here — method, path, status, duration, size and source IP.",
+    "分组名（用 / 分层）": "Group name (use / for nesting)",
+    "例如：订单/支付，导入时也会自动按文件夹分组":
+        "e.g. Orders/Payments — imports also group by folder",
+    # AI 生成 Mock 弹窗
+    "AI 生成 Mock": "AI Generate Mock",
+    "生成接口": "Generate routes",
+    "生成用例": "Generate cases",
+    "例如：一个博客系统，有文章列表、详情、发布、删除":
+        "e.g. a blog system with article list, detail, publish and delete",
+    "补充要求（可留空），例如：多加几个鉴权失败的用例":
+        "Extra requirements (optional), e.g. add a few auth-failure cases",
+    "AI 会直接生成可用的路由与响应体，插到当前实例里；"
+    "Key 在「设置 → AI」里配置。":
+        "AI generates ready-to-use routes and bodies and inserts them into this "
+        "instance; set the key in Settings → AI.",
+    "生成的路由会显示在这里；点右下角「生成」开始。":
+        "Generated routes appear here — press Generate below to start.",
+    # 云同步快照
+    "本机快照": "Local snapshot",
+    "即将上传的内容，实时统计，不是估算。":
+        "What will be uploaded — counted live, not estimated.",
+    "云端快照": "Cloud snapshot",
+    "云端那一份的实际内容；读取失败或还没上传过时显示为空。":
+        "The actual cloud copy; empty if the read failed or nothing was uploaded yet.",
+    "云端：还没读取（点「测试连接」拉一次统计）":
+        "Cloud: not fetched yet (click Test Connection to load stats)",
+    # 认证输入框占位符（_field 改为走 i18n.placeholder）
+    "粘贴 Bearer Token，例如 eyJhbGciOi…": "Paste a Bearer token, e.g. eyJhbGciOi…",
+    "粘贴现成的 JWT": "Paste an existing JWT",
+    "密钥值": "Secret value",
+    # MockDialog 文案迭代后未同步的词条
+    "{n} 条路由 · {g} 个分组": "{n} routes · {g} groups",
+    "{name} · {n} 条路由 · 右键可重命名":
+        "{name} · {n} routes · right-click to rename",
+    "启动后：请求发到 http://127.0.0.1:<端口>/<路径>；打开「局域网」还能让手机直接连。":
+        "Once running, point requests at http://127.0.0.1:<port>/<path>; turn on LAN "
+        "to let your phone connect too.",
+    "还没有路由。点「新建路由」写个 /api/hello，或者直接导入现成的 OpenAPI / Postman 文件。":
+        "No routes yet. Click New Route to write a /api/hello, or import an existing "
+        "OpenAPI / Postman file.",
+    "路径末尾写 * 做前缀匹配（/api/users/*）；没匹配上的请求返回 404，"
+    "并列出当前全部可用路由。响应体支持 {{@name}} 动态占位符与条件规则。":
+        "End a path with * for prefix matching (/api/users/*). Unmatched requests get "
+        "a 404 listing all available routes. Bodies support {{@name}} placeholders "
+        "and conditional rules.",
 })

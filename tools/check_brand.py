@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.81", VERSION == "1.0.81", VERSION)
-check("更新内容是 1.0.81", CHANGELOG[0]["version"] == "1.0.81")
+check("版本 1.0.82", VERSION == "1.0.82", VERSION)
+check("更新内容是 1.0.82", CHANGELOG[0]["version"] == "1.0.82")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -733,6 +733,27 @@ check("节点代理只服务 HTTP", "node_proxy" in (ROOT / "app" / "http_client
 check("更新内容写了这三项", any("播放 / 暂停按钮挪到" in x for x in ALL_ITEMS)
       and any("三个页面没消息时" in x for x in ALL_ITEMS)
       and any("实时协议页藏起节点" in x for x in ALL_ITEMS))
+
+print("\n[1.0.82 新增]")
+_i18_82 = (ROOT / "app" / "i18n.py").read_text(encoding="utf-8")
+_rs_82 = (ROOT / "app" / "resmon.py").read_text(encoding="utf-8")
+_th_82 = (ROOT / "app" / "theme.py").read_text(encoding="utf-8")
+_mp_82 = (ROOT / "app" / "mock_panel.py").read_text(encoding="utf-8")
+_rq_82 = (ROOT / "app" / "request_panel.py").read_text(encoding="utf-8")
+check("截图中文补齐词条", all(k in _i18_82 for k in (
+      '"不再提醒"', '"选项": "Options"', '"局域网": "LAN"',
+      '"无匹配时回显"', '"新建分组"', '"插入": "Insert"',
+      '"AI 生成 Mock"', '"本机快照"', '"云端快照"')))
+check("脚本文档词条与源码同步", "console.log() 的输出会出现在响应面板的「控制台」页。" in _i18_82
+      and "console.log() 与断言结果都会出现在响应面板的「控制台」页。" in _i18_82)
+check("认证占位符走可切换翻译", "i18n.placeholder(e, ph or placeholder)" in _rq_82)
+check("集合快捷条只显示文件夹", 'n.get("type") == "folder"' in _rs_82
+      and "folder_ids" in _rs_82)
+check("分组名随语言重建", "def refresh_i18n" in _mp_82
+      and "i18n.tr(child.split(\"/\")[-1])" in _mp_82)
+check("移除冗余类型灯函数", "def paint_kind_dot" not in _th_82)
+check("更新内容写了这轮改动", any("补齐英文模式" in x for x in ALL_ITEMS)
+      and any("集合" in x and "裸请求" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

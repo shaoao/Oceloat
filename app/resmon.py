@@ -1338,9 +1338,27 @@ class ResourceDialog(GlassDialog):
         except Exception:  # noqa: BLE001
             st = {}
         modules = st.get("modules") or []
+        # 这排是「集合」快捷条：只列集合文件夹。存储层把每个顶层节点都写成一个
+        # 模块文件，⌘S 保存到顶层的裸请求（type=request）也混了进来，展示成
+        # 「SSE Request / WebSocket Request」这类胶囊 —— 按节点类型挡掉。
+        # 用 store 里的真实节点判断，不动存储格式，旧索引也照样正确。
+        folder_ids = None       # None = 拿不到类型信息
+        if self.store is not None:
+            try:
+                folder_ids = {str(n.get("id")) for n in self.store.collections
+                              if isinstance(n, dict) and n.get("type") == "folder"
+                              and n.get("id")}
+            except Exception:  # noqa: BLE001
+                folder_ids = None
+        if folder_ids is None:
+            # 确实拿不到 store 类型信息：退回全部显示，不让集合栏凭空空掉
+            shown = modules
+        else:
+            # 有类型信息就严格按集合过滤；全是顶层裸请求时这排本就不该出现
+            shown = [m for m in modules if str(m.get("id")) in folder_ids]
         self.chips.set_items([(m.get("name") or m.get("file") or "?", m.get("file") or "")
-                              for m in modules])
-        self.chips_row.setVisible(bool(modules))
+                              for m in shown])
+        self.chips_row.setVisible(bool(shown))
         disk = data["disk"]
         if disk["total"]:
             free_pct = disk["free"] / disk["total"] * 100

@@ -26,9 +26,20 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.81"
+VERSION = "1.0.82"
 
 CHANGELOG = [
+    {
+        "version": "1.0.82",
+        "date": "2026-11-21",
+        "items": [
+            "补齐英文模式仍显示中文的文案：不再提醒、选项、Mock 页与 AI 弹窗、"
+            "新建分组、云同步快照等；修复前置 / 后置脚本文档与认证输入框占位符漏翻译",
+            "资源管理器的「集合」快捷条只列集合文件夹，不再把保存到顶层的裸请求"
+            "（SSE / WebSocket / Socket.IO Request）混进来",
+            "移除上一轮撤销小点后遗留的 paint_kind_dot 冗余函数；删掉重复词条",
+        ],
+    },
     {
         "version": "1.0.81",
         "date": "2026-11-21",

@@ -1496,7 +1496,7 @@ class Pill(QWidget):
             p.drawEllipse(QRectF(cx - 4.5, cy - 4.5, 9, 9))
             p.setBrush(col)
             p.drawEllipse(QRectF(cx - 2.4, cy - 2.4, 4.8, 4.8))
-            text_rect = r.adjusted(14, 0, 0, 0)
+            text_rect = r.adjusted(8, 0, 0, 0)
         p.setFont(self._font)
         p.setPen(col)
         p.drawText(text_rect, int(Qt.AlignmentFlag.AlignCenter), self._title())
