@@ -262,12 +262,13 @@ class ApiClient(QObject):
 
     def _run_pre_script(self, req: Dict[str, Any], env_vars: Dict[str, str]) -> None:
         scripts = req.get("scripts") or {}
-        source = scripts.get("pre") or ""
+        from .scripts import run_script, script_parts
+
+        source, lang = script_parts(scripts, "pre")
         if not source or self._store is None:
             return
-        from .scripts import run_script
-
-        result = run_script(source, self._store, req, env_vars=env_vars)
+        result = run_script(source, self._store, req, env_vars=env_vars,
+                            language=lang)
         self.scriptLogs = [("[pre] " + line) for line in result.logs]
         self.console.extend(self._entries("pre", result))
         # 脚本可能新增/修改了环境变量：把快照同步给本次请求
@@ -289,15 +290,16 @@ class ApiClient(QObject):
 
     def _run_post_script(self, resp: "Response", env_vars: Dict[str, Any]) -> None:
         scripts = getattr(self, "_active_scripts", None) or {}
-        source = scripts.get("post") or ""
+        from .scripts import run_script, script_parts
+
+        source, lang = script_parts(scripts, "post")
         if not source or self._store is None:
             return
-        from .scripts import run_script
-
         # 后置脚本要能读到真实请求（req.url / req.headers），不能塞空壳
         req = self._active_req or {"method": "GET", "url": "", "headers": [],
                                    "params": [], "body": {"raw": ""}}
-        result = run_script(source, self._store, req, res=resp, env_vars=env_vars)
+        result = run_script(source, self._store, req, res=resp, env_vars=env_vars,
+                            language=lang)
         self.scriptLogs.extend(("[post] " + line) for line in result.logs)
         self.console.extend(self._entries("post", result))
 

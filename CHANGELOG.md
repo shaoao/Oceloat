@@ -1,5 +1,14 @@
 # What's Changed
 
+## v1.0.83 — 2026-11-21
+
+**Added**
+- Pre/post-request scripts now support both JavaScript and Python. Each language keeps its own source; Python gets the same req / res / pw.env / console / test API, plus built-in json, re, math, random and hashlib modules.
+
+**Changed**
+- Python scripts are checked before and while they run: dangerous imports and open/eval calls are rejected, line + time limits stop endless loops, errors point to the exact user line, and import/export preserves the chosen language and Python source.
+- Filled in the remaining untranslated strings in the Mock LAN QR dialog and the AI case-generation dialog.
+
 ## v1.0.82 — 2026-11-21
 
 **Fixed**

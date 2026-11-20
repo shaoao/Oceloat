@@ -26,9 +26,21 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.82"
+VERSION = "1.0.83"
 
 CHANGELOG = [
+    {
+        "version": "1.0.83",
+        "date": "2026-11-21",
+        "items": [
+            "前置 / 后置脚本新增 JavaScript / Python 语言切换，两种语言的代码分别保留；"
+            "Python 侧补齐 req / res / pw.env / console / test 全套 API，"
+            "并内置 json、re、math、random、hashlib 等常用模块",
+            "Python 脚本做了静态白名单与运行时双保险：危险 import / open / eval 直接拦下，"
+            "行数与时间双超时会中止死循环，报错精确到用户代码行；导入导出会保留语言与 Python 源码",
+            "补齐 Mock 局域网二维码弹窗、AI 生成用例提示等英文模式下仍显示中文的文案",
+        ],
+    },
     {
         "version": "1.0.82",
         "date": "2026-11-21",

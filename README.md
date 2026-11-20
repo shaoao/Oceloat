@@ -17,7 +17,7 @@ python3 main.py
 
 Python 3.10+，PyQt6 6.5+。macOS 上也可以双击 `启动 Ocelot.command`。第一次打开自带几条示例请求，点一下就能发。
 
-不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.82.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
+不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.83.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
 
 ## 发请求
 

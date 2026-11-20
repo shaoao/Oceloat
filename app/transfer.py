@@ -178,6 +178,10 @@ def _postman_item(req: Dict[str, Any]) -> Dict[str, Any]:
     if events:
         item["event"] = events
     extra: Dict[str, Any] = {}
+    # Postman 只认 JavaScript 事件；Python 脚本与当前语言放进 x-ocelot，
+    # 导回来还是原来那份，不会被悄悄改成 JS。
+    if any(scripts.get(k) for k in ("pre_python", "post_python", "pre_lang", "post_lang")):
+        extra["scripts"] = dict(scripts)
     if req.get("cookies"):
         extra["cookies"] = req["cookies"]
     if req.get("note"):

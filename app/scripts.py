@@ -14,6 +14,9 @@
 * 失败不影响发请求 —— 语法/运行/超时只记录到结果里，绝不抛出打断流程。
 * 控制台分级 —— console.log / info / warn / error / debug 各自带级别，
   响应面板的「控制台」页按级别配色并显示图标。
+* Python 模式 —— 前置 / 后置脚本可切换成 Python，API 与 JS 对齐（也支持
+  req.set_header / res.status_text 这类 snake_case），import 走白名单，
+  执行用 sys.settrace 做行数 + 时间双保险，死循环不会把界面卡死。
 
 可用 API（脚本里直接写，不需要 import）：
 
@@ -41,6 +44,8 @@ import json
 import time
 import uuid
 from typing import Any, Dict, List, Optional
+
+from . import i18n
 
 # 执行脚本的硬上限：脚本在独立线程里跑，主线程最多等这么久，超时直接判失败。
 MAX_SCRIPT_MS = 2000
@@ -304,6 +309,399 @@ def _apply_response(view: Dict[str, Any], res: Any) -> None:
         pass
 
 
+# ---------------------------------------------------------------- Python 模式
+# 目标不是做一个真沙箱（进程内无法挡住所有恶意代码），而是挡住「手滑」：
+# 白名单 import、禁用 open/eval/exec、行数 + 时间双超时、错误带用户行号。
+# 模块全部按需导入，不拖慢启动。
+
+_SCRIPT_FILENAME = "<ocelot-script>"
+_SAFE_IMPORTS = {
+    "json", "re", "math", "random", "time", "datetime", "base64", "hashlib",
+    "uuid", "collections", "itertools", "functools", "statistics", "decimal",
+    "string", "enum", "dataclasses", "typing", "urllib.parse",
+}
+_BLOCKED_BUILTINS = {
+    "open", "eval", "exec", "compile", "input", "breakpoint", "exit", "quit",
+    "globals", "locals", "vars", "getattr", "setattr", "delattr", "memoryview",
+}
+_BLOCKED_NAMES = {"__builtins__", "__loader__", "__spec__", "__name__", "__file__"}
+
+
+class _ScriptTimeout(BaseException):
+    """用 BaseException，免得用户 `except Exception` 把超时吞掉。"""
+
+
+class _ScriptSafetyError(Exception):
+    """静态检测发现的禁止用法。"""
+
+
+class _PyDict(dict):
+    """既能 req['url'] 也能 req.url 的字典；写属性即写键。"""
+
+    def __getattr__(self, key: str):
+        if key in self:
+            return self[key]
+        raise AttributeError(key)
+
+    def __setattr__(self, key: str, value) -> None:
+        if key.startswith("_"):
+            object.__setattr__(self, key, value)
+        else:
+            self[key] = value
+
+
+def _find_row(rows: List[Dict[str, Any]], name: str) -> int:
+    low = str(name).lower()
+    for i, row in enumerate(rows or []):
+        if str(row.get("name") or "").lower() == low:
+            return i
+    return -1
+
+
+class _ReqView(_PyDict):
+    def set_header(self, name, value) -> None:
+        rows = self.setdefault("headers", [])
+        i = _find_row(rows, name)
+        if i < 0:
+            rows.append({"name": str(name), "value": str(value), "enabled": True})
+        else:
+            rows[i]["value"] = str(value)
+            rows[i]["enabled"] = True
+
+    def get_header(self, name) -> str:
+        rows = self.get("headers") or []
+        i = _find_row(rows, name)
+        return "" if i < 0 else str(rows[i].get("value") or "")
+
+    def remove_header(self, name) -> None:
+        rows = self.get("headers") or []
+        i = _find_row(rows, name)
+        if i >= 0:
+            rows.pop(i)
+
+    def set_param(self, name, value) -> None:
+        rows = self.setdefault("params", [])
+        i = _find_row(rows, name)
+        if i < 0:
+            rows.append({"name": str(name), "value": str(value), "enabled": True})
+        else:
+            rows[i]["value"] = str(value)
+            rows[i]["enabled"] = True
+
+    def get_param(self, name) -> str:
+        rows = self.get("params") or []
+        i = _find_row(rows, name)
+        return "" if i < 0 else str(rows[i].get("value") or "")
+
+    def remove_param(self, name) -> None:
+        rows = self.get("params") or []
+        i = _find_row(rows, name)
+        if i >= 0:
+            rows.pop(i)
+
+    def set_body(self, text) -> None:
+        self["body"] = str(text)
+
+    def json(self):
+        try:
+            return json.loads(self.get("body") or "")
+        except Exception:  # noqa: BLE001
+            return None
+
+    # camelCase 兼容 JS 文档，迁移脚本不用改一行
+    setHeader = set_header
+    getHeader = get_header
+    removeHeader = remove_header
+    setParam = set_param
+    getParam = get_param
+    removeParam = remove_param
+    setBody = set_body
+
+
+class _ResView(_PyDict):
+    _ALIASES = {"status_text": "statusText", "reason": "statusText",
+                "text": "body", "elapsed": "time"}
+
+    def __getattr__(self, key: str):
+        return super().__getattr__(self._ALIASES.get(key, key))
+
+    def __setattr__(self, key: str, value) -> None:
+        super().__setattr__(self._ALIASES.get(key, key), value)
+
+    def json(self):
+        try:
+            return json.loads(self.get("body") or "")
+        except Exception:  # noqa: BLE001
+            return None
+
+    def get_header(self, name) -> str:
+        i = _find_row(self.get("headers") or [], name)
+        return "" if i < 0 else str(self["headers"][i].get("value") or "")
+
+    def set_header(self, name, value) -> None:
+        rows = self.setdefault("headers", [])
+        i = _find_row(rows, name)
+        if i < 0:
+            rows.append({"name": str(name), "value": str(value)})
+        else:
+            rows[i]["value"] = str(value)
+
+    def remove_header(self, name) -> None:
+        rows = self.get("headers") or []
+        i = _find_row(rows, name)
+        if i >= 0:
+            rows.pop(i)
+
+    getHeader = get_header
+    setHeader = set_header
+    removeHeader = remove_header
+
+
+class _PyEnv:
+    def __init__(self, env_map: Dict[str, str], result: ScriptResult):
+        self._env = env_map
+        self._result = result
+
+    def _merged(self) -> Dict[str, str]:
+        out = dict(self._env)
+        out.update(self._result.env_writes)
+        return out
+
+    def get(self, name) -> str:
+        name = str(name)
+        if name in self._result.env_writes:
+            return self._result.env_writes[name]
+        dyn = _dynamic(name)
+        if dyn is not None:
+            return dyn
+        return str(self._env.get(name, ""))
+
+    def set(self, name, value) -> None:
+        name = str(name).strip()
+        if name:
+            self._result.env_writes[name] = str(value)
+
+    def unset(self, name) -> None:
+        name = str(name)
+        self._result.env_writes.pop(name, None)
+        self._result.entries.append({"level": "_unset", "text": name})
+
+    def has(self, name) -> bool:
+        name = str(name)
+        return (name in self._result.env_writes or name in self._env
+                or _dynamic(name) is not None)
+
+    def resolve(self, text) -> str:
+        from .store import resolve_vars
+
+        return resolve_vars(str(text), self._merged())
+
+    def to_object(self) -> Dict[str, str]:
+        return self._merged()
+
+    toObject = to_object
+
+
+class _PyConsole:
+    def __init__(self, result: ScriptResult):
+        self._result = result
+
+    @staticmethod
+    def _line(args) -> str:
+        parts = []
+        for value in args:
+            if isinstance(value, str):
+                parts.append(value)
+            elif value is None or isinstance(value, (int, float, bool)):
+                parts.append(str(value))
+            else:
+                try:
+                    parts.append(json.dumps(value, ensure_ascii=False, default=str))
+                except Exception:  # noqa: BLE001
+                    parts.append(str(value))
+        return " ".join(parts)
+
+    def _emit(self, level: str, args) -> None:
+        self._result.add(level, self._line(args))
+
+    def log(self, *args) -> None:
+        self._emit("log", args)
+
+    def info(self, *args) -> None:
+        self._emit("info", args)
+
+    def warn(self, *args) -> None:
+        self._emit("warn", args)
+
+    def error(self, *args) -> None:
+        self._emit("error", args)
+
+    def debug(self, *args) -> None:
+        self._emit("debug", args)
+
+
+def _assert_true(condition, message="assertion failed") -> None:
+    if not condition:
+        raise AssertionError(str(message))
+
+
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if level or name not in _SAFE_IMPORTS:
+        raise _ScriptSafetyError(i18n.trf("Python 脚本不允许导入 {name}", name=name))
+    return __import__(name, globals, locals, fromlist, level)
+
+
+def _check_python_safety(source: str):
+    import ast
+
+    tree = ast.parse(source, filename=_SCRIPT_FILENAME)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name not in _SAFE_IMPORTS:
+                    raise _ScriptSafetyError(
+                        i18n.trf("Python 脚本不允许导入 {name}", name=alias.name))
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module not in _SAFE_IMPORTS:
+                raise _ScriptSafetyError(
+                    i18n.trf("Python 脚本不允许导入 {name}", name=module))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in _BLOCKED_BUILTINS:
+                raise _ScriptSafetyError(
+                    i18n.trf("Python 脚本不允许调用 {name}()", name=node.func.id))
+        elif isinstance(node, ast.Name) and node.id in _BLOCKED_NAMES:
+            raise _ScriptSafetyError(
+                i18n.trf("Python 脚本不允许访问双下划线属性 {name}", name=node.id))
+        elif isinstance(node, ast.Attribute):
+            attr = node.attr
+            if attr.startswith("__") and attr.endswith("__"):
+                raise _ScriptSafetyError(
+                    i18n.trf("Python 脚本不允许访问双下划线属性 {name}", name=attr))
+    return tree
+
+
+def _safe_builtins(console: _PyConsole) -> Dict[str, Any]:
+    import builtins
+
+    names = (
+        "abs", "all", "any", "bool", "dict", "enumerate", "filter", "float",
+        "frozenset", "int", "isinstance", "issubclass", "iter", "len", "list",
+        "map", "max", "min", "next", "range", "reversed", "round", "set",
+        "slice", "sorted", "str", "sum", "tuple", "zip", "chr", "ord", "bin",
+        "hex", "oct", "divmod", "pow", "Exception", "ValueError", "TypeError",
+        "KeyError", "IndexError", "RuntimeError", "AssertionError",
+        "StopIteration", "ZeroDivisionError",
+    )
+    out = {name: getattr(builtins, name) for name in names if hasattr(builtins, name)}
+    out["print"] = console.log
+    out["assert_true"] = _assert_true
+    out["__import__"] = _safe_import
+    return out
+
+
+def _execute_python(source: str, req: Dict[str, Any], res: Any,
+                    env_map: Dict[str, str], result: ScriptResult,
+                    timeout_ms: int) -> None:
+    import base64
+    import datetime
+    import hashlib
+    import math
+    import random
+    import sys
+    import traceback
+    import uuid
+
+    console = _PyConsole(result)
+    env = _PyEnv(env_map, result)
+
+    def make_test():
+        def test(name, fn) -> None:
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001
+                error = str(exc) or type(exc).__name__
+                result.tests.append({"name": str(name), "ok": False, "error": error})
+                result.add("error", "✗ %s — %s" % (name, error))
+                result.ok = False
+            else:
+                result.tests.append({"name": str(name), "ok": True, "error": ""})
+                result.add("ok", "✓ %s" % name)
+        return test
+
+    req_view = _ReqView(_normalize_request(req))
+    ns: Dict[str, Any] = {
+        "__builtins__": _safe_builtins(console),
+        "req": req_view,
+        "pw": type("PW", (), {"env": env})(),
+        "console": console,
+        "test": make_test(),
+        "json": json, "re": __import__("re"), "math": math, "random": random,
+        "time": time, "datetime": datetime, "base64": base64,
+        "hashlib": hashlib, "uuid": uuid,
+    }
+    if res is not None:
+        ns["res"] = _ResView(_normalize_response(res))
+
+    try:
+        tree = _check_python_safety(source)
+        code = compile(tree, _SCRIPT_FILENAME, "exec")
+    except SyntaxError as exc:
+        msg = i18n.trf("第 {n} 行：{msg}", n=exc.lineno or 0,
+                       msg="%s: %s" % (type(exc).__name__, exc.msg or exc))
+        result.ok = False
+        result.error = msg
+        result.add("error", msg)
+        return
+    except _ScriptSafetyError as exc:
+        result.ok = False
+        result.error = str(exc)
+        result.add("error", result.error)
+        return
+
+    counter = [0]
+    budget = 400_000
+    deadline = time.monotonic() + max(1, int(timeout_ms)) / 1000.0
+
+    def tracer(frame, event, arg):
+        if event == "line":
+            counter[0] += 1
+            if (counter[0] >= budget
+                    or ((counter[0] & 63) == 0 and time.monotonic() > deadline)):
+                raise _ScriptTimeout()
+        return tracer
+
+    previous = sys.gettrace()
+    sys.settrace(tracer)
+    try:
+        exec(code, ns)
+    except _ScriptTimeout:
+        result.ok = False
+        result.timed_out = True
+        result.error = i18n.trf(
+            "脚本执行超过 {ms} 毫秒，已中止（检查是否有死循环）", ms=int(timeout_ms))
+        result.add("error", result.error)
+        return
+    except BaseException as exc:  # noqa: BLE001  脚本出错绝不能打断请求
+        tb = traceback.extract_tb(exc.__traceback__ or ())
+        frame = next((f for f in tb if f.filename == _SCRIPT_FILENAME), None)
+        msg = str(exc) or type(exc).__name__
+        text = "%s: %s" % (type(exc).__name__, msg)
+        result.ok = False
+        result.error = (i18n.trf("第 {n} 行：{msg}", n=frame.lineno, msg=text)
+                        if frame else text)
+        result.add("error", result.error)
+        return
+    finally:
+        sys.settrace(previous)
+
+    changed = {key: value for key, value in req_view.items()}
+    _apply_request(changed, req)
+    if res is not None:
+        changed_res = {key: value for key, value in ns["res"].items()}
+        _apply_response(changed_res, res)
+
+
 _PRELUDE = r"""
 function __oc_str(a) {
   if (typeof a === 'object' && a !== null) {
@@ -419,7 +817,8 @@ def _execute(source: str, req: Dict[str, Any], res: Any, env_map: Dict[str, str]
         if line > offset:
             line -= offset + 1
         msg = str(err.toString())
-        result.error = f"第 {line} 行：{msg}" if line else msg
+        result.error = (i18n.trf("第 {n} 行：{msg}", n=line, msg=msg)
+                        if line else msg)
         result.add("error", result.error)
         return
 
@@ -463,7 +862,8 @@ _TIMEOUT_MARK = "__OC_TIMEOUT__"
 
 def run_script(source: str, store, req: Dict[str, Any],
                res: Any = None, env_vars: Optional[Dict[str, str]] = None,
-               timeout_ms: int = MAX_SCRIPT_MS) -> ScriptResult:
+               timeout_ms: int = MAX_SCRIPT_MS,
+               language: str = "javascript") -> ScriptResult:
     """执行一段脚本。res=None 表示前置；否则为后置。
 
     绝不抛异常：任何失败（语法、运行、超时）都进 result.error，
@@ -484,9 +884,11 @@ def run_script(source: str, store, req: Dict[str, Any],
     except Exception:  # noqa: BLE001
         pass
 
-    code = src
     try:
-        _execute(_instrument(code, timeout_ms), req, res, env_map, result)
+        if language == "python":
+            _execute_python(src, req, res, env_map, result, timeout_ms)
+        else:
+            _execute(_instrument(src, timeout_ms), req, res, env_map, result)
     except Exception as exc:  # noqa: BLE001
         result.ok = False
         result.error = f"{type(exc).__name__}: {exc}"
@@ -494,7 +896,8 @@ def run_script(source: str, store, req: Dict[str, Any],
 
     if _TIMEOUT_MARK in (result.error or ""):
         result.timed_out = True
-        result.error = "脚本执行超过 %d 毫秒，已中止（检查是否有死循环）" % int(timeout_ms)
+        result.error = i18n.trf(
+            "脚本执行超过 {ms} 毫秒，已中止（检查是否有死循环）", ms=int(timeout_ms))
         if result.entries and result.entries[-1].get("level") == "error":
             result.entries[-1]["text"] = result.error
         if result.logs and result.logs[-1] == "__OC_TIMEOUT__":
@@ -514,6 +917,16 @@ def run_script(source: str, store, req: Dict[str, Any],
         except Exception:  # noqa: BLE001
             pass
     return result
+
+
+def script_parts(scripts: Optional[Dict[str, Any]], phase: str):
+    """取某一阶段真正要执行的源码与语言。老请求只有 pre/post，默认 JS。"""
+    data = scripts or {}
+    lang = str(data.get(f"{phase}_lang") or "javascript").lower()
+    if lang not in ("javascript", "python"):
+        lang = "javascript"
+    key = f"{phase}_python" if lang == "python" else phase
+    return str(data.get(key) or ""), lang
 
 
 # ---------------------------------------------------------------- 默认示例

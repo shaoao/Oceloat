@@ -2164,3 +2164,122 @@ _EN.update({
         "a 404 listing all available routes. Bodies support {{@name}} placeholders "
         "and conditional rules.",
 })
+
+
+# 1.0.83：Mock 局域网 / AI 弹窗漏译 + Python 脚本
+_EN.update({
+    "手机调试 · 局域网": "Mobile Debug · LAN",
+    "用手机扫这个码，就能直接访问当前 Mock 服务。":
+        "Scan this code with your phone to open the current Mock server.",
+    "服务还没启动": "Server is not running",
+    "手机与电脑要连同一个 Wi-Fi": "Your phone and computer must be on the same Wi-Fi",
+    "当前只监听本机。打开上面的「局域网」开关重启服务后，"
+    "手机才能访问；访问不到时检查系统防火墙是否放行该端口。":
+        "The server only listens on localhost. Turn on LAN above and restart the "
+        "server before your phone can connect; if it still cannot, check that your "
+        "firewall allows this port.",
+    "将基于当前实例的 {n} 条路由生成用例（正常 / 参数缺失 / 边界 / 鉴权失败）。":
+        "Generating cases for {n} routes in this instance (happy path / missing "
+        "parameters / boundary / auth failure).",
+    "先用一句话说清楚要做什么": "Describe what you want in one sentence first",
+    "先有路由，AI 才能针对它们生成用例": "Add a route first, then AI can generate cases",
+    "生成了 {n} 条用例": "Generated {n} cases",
+    "生成了 {n} 条路由": "Generated {n} routes",
+    "{n} 条用例 · 点右侧复制成 cURL": "{n} cases · click Copy as cURL on the right",
+    "Mock 测试用例": "Mock Test Cases",
+    "全部复制": "Copy All",
+    "复制为 cURL": "Copy as cURL",
+    "新建 Mock 实例": "New Mock Instance",
+    "实例名称": "Instance name",
+    "服务 {n}": "Server {n}",
+    "端口": "Port",
+    "创建": "Create",
+    "扫码": "Scan QR",
+    "手机上打开二维码": "Open QR code on phone",
+    "打开后监听 0.0.0.0，手机 / 其它电脑可以用局域网 IP 访问":
+        "When on, listens on 0.0.0.0 so phones and other computers can connect via LAN IP",
+    "每个实例是一个独立的 HTTP 服务，端口不同；可以同时启动，"
+    "用来模拟「订单服务 + 商品服务」这种互相调用的场景。":
+        "Each instance is an independent HTTP server on its own port. Run several "
+        "at once to emulate services calling each other, such as orders + products.",
+    "默认实例": "Default Instance",
+    "实例": "Instance",
+    "实例管理": "Instances",
+    "服务端口": "Service port",
+    "至少保留一个实例。": "Keep at least one instance.",
+    "无响应": "No response",
+    "端口 {port} 还在监听，但服务没有响应：可能被系统回收了。"
+    "点「停止服务」再「启动服务」即可恢复。":
+        "Port {port} is still open but the server does not respond; it may have been "
+        "reclaimed by the system. Click Stop Server, then Start Server to recover.",
+    "新实例已创建，点「启动服务」就能各自跑一个端口。":
+        "Instance created. Click Start Server to run it on its own port.",
+    "重命名实例": "Rename Instance",
+    "新建实例…": "New Instance…",
+    "重命名当前实例…": "Rename Current Instance…",
+    "删除当前实例…": "Delete Current Instance…",
+    "服务已启动，局域网也开着：手机扫码或直接访问上面的局域网地址。"
+    "改路由会立刻生效，不用重启。":
+        "Server is running with LAN enabled: scan the QR code or open the LAN address "
+        "above on your phone. Route changes apply immediately, no restart needed.",
+    "服务已启动：改路由会立刻生效，不用重启。想把手机接进来，"
+    "打开上面的「局域网」开关。":
+        "Server is running: route changes apply immediately. Turn on LAN above to "
+        "connect your phone.",
+    "已停止，但端口 {port} 仍被其它程序占用（可能是另一个 Ocelot 实例）。":
+        "Stopped, but port {port} is still in use by another process (possibly another "
+        "Ocelot instance).",
+    "服务已停止。路由都保留着，重启后继续用。":
+        "Server stopped. Routes are kept and will be available after a restart.",
+    "端口 {port} 上已经有一个 Ocelot Mock 服务在响（可能是别的实例，"
+    "或上次没正常退出）。点「启动服务」会自动换端口。":
+        "An Ocelot Mock server is already responding on port {port} (another instance "
+        "or a leftover process). Click Start Server to pick another port.",
+    "端口 {port} 已被其它程序占用。点「启动服务」会自动挑空闲端口。":
+        "Port {port} is in use by another program. Click Start Server to pick a free port.",
+    "已开启局域网访问：启动后手机用本机 IP 就能连，点右边的扫码按钮出二维码。":
+        "LAN access is on: after starting, your phone can connect using this machine's "
+        "IP. Click the QR button on the right to show the code.",
+    "只监听本机 127.0.0.1。": "Listening on 127.0.0.1 only.",
+    "服务运行中：{url} —— 本机浏览器、脚本、手机都能连。":
+        "Server running at {url} — reachable from local browsers, scripts and phones.",
+    "局域网 {url}": "LAN {url}",
+    "先启动服务，才有地址可复制": "Start the server first to get an address to copy",
+    "先启动服务，再试用这条路由": "Start the server first, then try this route",
+    "匹配正则": "Matches regex",
+    "开头是": "Starts with",
+    "大于": "Greater than",
+    "小于": "Less than",
+    "任意": "ANY",
+    "（空）": "(empty)",
+    " 条": " items",
+    "用一句话描述数据，让 AI 写出带循环与分页的响应体":
+        "Describe the data in one sentence and let AI write a paginated response body",
+
+    # Python 脚本
+    "语言": "Language",
+    "切换脚本语言，两种语言的代码分别保留。":
+        "Switch script language. Code for each language is kept separately.",
+    "前置脚本在请求发送前用 Python 运行。\n"
+    "直接改 req.url / req.method，或用 req.set_header()、pw.env.set()；"
+    "json / re / math / random / hashlib 已内置。\n"
+    "print() 与 console.log() 都会出现在响应面板的「控制台」页。":
+        "Pre-request scripts run in Python before the request is sent.\n"
+        "Edit req.url / req.method directly, or use req.set_header() and pw.env.set(); "
+        "json, re, math, random and hashlib are already available.\n"
+        "Both print() and console.log() appear in the Console tab of the response panel.",
+    "后置脚本在收到响应后用 Python 运行。\n"
+    "可读 res.status、用 res.json()['token'] 取字段，用 assert 或 test() 写断言，"
+    "或用 pw.env.set() 存变量。\n"
+    "print() 与 console.log() 都会出现在响应面板的「控制台」页。":
+        "Post-response scripts run in Python after the response arrives.\n"
+        "Read res.status, get fields with res.json()['token'], write assertions with "
+        "assert or test(), or save values with pw.env.set().\n"
+        "Both print() and console.log() appear in the Console tab of the response panel.",
+    "Python 脚本不允许导入 {name}":
+        "Importing {name} is not allowed in Python scripts",
+    "Python 脚本不允许调用 {name}()":
+        "Calling {name}() is not allowed in Python scripts",
+    "Python 脚本不允许访问双下划线属性 {name}":
+        "Accessing double-underscore attribute {name} is not allowed in Python scripts",
+})

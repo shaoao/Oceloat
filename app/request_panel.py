@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 from . import i18n, icons
 from .code_editor import CodeView, pretty_json
 from .kv_editor import COMMON_CONTENT_TYPES, COMMON_HEADERS, KVEditor
+from .scripts import script_parts
 from .store import BODY_CONTENT_TYPES, Store, kv, resolve_vars
 from .anim import running as _anim_running, stop as _anim_stop
 from .theme import C, S, method_color, font, mono, theme
@@ -1095,30 +1096,59 @@ class ScriptPage(QWidget):
 
     changed = pyqtSignal()
 
-    SNIPPETS = [
-        ("环境变量：设置一个变量", 'pw.env.set("token", "abc123");'),
-        ("环境变量：设置时间戳", 'pw.env.set("ts", String(Date.now()));'),
-        ("环境变量：设置随机数", 'pw.env.set("id", String(Math.floor(Math.random() * 10000)));'),
-        ("请求：添加一个请求头", 'req.setHeader("X-Trace-Id", "123");'),
-        ("控制台：打印一条消息", 'console.log("hello", req.method);'),
-    ]
+    LANGS = [("javascript", "JavaScript"), ("python", "Python")]
+
+    SNIPPETS = {
+        "javascript": [
+            ("环境变量：设置一个变量", 'pw.env.set("token", "abc123");'),
+            ("环境变量：设置时间戳", 'pw.env.set("ts", String(Date.now()));'),
+            ("环境变量：设置随机数", 'pw.env.set("id", String(Math.floor(Math.random() * 10000)));'),
+            ("请求：添加一个请求头", 'req.setHeader("X-Trace-Id", "123");'),
+            ("控制台：打印一条消息", 'console.log("hello", req.method);'),
+        ],
+        "python": [
+            ("环境变量：设置一个变量", 'pw.env.set("token", "abc123")'),
+            ("环境变量：设置时间戳", 'pw.env.set("ts", str(int(time.time() * 1000)))'),
+            ("请求：添加一个请求头", 'req.set_header("X-Trace-Id", "123")'),
+            ("控制台：打印一条消息", 'print("hello", req.method)'),
+        ],
+    }
 
     # 后置脚本专属片段：读响应、取字段、做断言
-    POST_SNIPPETS = [
-        ("响应：打印状态与耗时", 'console.log("status", res.status, "time", res.time + "ms");'),
-        ("响应：解析 JSON 并取字段", 'var data = res.json();\nif (data) console.log("keys", Object.keys(data).join(", "));'),
-        ("响应：把 token 存进环境", 'var d = res.json();\nif (d && d.token) pw.env.set("token", d.token);'),
-        ("断言：状态码为 200", 'test("状态码 200", function () {\n  if (res.status !== 200) throw new Error("got " + res.status);\n});'),
-        ("断言：响应包含字段", 'var d = res.json();\ntest("包含 token", function () {\n  if (!d || !d.token) throw new Error("missing token");\n});'),
-    ]
+    POST_SNIPPETS = {
+        "javascript": [
+            ("响应：打印状态与耗时", 'console.log("status", res.status, "time", res.time + "ms");'),
+            ("响应：解析 JSON 并取字段", 'var data = res.json();\nif (data) console.log("keys", Object.keys(data).join(", "));'),
+            ("响应：把 token 存进环境", 'var d = res.json();\nif (d && d.token) pw.env.set("token", d.token);'),
+            ("断言：状态码为 200", 'test("状态码 200", function () {\n  if (res.status !== 200) throw new Error("got " + res.status);\n});'),
+            ("断言：响应包含字段", 'var d = res.json();\ntest("包含 token", function () {\n  if (!d || !d.token) throw new Error("missing token");\n});'),
+        ],
+        "python": [
+            ("响应：打印状态与耗时", 'print("status", res.status, "time", res.time)'),
+            ("响应：解析 JSON 并取字段", 'data = res.json()\nprint("keys", list(data) if data else [])'),
+            ("响应：把 token 存进环境", 'data = res.json()\nif data and data.get("token"):\n    pw.env.set("token", data["token"])'),
+            ("断言：状态码为 200",
+             'test("状态码 200", lambda: assert_true(res.status == 200, "got %s" % res.status))'),
+            ("断言：响应包含字段",
+             'data = res.json()\ntest("包含 token", lambda: assert_true(bool(data and data.get("token")), "missing token"))'),
+        ],
+    }
 
     DOCS = {
-        "pre": "前置脚本在请求发送前用 JavaScript 运行。\n"
-               "可修改 req.url、req.headers 和 req.params，或用 pw.env.set() 把值存入当前环境。\n"
-               "console.log() 的输出会出现在响应面板的「控制台」页。",
-        "post": "后置脚本在收到响应后用 JavaScript 运行。\n"
-                "可读取 res.status / res.json()，用 test() 写断言，或用 pw.env.set() 把值存回当前环境。\n"
-                "console.log() 与断言结果都会出现在响应面板的「控制台」页。",
+        "pre_javascript": "前置脚本在请求发送前用 JavaScript 运行。\n"
+                          "可修改 req.url、req.headers 和 req.params，或用 pw.env.set() 把值存入当前环境。\n"
+                          "console.log() 的输出会出现在响应面板的「控制台」页。",
+        "post_javascript": "后置脚本在收到响应后用 JavaScript 运行。\n"
+                           "可读取 res.status / res.json()，用 test() 写断言，或用 pw.env.set() 把值存回当前环境。\n"
+                           "console.log() 与断言结果都会出现在响应面板的「控制台」页。",
+        "pre_python": "前置脚本在请求发送前用 Python 运行。\n"
+                      "直接改 req.url / req.method，或用 req.set_header()、pw.env.set()；"
+                      "json / re / math / random / hashlib 已内置。\n"
+                      "print() 与 console.log() 都会出现在响应面板的「控制台」页。",
+        "post_python": "后置脚本在收到响应后用 Python 运行。\n"
+                       "可读 res.status、用 res.json()['token'] 取字段，用 assert 或 test() 写断言，"
+                       "或用 pw.env.set() 存变量。\n"
+                       "print() 与 console.log() 都会出现在响应面板的「控制台」页。",
     }
 
     def __init__(self, store: Store, kind: str = "pre", parent=None):
@@ -1126,6 +1156,8 @@ class ScriptPage(QWidget):
         self.store = store
         self._loading = False
         self._kind = "post" if kind == "post" else "pre"
+        self._lang = "javascript"
+        self._codes = {"javascript": "", "python": ""}
 
         self.code = CodeView(read_only=False, highlight=True, show_gutter=True, wrap=True)
         self.code.set_language("javascript")
@@ -1134,23 +1166,29 @@ class ScriptPage(QWidget):
         editor = Card(radius=9)
         el = QVBoxLayout(editor)
         el.setContentsMargins(0, 6, 0, 6)
+        # 语言切换贴着编辑器顶部，一行高，不额外占一整块面板
+        lang_row = QHBoxLayout()
+        lang_row.setContentsMargins(10, 0, 10, 0)
+        lang_row.setSpacing(7)
+        lang_row.addWidget(Label("语言", 10.4, theme().text_faint))
+        self.lang_tabs = SegmentedTabs(
+            self.LANGS, style="pill", current="javascript", height=23,
+            pad_h=9, font_size=10.6)
+        self.lang_tabs.setToolTip("切换脚本语言，两种语言的代码分别保留。")
+        self.lang_tabs.changed.connect(self._set_language)
+        lang_row.addWidget(self.lang_tabs)
+        lang_row.addStretch(1)
+        el.addLayout(lang_row)
         el.addWidget(self.code, 1)
 
         # 右侧：说明 + 一键插入的代码片段（内容多时自己滚动，不挤压下方）
-        self.doc = Label(self.DOCS[self._kind], 11.2, theme().text_dim)
+        self.doc = Label(self._doc_text(), 11.2, theme().text_dim)
         self.doc.setWordWrap(True)
         snippets = QWidget()
-        sh = QVBoxLayout(snippets)
-        sh.setContentsMargins(0, 0, 0, 0)
-        sh.setSpacing(6)
-        items = list(self.SNIPPETS)
-        if self._kind == "post":
-            items = list(self.POST_SNIPPETS) + items[-2:]
-        for title, snippet in items:
-            b = Button(title, "plus", kind="subtle", height=25, padding=8, font_size=11)
-            b.clicked.connect(lambda _c=False, s=snippet: self._insert(s))
-            sh.addWidget(b)
-        sh.addStretch(1)
+        self.snippet_layout = QVBoxLayout(snippets)
+        self.snippet_layout.setContentsMargins(0, 0, 0, 0)
+        self.snippet_layout.setSpacing(6)
+        self._fill_snippets()
 
         side = QWidget()
         sl = QVBoxLayout(side)
@@ -1194,6 +1232,41 @@ class ScriptPage(QWidget):
         lay.setSpacing(2)
         lay.addLayout(body, 1)
         lay.addWidget(tools)
+
+    def _doc_text(self) -> str:
+        return self.DOCS[f"{self._kind}_{self._lang}"]
+
+    def _fill_snippets(self) -> None:
+        """按当前语言重建右侧片段按钮；语言切换与界面换肤都会走这里。"""
+        while self.snippet_layout.count():
+            item = self.snippet_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        items = list(self.SNIPPETS[self._lang])
+        if self._kind == "post":
+            items = list(self.POST_SNIPPETS[self._lang]) + items[-2:]
+        for title, snippet in items:
+            b = Button(title, "plus", kind="subtle", height=25, padding=8, font_size=11)
+            b.clicked.connect(lambda _c=False, s=snippet: self._insert(s))
+            self.snippet_layout.addWidget(b)
+        self.snippet_layout.addStretch(1)
+
+    def _set_language(self, lang: str) -> None:
+        lang = "python" if lang == "python" else "javascript"
+        if lang == self._lang:
+            return
+        # 先存旧语言的代码，再换入新语言的那份，来回切不丢内容
+        self._codes[self._lang] = self.code.toPlainText()
+        self._lang = lang
+        self._loading = True
+        self.code.set_language(lang)
+        self.code.setPlainText(self._codes[lang])
+        self._loading = False
+        self.doc.setText(self._doc_text())
+        self._fill_snippets()
+        self._clear_status()
+        self.changed.emit()
 
     def _on_code_changed(self) -> None:
         if not self._loading:
@@ -1271,7 +1344,7 @@ class ScriptPage(QWidget):
                            headers=[("Content-Type", "application/json")],
                            body=sample.encode("utf-8"), size=len(sample),
                            url="https://example.com", content_type="application/json")
-        result = run_script(source, self.store, req, res=res)
+        result = run_script(source, self.store, req, res=res, language=self._lang)
         lines = list(result.logs)
         if result.error and not any(l == result.error for l in lines):
             lines.append("✕ " + result.error)
@@ -1282,30 +1355,39 @@ class ScriptPage(QWidget):
         dlg = ScriptResultDialog(result.ok, lines, "" if result.ok else result.error, self)
         dlg.exec()
 
-    @property
-    def _drafts(self) -> Dict[str, str]:
-        if not hasattr(self, "_script_drafts"):
-            self._script_drafts: Dict[str, str] = {"pre": "", "post": ""}
-        return self._script_drafts
-
     def load(self, scripts: Dict[str, Any]) -> None:
+        data = scripts or {}
+        lang = str(data.get(f"{self._kind}_lang") or "javascript").lower()
+        if lang not in ("javascript", "python"):
+            lang = "javascript"
         self._loading = True
-        self._script_drafts = {
-            "pre": str((scripts or {}).get("pre") or ""),
-            "post": str((scripts or {}).get("post") or ""),
+        self._lang = lang
+        self._codes = {
+            "javascript": str(data.get(self._kind) or ""),
+            "python": str(data.get(f"{self._kind}_python") or ""),
         }
-        self.code.setPlainText(self._script_drafts[self._kind])
+        self.lang_tabs.set_current(lang)
+        self.code.set_language(lang)
+        self.code.setPlainText(self._codes[lang])
+        self.doc.setText(self._doc_text())
+        self._fill_snippets()
         self._clear_status()
         self._last_logs = []
         self._loading = False
 
     def dump(self) -> Dict[str, str]:
-        drafts = dict(self._drafts)
-        drafts[self._kind] = self.code.toPlainText()
-        return drafts
+        """只写自己这一半字段，两边 merge 后就是完整的 scripts dict。"""
+        self._codes[self._lang] = self.code.toPlainText()
+        return {
+            self._kind: self._codes["javascript"],
+            f"{self._kind}_python": self._codes["python"],
+            f"{self._kind}_lang": self._lang,
+        }
 
     def refresh_theme(self) -> None:
-        """语言/主题切换后重译 tooltip，并按当前主题刷新状态图标颜色。"""
+        """语言/主题切换后重译说明与片段，并按当前主题刷新状态图标颜色。"""
+        self.doc.setText(self._doc_text())
+        self._fill_snippets()
         self.run_btn.setToolTip(i18n.tr("不联网，只在临时请求上执行当前脚本，查看日志与错误。"))
         if self._status_text:
             # 文案走 Label 的 i18n_src_text 机制自动重译；这里只刷新图标与语义色
@@ -1531,8 +1613,8 @@ class RequestEditor(QWidget):
             elif method == SSE_METHOD:
                 self.sse.load(request)
             scripts = request.get("scripts", {}) or {}
-            self.scripts_pre.load({"pre": scripts.get("pre", "")})
-            self.scripts_post.load({"post": scripts.get("post", "")})
+            self.scripts_pre.load(scripts)
+            self.scripts_post.load(scripts)
         finally:
             self._loading = False
         self._refresh_counts()
@@ -1599,10 +1681,10 @@ class RequestEditor(QWidget):
             self.sse.dump(self.request)
         elif self._mode == "ws":
             self.ws.dump(self.request)
-        self.request["scripts"] = {
-            "pre": self.scripts_pre.dump().get("pre", ""),
-            "post": self.scripts_post.dump().get("post", ""),
-        }
+        scripts = {}
+        scripts.update(self.scripts_pre.dump())
+        scripts.update(self.scripts_post.dump())
+        self.request["scripts"] = scripts
         if not self.request.get("name") or self.request.get("name") == "Untitled Request":
             self._auto_name()
         self._refresh_counts()
@@ -1670,8 +1752,11 @@ class RequestEditor(QWidget):
         # 不再 dump 整段请求体：只问「有没有内容」，避免每次按键复制一遍大正文
         self.tabs.set_badge("body", 1 if self.body.has_content() else 0)
         self.tabs.set_badge("auth", 1 if self.auth.dump().get("type") != "none" else 0)
-        pre_script = self.scripts_pre.dump().get("pre", "").strip() if hasattr(self, "scripts_pre") else ""
-        post_script = self.scripts_post.dump().get("post", "").strip() if hasattr(self, "scripts_post") else ""
+        pre_scripts = self.scripts_pre.dump() if hasattr(self, "scripts_pre") else {}
+        post_scripts = self.scripts_post.dump() if hasattr(self, "scripts_post") else {}
+        # 徽标看真正会执行的那份：切到 Python 后，JS 里留的代码不算数
+        pre_script = script_parts(pre_scripts, "pre")[0].strip()
+        post_script = script_parts(post_scripts, "post")[0].strip()
         self.tabs.set_badge("pre", 1 if pre_script else 0)
         if self.tabs.has("post"):
             self.tabs.set_badge("post", 1 if post_script else 0)

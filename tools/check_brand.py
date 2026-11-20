@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.82", VERSION == "1.0.82", VERSION)
-check("更新内容是 1.0.82", CHANGELOG[0]["version"] == "1.0.82")
+check("版本 1.0.83", VERSION == "1.0.83", VERSION)
+check("更新内容是 1.0.83", CHANGELOG[0]["version"] == "1.0.83")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -754,6 +754,28 @@ check("分组名随语言重建", "def refresh_i18n" in _mp_82
 check("移除冗余类型灯函数", "def paint_kind_dot" not in _th_82)
 check("更新内容写了这轮改动", any("补齐英文模式" in x for x in ALL_ITEMS)
       and any("集合" in x and "裸请求" in x for x in ALL_ITEMS))
+
+print("\n[1.0.83 新增]")
+_i18_83 = (ROOT / "app" / "i18n.py").read_text(encoding="utf-8")
+_sc_83 = (ROOT / "app" / "scripts.py").read_text(encoding="utf-8")
+_rq_83 = (ROOT / "app" / "request_panel.py").read_text(encoding="utf-8")
+_hc_83 = (ROOT / "app" / "http_client.py").read_text(encoding="utf-8")
+_tr_83 = (ROOT / "app" / "transfer.py").read_text(encoding="utf-8")
+check("二维码弹窗英文齐全", all(k in _i18_83 for k in (
+      '"手机调试 · 局域网"', '"用手机扫这个码，就能直接访问当前 Mock 服务。"',
+      '"手机与电脑要连同一个 Wi-Fi"', '"服务还没启动"')))
+check("AI 用例提示有英文", '"将基于当前实例的 {n} 条路由生成用例' in _i18_83)
+check("脚本有 Python 执行器", "def _execute_python" in _sc_83
+      and "def script_parts" in _sc_83)
+check("Python 脚本有静态检测", "_check_python_safety" in _sc_83
+      and "Python 脚本不允许导入 {name}" in _sc_83)
+check("Python 脚本有双超时", "sys.settrace" in _sc_83 and "budget = 400_000" in _sc_83)
+check("脚本页有语言切换", "self.lang_tabs" in _rq_83
+      and "self._codes = {\"javascript\": \"\", \"python\": \"\"}" in _rq_83)
+check("请求真正按语言取源码", "script_parts(scripts" in _hc_83)
+check("导入导出保留 Python 脚本", 'extra["scripts"]' in _tr_83)
+check("更新内容写了 Python 脚本", any("JavaScript / Python" in x for x in ALL_ITEMS)
+      and any("双保险" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

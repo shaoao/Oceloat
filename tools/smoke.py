@@ -2413,6 +2413,45 @@ def main() -> int:
         check("语法错误行号是用户看到的行", r3.error.startswith("第 1 行"), r3.error)
         r4 = run_script("while (true) {}", store, req, timeout_ms=300)
         check("死循环能被中止", not r4.ok and r4.timed_out, r4.error)
+
+        # 2b) Python 脚本：同款 API、静态检测、语法行号、死循环双保险
+        py_req = new_request("PY", "POST", "https://s.test/py")
+        py_req["headers"] = [kv("A", "1")]
+        py = run_script(
+            'req.set_header("X-Py", "1")\n'
+            'pw.env.set("sv_py", "7")\n'
+            'print("py", req.method)\n'
+            'test("header", lambda: assert_true(req.get_header("X-Py") == "1"))\n',
+            store, py_req, language="python")
+        check("Python 脚本正常执行", py.ok, py.error)
+        check("Python 脚本写环境变量", store.env_vars().get("sv_py") == "7")
+        check("Python 脚本能改请求头",
+              any(h["key"] == "X-Py" and h["value"] == "1" for h in py_req["headers"]),
+              str(py_req["headers"]))
+        check("Python 打印进控制台", bool(py.logs) and py.logs[0] == "py POST", str(py.logs))
+        py_res = Response(status=200, reason="OK", elapsed=5,
+                          headers=[("Content-Type", "application/json")],
+                          body=b'{"token":"py1"}', size=13, url="u")
+        py_post = run_script(
+            'data = res.json()\n'
+            'res.status_text = "PyOK"\n'
+            'res.set_header("X-Py-Res", "1")\n'
+            'test("token", lambda: assert_true(data["token"] == "py1"))\n',
+            store, py_req, res=py_res, language="python")
+        check("Python 后置脚本能读响应", py_post.ok, py_post.error)
+        check("Python 后置脚本能改响应",
+              py_res.reason == "PyOK" and py_res.header("X-Py-Res") == "1")
+        py_bad = run_script("def (:", store, py_req, language="python")
+        check("Python 语法错误带行号", py_bad.error.startswith("第 1 行"), py_bad.error)
+        py_loop = run_script("while True:\n    pass", store, py_req,
+                             timeout_ms=300, language="python")
+        check("Python 死循环能被中止", not py_loop.ok and py_loop.timed_out,
+              py_loop.error)
+        py_unsafe = run_script("import os", store, py_req, language="python")
+        check("Python 危险导入被拦下",
+              not py_unsafe.ok and "os" in py_unsafe.error, py_unsafe.error)
+        py_open = run_script("open('/tmp/x')", store, py_req, language="python")
+        check("Python open 被拦下", not py_open.ok, py_open.error)
         check("动态变量集中实现", dynamic_var("$timestamp").isdigit())
 
         # 3) 导入导出：五种格式都能来回
@@ -2503,8 +2542,21 @@ def main() -> int:
         page._insert('console.log("x");')
         check("片段从新行插入", page.code.toPlainText() == 'var a = 1;\nconsole.log("x");\n',
               repr(page.code.toPlainText()))
-        check("后置脚本有专属片段",
-              any("res" in s for _t, s in page.POST_SNIPPETS))
+        check("后置脚本两种语言都有专属片段",
+              all(any("res" in s for _t, s in items)
+                  for items in page.POST_SNIPPETS.values()))
+        page._set_language("python")
+        check("脚本页能切到 Python", page._lang == "python"
+              and page.code.toPlainText() == "")
+        page.code.setPlainText("print(1)")
+        page._set_language("javascript")
+        check("切语言不会丢 JS 代码",
+              page.code.toPlainText() == 'var a = 1;\nconsole.log("x");\n',
+              repr(page.code.toPlainText()))
+        page._set_language("python")
+        check("切回来还在 Python 代码", page.code.toPlainText() == "print(1)",
+              repr(page.code.toPlainText()))
+        page._set_language("javascript")
         return 0
 
     def step34():
