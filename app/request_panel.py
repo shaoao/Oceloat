@@ -47,7 +47,9 @@ from .widgets import (
 METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"]
 WS_METHOD = "WS"
 SIO_METHOD = "SIO"
-REALTIME_METHODS = (WS_METHOD, SIO_METHOD)
+SSE_METHOD = "SSE"
+# 实时协议：都不是「发一次、收一次」的 HTTP 请求，界面与传输都另走一套
+REALTIME_METHODS = (WS_METHOD, SIO_METHOD, SSE_METHOD)
 
 # HTTP 请求区的标签集合；WebSocket 有自己的一整页（见 RequestEditor.ws_page），
 # 不共用这套页签。
@@ -490,13 +492,16 @@ class UrlBar(QWidget):
         upper = (method or "").upper()
         realtime = upper in REALTIME_METHODS
         sio = upper == SIO_METHOD
+        sse = upper == SSE_METHOD
         self._ws_mode = realtime
         i18n.placeholder(
             self.url,
             ("ws:// 或 wss:// 地址，例如 ws://localhost:3000/socket.io" if sio
-             else "ws:// 或 wss:// 地址，例如 wss://echo.websocket.org")
+             else ("http(s):// 地址，例如 https://example.com/events" if sse
+                   else "ws:// 或 wss:// 地址，例如 wss://echo.websocket.org"))
             if realtime else "输入请求地址，例如 https://httpbin.org/get")
         self.url.setToolTip("" if not realtime else i18n.tr(
+            "SSE 走普通 HTTP，填 http(s):// 地址即可") if sse else i18n.tr(
             "支持 ws:// wss://；直接粘 http(s) 地址会自动补全 Socket.IO 路径")
             if sio else i18n.tr("支持 ws:// wss://；直接粘 http(s) 地址会自动改写"))
         self.method.set_locked(realtime)
@@ -1393,6 +1398,11 @@ class RequestEditor(QWidget):
         self.sio.changed.connect(self._on_sio_changed)
         self.sio.sendRequested.connect(self.sioSendRequested.emit)
         self.sio.headersToggled.connect(self._open_ws_headers)
+        from .sse_panel import SseComposer
+
+        self.sse = SseComposer()
+        self.sse.changed.connect(self._on_sse_changed)
+        self.sse.headersToggled.connect(self._open_ws_headers)
         self._mode = "http"
 
         # WebSocket 是独立的一套界面：只有「消息 + 握手头」两件事，
@@ -1440,6 +1450,13 @@ class RequestEditor(QWidget):
         sl.addWidget(self.sio, 1)
         self.sio_page.hide()
 
+        self.sse_page = QWidget()
+        ssl = QVBoxLayout(self.sse_page)
+        ssl.setContentsMargins(0, 0, 0, 0)
+        ssl.setSpacing(0)
+        ssl.addWidget(self.sse, 1)
+        self.sse_page.hide()
+
         self.head = QWidget()
         hl = QHBoxLayout(self.head)
         hl.setContentsMargins(14, 4, 10, 0)
@@ -1457,6 +1474,7 @@ class RequestEditor(QWidget):
         lay.addWidget(self.pages, 1)
         lay.addWidget(self.ws_page, 1)
         lay.addWidget(self.sio_page, 1)
+        lay.addWidget(self.sse_page, 1)
         self.urlbar.refresh_node()
 
     def refresh_node(self) -> None:
@@ -1499,8 +1517,15 @@ class RequestEditor(QWidget):
             self.cookies.set_rows(request.get("cookies", []))
             self.body.load(request.get("body", {}))
             self.auth.load(request.get("auth", {}), request.get("id", ""))
-            self.ws.load(request)
-            self.sio.load(request)
+            # 只给对应协议的编辑器补默认值：全都 load 一遍会让普通 HTTP 请求
+            # 也长出一份 ws / sio / sse 配置，导出时被误认成实时请求。
+            method = (request.get("method") or "").upper()
+            if method == WS_METHOD:
+                self.ws.load(request)
+            elif method == SIO_METHOD:
+                self.sio.load(request)
+            elif method == SSE_METHOD:
+                self.sse.load(request)
             scripts = request.get("scripts", {}) or {}
             self.scripts_pre.load({"pre": scripts.get("pre", "")})
             self.scripts_post.load({"post": scripts.get("post", "")})
@@ -1519,7 +1544,8 @@ class RequestEditor(QWidget):
         self.urlbar._on_method_mode(method)
         upper = (method or "").upper()
         mode = ("ws" if upper == WS_METHOD else
-                "sio" if upper == SIO_METHOD else "http")
+                "sio" if upper == SIO_METHOD else
+                "sse" if upper == SSE_METHOD else "http")
         if mode != self._mode:
             self._mode = mode
             if mode == "http":
@@ -1531,6 +1557,7 @@ class RequestEditor(QWidget):
         self.pages.setVisible(not realtime)
         self.ws_page.setVisible(mode == "ws")
         self.sio_page.setVisible(mode == "sio")
+        self.sse_page.setVisible(mode == "sse")
         if not self._loading:
             self._refresh_counts()
 
@@ -1541,9 +1568,13 @@ class RequestEditor(QWidget):
     def is_sio(self) -> bool:
         return self._mode == "sio"
 
+    def is_sse(self) -> bool:
+        return self._mode == "sse"
+
     def set_ws_state(self, state: str) -> None:
         self.urlbar.set_ws_state(state)
-        composer = self.sio if self._mode == "sio" else self.ws
+        composer = (self.sse if self._mode == "sse"
+                    else self.sio if self._mode == "sio" else self.ws)
         composer.set_connected(state == "open")
 
     def _sync_request(self, *, script_only: bool = False) -> None:
@@ -1560,6 +1591,8 @@ class RequestEditor(QWidget):
         self.request["auth"] = self.auth.dump()
         if self._mode == "sio":
             self.sio.dump(self.request)
+        elif self._mode == "sse":
+            self.sse.dump(self.request)
         elif self._mode == "ws":
             self.ws.dump(self.request)
         self.request["scripts"] = {
@@ -1720,6 +1753,11 @@ class RequestEditor(QWidget):
             self._sync_request()
 
     def _on_sio_changed(self) -> None:
+        self._refresh_counts()
+        if not self._loading:
+            self._sync_request()
+
+    def _on_sse_changed(self) -> None:
         self._refresh_counts()
         if not self._loading:
             self._sync_request()
@@ -1909,10 +1947,11 @@ class RequestEditor(QWidget):
         act_code = menu.addAction(icons.icon("code", t.text, 14), "生成代码片段  ⌘⇧C")
         act_curl = menu.addAction(icons.icon("book", t.text, 14), "复制为 cURL")
         menu.addSeparator()
-        # 一键 Mock 和 Mock 数据是一家人，收进这里比在地址栏再占一颗图标清爽
+        # 一键 Mock 和 Mock 服务是一家人，收进这里比在地址栏再占一颗图标清爽。
+        # 名字说清楚「会生成一条路由」，比「一键 Mock」这种口号更知道点下去发生什么。
         act_mockize = menu.addAction(icons.icon("layers", t.text, 14),
-                                     "一键 Mock（生成 Mock 路由）")
-        act_mock = menu.addAction(icons.icon("grid", t.text, 14), "Mock 数据…")
+                                     "生成 Mock 路由")
+        act_mock = menu.addAction(icons.icon("grid", t.text, 14), "Mock 服务…")
         menu.addSeparator()
         act_dup = menu.addAction(icons.icon("copy", t.text, 14), "复制请求")
         act_del = menu.addAction(icons.icon("trash", t.danger, 14), "删除请求")

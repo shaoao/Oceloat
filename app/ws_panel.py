@@ -553,7 +553,9 @@ class WsHeadersPopup(QWidget):
 
 KIND_LABEL = {"text": "TEXT", "json": "JSON", "binary": "BIN",
               "ping": "PING", "pong": "PONG", "open": "OPEN",
-              "close": "CLOSE", "error": "ERR"}
+              "close": "CLOSE", "error": "ERR", "retry": "RETRY",
+              # SSE 的默认事件名就是 message，缩成 MSG 才不会挤到字节数上
+              "message": "MSG"}
 
 
 class ChevronToggle(QWidget):
@@ -1042,6 +1044,10 @@ class FrameList(QWidget):
             tag = KIND_LABEL.get(frame.kind, frame.kind.upper())
             p.setFont(mono(9.0, QFont.Weight.DemiBold))
             p.setPen(C(col if frame.dir != "sys" else t.text_dim))
+            # SSE 的事件名是服务端自定义的（message / update / price-changed…），
+            # 固定 46px 会被后面的字节数盖住；按可用宽度省略，绝不重叠。
+            tag = QFontMetricsF(p.font()).elidedText(
+                tag, Qt.TextElideMode.ElideRight, 44)
             p.drawText(QRectF(r.left() + 92, r.top(), 46, r.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), tag)
             p.setFont(mono(9.4))

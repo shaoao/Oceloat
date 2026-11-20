@@ -184,8 +184,14 @@ def _postman_item(req: Dict[str, Any]) -> Dict[str, Any]:
         item["request"]["description"] = req["note"]
     # WebSocket：方法本身是 WS，常用消息 / 子协议 / 心跳存在 x-ocelot 里，
     # 导回来还是原来的连接配置（别的工具会当成一个自定义方法的请求，不会报错）
-    if (req.get("method") or "").upper() == "WS" or req.get("ws"):
+    # 只看方法：以前还看 req.get("ws")，但编辑器会给每个请求补一份 ws 默认值，
+    # 结果普通 HTTP 请求导出后也被当成 WebSocket（导回来方法就变成 WS 了）。
+    if (req.get("method") or "").upper() == "WS":
         extra["ws"] = req.get("ws") or {}
+    # SSE：方法 + 连接选项（自动重连 / Last-Event-ID）。别的工具读不懂时
+    # 也只是一个自定义方法的普通请求，不会报错。
+    if (req.get("method") or "").upper() == "SSE" or req.get("sse"):
+        extra["sse"] = req.get("sse") or {}
     if carry:
         extra.update(carry)
     if extra:
@@ -526,12 +532,18 @@ def _from_postman_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     req = _mk_request(str(item.get("name") or "Request"), r.get("method") or "GET",
                       base or raw_url, params=params, headers=headers, body=body,
                       auth=auth, cookies=cookies, scripts=scripts, note=note)
-    if (req.get("method") or "").upper() == "WS" or extra.get("ws"):
+    if (req.get("method") or "").upper() == "WS":
         from .ws_panel import ensure_ws
 
         req["method"] = "WS"
         req["ws"] = extra.get("ws") if isinstance(extra.get("ws"), dict) else {}
         ensure_ws(req)
+    elif (req.get("method") or "").upper() == "SSE":
+        from .sse_panel import ensure_sse
+
+        req["method"] = "SSE"
+        req["sse"] = extra.get("sse") if isinstance(extra.get("sse"), dict) else {}
+        ensure_sse(req)
     return req
 
 

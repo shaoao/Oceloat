@@ -45,6 +45,86 @@ _SYS_CASES = (
 )
 
 
+_SYS_BODY = (
+    "你是 Mock 服务的数据生成器。根据用户的描述，写一段「响应体模板」，只输出模板本身，"
+    "不要 Markdown 代码块、不要解释。模板规则（必须用上，不是普通 JSON）：\n"
+    "1) 静态字段直接写；随机字段用占位符：{{@name}} {{@cname}} {{@email}} {{@phone}} "
+    "{{@city}} {{@company}} {{@uuid}} {{@now}} {{@date}} {{@timestamp}} {{@bool}} "
+    "{{@int(1,99)}} {{@float(1,999)}} {{@pick(a,b,c)}} {{@lorem(6)}} {{@avatar(80,80)}}；\n"
+    "2) 需要多条数据时用循环，不要手写重复行：\n"
+    "   \"list\": [{{for size}}{\"id\": {{@row}}, \"name\": \"{{@cname}}\"}{{/for}}]\n"
+    "   循环体不要写逗号，展开时引擎会自动补；循环里可以用 {{@i}}（本次第几条）、"
+    "{{@row}}（跨页连续行号）；\n"
+    "3) 列表接口要分页：{{for size}} 会按 ?size= 展开，{{@page}} 是当前页，"
+    "{{@size}} 是每页条数，{{@total(86)}} 是总数；\n"
+    "4) 字段名和值都要像真实业务（价格、时间、状态、枚举都用得上），"
+    "至少 5 个字段；金额用数字并保留两位小数；\n"
+    "5) 输出必须是合法 JSON（占位符与循环指令不算破坏 JSON）。\n"
+    "示例：\n"
+    '{"code":0,"message":"ok","data":{"page":{{@page}},"size":{{@size}},'
+    '"total":{{@total(86)}},"list":[{{for size}}{"id":{{@row}},"title":"{{@lorem(8)}}",'
+    '"author":"{{@cname}}","price":{{@float(9,999)}},"on_sale":{{@bool}},'
+    '"created_at":"{{@date}}"}{{/for}}]}}'
+)
+
+# AI 面板里的常用例子：点一下就把描述填进去，不用自己组织语言。
+BODY_PRESETS = [
+    ("分页列表", "分页的商品列表：每页按 ?size 条，包含 id、标题、作者、价格、是否上架、创建时间，"
+                 "外层带 page / size / total"),
+    ("用户资料", "单个用户资料：中文昵称、邮箱、手机号、城市、头像、会员等级、注册时间"),
+    ("订单详情", "一笔订单的详情：订单号、下单时间、商品明细循环 3 条（名称 / 单价 / 数量 / 小计）、"
+                 "总金额、状态枚举、收货地址"),
+    ("20 条数组", "一个 20 条的数组，每项包含 id、名称、状态、金额、时间"),
+    ("401 错误", "鉴权失败的标准错误体：code、错误码、中文提示、请求 id"),
+    ("嵌套树", "一个两级分类树：顶级分类带 children，每个分类里有 3 个子分类"),
+]
+
+# 「例子」区直接插入的模板片段（不经过模型，点一下就有）。
+BODY_SNIPPETS = [
+    ("分页列表（模板）",
+     '{\n  "code": 0,\n  "message": "ok",\n  "data": {\n'
+     '    "page": {{@page}},\n    "size": {{@size}},\n    "total": {{@total(86)}},\n'
+     '    "list": [\n{{for size}}\n'
+     '      {"id": {{@row}}, "title": "{{@lorem(8)}}", "author": "{{@cname}}", '
+     '"price": {{@float(9, 1999)}}, "on_sale": {{@bool}}, "created_at": "{{@date}}"}\n'
+     '{{/for}}\n    ]\n  }\n}'),
+    ("循环 5 条",
+     '{\n  "items": [\n{{for 5}}\n'
+     '    {"id": {{@i}}, "name": "{{@cname}}", "amount": {{@float(10, 999)}}}\n'
+     '{{/for}}\n  ]\n}'),
+    ("条件字段",
+     '{\n  "code": 0,\n  "data": {\n    "user": {"id": {{@id}}},\n'
+     '    "vip": {{@bool}},\n    "expires_at": "{{@date}}"\n  }\n}'),
+]
+
+
+def messages_for_body(description: str, path: str = "", method: str = "GET",
+                      existing: str = "") -> List[Dict[str, str]]:
+    """让模型直接产出一段可保存的响应体模板。"""
+    parts = [f"接口：{method.upper()} {path or '/'}", f"要求：{description.strip()}"]
+    if existing.strip():
+        parts.append("现有响应体（在此基础上改，保留其中有用的字段）：\n"
+                     + existing.strip()[:2000])
+    return [{"role": "system", "content": _SYS_BODY},
+            {"role": "user", "content": "\n\n".join(parts)}]
+
+
+def parse_body(text: str) -> str:
+    """把模型输出清成一段模板文本；JSON 会重新缩进，看起来整齐。"""
+    from .ai import clean_json
+
+    raw = clean_json(text).strip()
+    if not raw:
+        raise ValueError("模型没有返回内容")
+    if raw.startswith("```"):
+        raw = raw.strip("`").strip()
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw            # 带循环指令时可能解析不了，原样返回仍然可用
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
 def messages_for_routes(description: str, count: int = 6,
                         existing: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
     parts = [f"业务描述：{description.strip()}",

@@ -17,7 +17,7 @@ python3 main.py
 
 Python 3.10+，PyQt6 6.5+。macOS 上也可以双击 `启动 Ocelot.command`。第一次打开自带几条示例请求，点一下就能发。
 
-不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.75.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
+不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.76.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
 
 ## 发请求
 
@@ -29,6 +29,8 @@ GET / POST / PUT / PATCH / DELETE / HEAD / OPTIONS 都有。参数、请求头�
 
 WebSocket 和 Socket.IO 是独立的请求类型，有整页界面：文本 / JSON / 二进制收发、子协议、心跳与往返延迟、断线重连、帧日志。
 
+SSE（Server-Sent Events）也在里面：填一个 http(s) 地址连上，服务器推来的事件按行实时进日志，支持自动重连、`Last-Event-ID` 续传、按事件名 / 心跳筛选，日志能导出。它和 WebSocket 页同一套排版，只收不发。
+
 前后置脚本是 JavaScript，能改请求、读响应、写环境变量、写断言，输出进响应面板的控制台。
 
 ## Mock 是真的在跑服务
@@ -39,10 +41,12 @@ WebSocket 和 Socket.IO 是独立的请求类型，有整页界面：文本 / JS
 
 一条路由可以设方法、路径、状态码、Content-Type、返回体；可以延迟多少毫秒再返回，用来测 loading 和超时；返回体里写 `{{@uuid}}`、`{{@int(1,99)}}` 每次现算；也能按请求头、参数或请求体切响应 —— 带 `token=123` 给 VIP 数据，不带给 401。
 
+要一批数据不用手写重复行：`{{for size}}…{{/for}}` 会按 `?size=` 展开，循环里 `{{@i}}` 是本次第几条、`{{@row}}` 是跨页连续行号；`{{@page}}`、`{{@size}}`、`{{@total(86)}}` 直接写分页，请求带 `?page=2&size=20` 就返回第二页。路由编辑器里还有「AI 生成」：一句话描述要什么数据，它直接产出带循环和分页的模板，旁边「例子」里放着常用的几段。
+
 几个用起来省事的点：
 
 - 多实例：各占一个端口、各有一份路由，同时开着，模拟「订单服务 + 商品服务」的调用链不用来回改端口
-- 一键 Mock：普通请求面板点一下，把当前 Method、Path 和真实响应体直接变成一条本地路由
+- 生成 Mock 路由：普通请求面板点一下，把当前 Method、Path 和真实响应体直接变成一条本地路由
 - 导入：OpenAPI 3 / Swagger 2 / Postman 集合，按文件里的 tag、文件夹自动分组
 - 局域网 + 二维码：手机扫一下就能连，没开局域网时不显示扫码按钮
 
@@ -132,7 +136,7 @@ corrupted/              读不出来的文件会被挪到这里，留着当证�
 代码在 `app/` 下，一个功能一个文件，界面全部用 QPainter 画，不引图片资源。
 
 ```bash
-python3 tools/smoke.py        # 771 项自测，会真起 HTTP / WebSocket 服务
+python3 tools/smoke.py        # 802 项自测，会真起 HTTP / WebSocket 服务
 python3 tools/check_brand.py  # 标识、版本与打包配方检查
 python3 tools/readme_shots.py # 重新生成上文截图
 python3 tools/build_app.py    # 打包成 Ocelot.app + dmg（约 62MB / 27MB）

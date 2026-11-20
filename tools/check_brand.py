@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.75", VERSION == "1.0.75", VERSION)
-check("更新内容是 1.0.75", CHANGELOG[0]["version"] == "1.0.75")
+check("版本 1.0.76", VERSION == "1.0.76", VERSION)
+check("更新内容是 1.0.76", CHANGELOG[0]["version"] == "1.0.76")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -399,8 +399,10 @@ check("更新内容写了 README 装修", any("README 重新排版" in x for x i
 print("\n[1.0.69 新增]")
 check("卡片铺满窗口，不留投影留白", "卡片铺满整个窗口" in _mw_src
       and "CARD_RADIUS = 12" in _mw_src)
-check("圆角改由窗口遮罩裁", "self.setMask(QRegion" in _mw_src
+check("圆角改由窗口遮罩裁", "self.setMask(_rounded_region" in _mw_src
       and "self.root.clearMask()" in _mw_src)
+check("圆角按解析圆生成遮罩", "QRegion.RegionType.Ellipse" in _mw_src
+      and "toFillPolygon" not in _mw_src)
 check("最大化时清掉窗口遮罩", "if not self.mask().isEmpty():" in _mw_src
       and "self.clearMask()" in _mw_src)
 check("窗口边缘有 1px 细描边", "p.setPen(QPen(C(t.border), 1))" in _mw_src)
@@ -557,7 +559,7 @@ _sc3 = (ROOT / "app" / "shortcuts.py").read_text(encoding="utf-8")
 _rd3 = (ROOT / "README.md").read_text(encoding="utf-8")
 check("新建文件夹不再用不存在的 QPen.setAlphaF",
       "pen.setAlphaF" not in _sb3 and "ring.setAlphaF" in _sb3)
-check("一键 Mock 收进更多菜单", "一键 Mock（生成 Mock 路由）" in _rp2
+check("生成 Mock 路由收进更多菜单", "生成 Mock 路由" in _rp2
       and "self.mockize_btn" not in _rp2)
 check("地址栏只剩保存 / 代码 / 更多", "tl.addWidget(self.mockize_btn)" not in _rp2)
 check("内存回收间隔固定 15 分钟", "return DEFAULT_MINUTES" in
@@ -580,6 +582,48 @@ check("README 写了存储技术栈与好处", "纯文件" in _rd3 and "hashlib"
 check("更新内容写了误关恢复", any("误关标签" in x or "⌘⇧T" in x for x in ALL_ITEMS))
 check("更新内容写了崩溃修复", any("setAlphaF" in x for x in ALL_ITEMS))
 check("更新内容写了存储说明", any("存储说明" in x for x in ALL_ITEMS))
+
+
+# ---------------------------------------------------------------- 1.0.76 新增
+print("\n[1.0.76 新增]")
+_sse_src = (ROOT / "app" / "sse_client.py").read_text(encoding="utf-8")
+_ssep_src = (ROOT / "app" / "sse_panel.py").read_text(encoding="utf-8")
+_rp4 = (ROOT / "app" / "request_panel.py").read_text(encoding="utf-8")
+_mw4 = (ROOT / "app" / "main_window.py").read_text(encoding="utf-8")
+_ms4 = (ROOT / "app" / "mock_server.py").read_text(encoding="utf-8")
+_ma4 = (ROOT / "app" / "mock_ai.py").read_text(encoding="utf-8")
+_mp4 = (ROOT / "app" / "mock_panel.py").read_text(encoding="utf-8")
+_tr4 = (ROOT / "app" / "transfer.py").read_text(encoding="utf-8")
+_rd4 = (ROOT / "README.md").read_text(encoding="utf-8")
+check("SSE 客户端是流式的", "QNetworkAccessManager" in _sse_src
+      and "readyRead" in _sse_src and "Last-Event-ID" in _sse_src)
+check("SSE 解析按规范拆字段", all(x in _sse_src for x in
+      ('"data"', '"event"', '"id"', '"retry"')))
+check("SSE 有自动重连", "def _reconnect" in _sse_src and "retrying" in _sse_src)
+check("SSE 页与 WebSocket 同款骨架", "SseLogView(WsLogView)" in _ssep_src
+      and "SegmentedTabs" in _ssep_src)
+check("SSE 进了新建菜单", "SSE 请求" in (ROOT / "app" / "sidebar.py").read_text(
+      encoding="utf-8") and "SSE_METHOD" in _rp4)
+check("SSE 有自己的响应视图", "sse_view" in (ROOT / "app" / "response_panel.py").read_text(
+      encoding="utf-8"))
+check("SSE 导入导出可往返", '"sse"' in _tr4 and "ensure_sse" in _tr4)
+check("Mock 支持循环", "LOOP_OPEN_RE" in _ms4 and "{{/for}}" in _ms4)
+check("Mock 支持分页参数", "def page_args" in _ms4 and '"page"' in _ms4)
+check("循环展开有上限", "MAX_REPEAT" in _ms4 and "MAX_PAGE_SIZE" in _ms4)
+check("AI 会写循环模板", "{{for size}}" in _ma4 and "BODY_PRESETS" in _ma4)
+check("AI 响应体对话框", "class BodyAiDialog" in _mp4 and "_ai_body" in _mp4)
+check("路由编辑器有例子菜单", "def _examples" in _mp4 and "BODY_SNIPPETS" in _mp4)
+check("导入导出是小弹层", "def open_transfer" in _mw4 and "_import_file" in _mw4
+      and "sidebar.transferRequested" in _mw4 and "TransferDialog(self.store, self)" in _mw4)
+check("圆角遮罩用解析圆", "_rounded_region" in _mw4 and "RegionType.Ellipse" in _mw4)
+check("标题栏左右留白一致", "lay.setContentsMargins(16, 0, 16, 0)" in _mw4)
+check("改名统一为 Mock 服务", "Mock 数据…" not in (ROOT / "app" / "request_panel.py").read_text(
+      encoding="utf-8") and '"Mock 服务…"' in _mw4)
+check("README 写了 SSE 与循环", "SSE" in _rd4 and "{{for size}}" in _rd4)
+check("更新内容写了 SSE", any("SSE 请求" in x for x in ALL_ITEMS))
+check("更新内容写了 Mock 循环", any("{{for size}}" in x for x in ALL_ITEMS))
+check("更新内容写了导入导出小弹层", any("小弹层" in x for x in ALL_ITEMS))
+check("更新内容写了圆角修复", any("圆角" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

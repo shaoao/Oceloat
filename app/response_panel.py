@@ -587,11 +587,14 @@ class ResponsePanel(QWidget):
         self.center.addWidget(self.content)
         from .ws_panel import WsLogView
         from .sio_panel import SioLogView
+        from .sse_panel import SseLogView
 
         self.ws_view = WsLogView()
         self.center.addWidget(self.ws_view)
         self.sio_view = SioLogView()
         self.center.addWidget(self.sio_view)
+        self.sse_view = SseLogView()
+        self.center.addWidget(self.sse_view)
         self._is_ws = False
         self._realtime_kind = "ws"
         self._stale_notice = True
@@ -970,8 +973,9 @@ class ResponsePanel(QWidget):
             self.spinner.stop()
         self.response = None
         self._is_ws = True
-        self._realtime_kind = "sio" if kind == "sio" else "ws"
-        view = self.sio_view if self._realtime_kind == "sio" else self.ws_view
+        self._realtime_kind = kind if kind in ("sio", "sse") else "ws"
+        view = (self.sse_view if self._realtime_kind == "sse"
+                else self.sio_view if self._realtime_kind == "sio" else self.ws_view)
         self.center.setCurrentWidget(view)
         self.tabs_row.hide()
         self._set_head_visible(True)
@@ -1002,12 +1006,15 @@ class ResponsePanel(QWidget):
             up * 1000, lambda ms: human_elapsed(int(ms)) if ms >= 50 else "")
         self.size_label.animate_number(
             int(stats.get("bytes_in") or 0), lambda b: human_size(int(b)))
-        self.type_label.setText("Socket.IO" if self._realtime_kind == "sio" else "WebSocket")
+        self.type_label.setText({"sio": "Socket.IO", "sse": "SSE"}.get(
+            self._realtime_kind, "WebSocket"))
         self._set_metrics_visible(bool(up >= 0.05))
         self._set_dots(True)
         self.dot3.hide()
 
     def _active_realtime_view(self):
+        if self._realtime_kind == "sse":
+            return self.sse_view
         return self.sio_view if self._realtime_kind == "sio" else self.ws_view
 
     def ws_add_frame(self, frame) -> None:

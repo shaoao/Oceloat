@@ -2269,9 +2269,9 @@ def main() -> int:
         orig_menu = _rp.Menu
         _rp.Menu = _FakeMenu
         try:
-            picked[0] = "Mock 数据"
+            picked[0] = "Mock 服务"
             req_ed._on_more(req_ed.urlbar.more_btn)
-            picked[0] = "一键 Mock"
+            picked[0] = "生成 Mock 路由"
             req_ed._on_more(req_ed.urlbar.more_btn)
             picked[0] = "复制请求"
             req_ed._on_more(req_ed.urlbar.more_btn)
@@ -3838,7 +3838,7 @@ def main() -> int:
         check("一键 Mock 的信号还在", hasattr(w.editor, "mockizeRequested"))
         _rp_src = (Path(__file__).resolve().parent.parent / "app" / "request_panel.py").read_text(
             encoding="utf-8")
-        check("更多菜单里有一键 Mock", "一键 Mock（生成 Mock 路由）" in _rp_src
+        check("更多菜单里有生成 Mock 路由", "生成 Mock 路由" in _rp_src
               and "self.mockizeRequested.emit()" in _rp_src)
 
         return 0
@@ -3870,7 +3870,7 @@ def main() -> int:
         dlg = getattr(w, "_mock_dialog", None)
         check("Mock 中心是非模态窗口", dlg is not None and not dlg.isModal(),
               f"modal={dlg.isModal() if dlg else 'None'}")
-        check("Mock 中心有自己的窗口名", dlg is not None and dlg.windowTitle() == "Mock 中心",
+        check("Mock 窗口有自己的窗口名", dlg is not None and dlg.windowTitle() == "Mock 服务",
               dlg.windowTitle() if dlg else "")
         first = dlg
         w.open_mock()
@@ -4059,9 +4059,170 @@ def main() -> int:
         _sh.rmtree(old_dir, ignore_errors=True)
         return 0
 
+
+    def step39() -> int:
+        """v1.0.76：SSE 请求、高级 Mock 模板、AI 响应体、导入导出小弹层。"""
+        import time as _time
+
+        from PyQt6.QtCore import QPoint
+
+        from app.mock_server import render_placeholders
+        from app.sse_panel import default_sse, ensure_sse
+        from app.sse_client import SseClient, SseFrame
+        from app.request_panel import REALTIME_METHODS, SSE_METHOD
+        from app.widgets import Button as _Btn
+
+        # ---- 高级模板：循环 + 分页 + 行号
+        tpl = ('{"page": {{@page}}, "size": {{@size}}, "total": {{@total(86)}}, '
+               '"list": [{{for size}}{"id": {{@row}}, "name": "{{@cname}}"}{{/for}}]}')
+        out = render_placeholders(tpl, {"page": "2", "size": "3"})
+        data = _json.loads(out)
+        check("分页参数进响应体", data["page"] == 2 and data["size"] == 3, out[:80])
+        check("{{for size}} 展开成对应条数", len(data["list"]) == 3, str(data["list"]))
+        check("跨页行号连续", [x["id"] for x in data["list"]] == [4, 5, 6],
+              str([x["id"] for x in data["list"]]))
+        loop = _json.loads(render_placeholders('{"a": [{{for 3}}{"i": {{@i}}}{{/for}}]}'))
+        check("固定次数循环", [x["i"] for x in loop["a"]] == [1, 2, 3], str(loop))
+        nested = render_placeholders('{{for 2}}{"x": [{{for 2}}{"j": {{@j}}}{{/for}}]}{{/for}}')
+        check("循环支持嵌套", nested.count('"j"') == 4, nested[:60])
+        big = render_placeholders('{"a": [{{for 99999}}{"i": {{@i}}}{{/for}}]}')
+        check("循环行数有上限", big.count('"i"') <= 500, str(big.count('"i"')))
+        check("占位符照旧可用", "{{@name}}" not in render_placeholders("{{@name}}"))
+
+        # 真起一个 Mock 服务，按 ?page / ?size 取第二页
+        import urllib.request as _ur
+
+        from app.mock_server import MockServer, route as _route
+
+        srv2 = MockServer()
+        srv2.start([_route("分页", "GET", "/api/items", 200,
+                           '{"page": {{@page}}, "list": [{{for size}}'
+                           '{"id": {{@row}}}{{/for}}]}')], 0)
+        with _ur.urlopen(f"http://127.0.0.1:{srv2.port}/api/items?page=2&size=3") as resp:
+            page2 = _json.loads(resp.read())
+        srv2.stop()
+        check("分页请求真的能翻页", page2["page"] == 2
+              and [x["id"] for x in page2["list"]] == [4, 5, 6], str(page2)[:80])
+
+        # ---- SSE：请求模型 / 编辑器 / 响应视图 / 传输层
+        req = new_request("SSE Request", SSE_METHOD, "")
+        check("SSE 属于实时协议", SSE_METHOD in REALTIME_METHODS)
+        sse = ensure_sse(req)
+        check("SSE 默认自动重连", sse.get("auto_reconnect") is True and sse.get("retry_ms"))
+        check("SSE 默认值完整", set(default_sse()) <= set(sse))
+        w.new_sse()
+        app.processEvents()
+        check("新建 SSE 后停在 SSE 编辑页",
+              w.editor._mode == "sse" and w.editor.sse_page.isVisible())
+        check("SSE 地址栏显示协议徽标", w.editor.urlbar.method.method() == "SSE")
+        tab = w.current_tab()
+        check("SSE 标签带自己的配置", isinstance(tab["request"].get("sse"), dict))
+        w._ws_tab = tab["id"]
+        check("SSE 用独立客户端", w._realtime_client() is w.sse_client)
+        w.response.show_ws({"log": [], "state": "open", "uptime": 2}, "https://x/e", kind="sse")
+        check("响应区切到事件日志", w.response._realtime_kind == "sse"
+              and w.response.type_label.text() == "SSE")
+        frame = SseFrame(kind="update", data=b'{"n": 1}', size=9, event_id="7")
+        w._on_ws_frame(frame)
+        sess = w._ws_session(tab)
+        check("收到的事件进日志", sess["log"] and sess["log"][-1].kind == "update")
+        check("SSE 帧预览是正文", frame.inline_preview().startswith("{"))
+
+        # 传输层：本地起一个真 SSE 服务，连上后收到事件
+        import threading as _th
+        from http.server import BaseHTTPRequestHandler as _BHH, ThreadingHTTPServer as _THS
+
+        class _SSE(_BHH):
+            def log_message(self, *_a):
+                pass
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                self.wfile.write(b"id: 1\ndata: hello\n\n")
+                self.wfile.flush()
+
+        srv = _THS(("127.0.0.1", 0), _SSE)
+        _th.Thread(target=srv.serve_forever, daemon=True).start()
+        got = []
+        client = SseClient()
+        client.frame.connect(lambda f: got.append(f))
+        client.connect_to(f"127.0.0.1:{srv.server_address[1]}/s", [], "", auto_reconnect=False)
+        for _ in range(60):
+            app.processEvents()
+            if any(f.dir == "in" for f in got):
+                break
+            _time.sleep(0.02)
+        check("SSE 客户端能收到事件", any(f.dir == "in" and f.text() == "hello" for f in got),
+              str([(f.dir, f.kind) for f in got]))
+        client.disconnect_ws()
+        srv.shutdown()
+
+        # ---- 导入导出：SSE 往返 + 小弹层入口
+        from app import transfer as _tr
+
+        # 导出用同一条真实请求：SSE 的选项要进 x-ocelot，导回来还是 SSE
+        item = _tr._postman_item(tab["request"])
+        sse_extra = (item.get("x-ocelot") or {}).get("sse")
+        check("导出保留 SSE 选项", isinstance(sse_extra, dict)
+              and sse_extra.get("auto_reconnect") is True, str(item.get("x-ocelot"))[:80])
+        back_req = _tr._from_postman_item(item)
+        check("导入还原 SSE 请求", back_req is not None
+              and (back_req.get("method") or "").upper() == "SSE"
+              and isinstance(back_req.get("sse"), dict), str(back_req)[:80])
+
+        from app.widgets import Menu
+        orig_exec = Menu.exec
+        seen = {}
+
+        def fake_exec(self, *_a, **_k):
+            seen["titles"] = [a.text() for a in self.actions()]
+            return None
+
+        Menu.exec = fake_exec
+        try:
+            w.open_transfer("import", w._settings_btn)
+        finally:
+            Menu.exec = orig_exec
+        check("导入导出是小弹层而不是窗口",
+              any("导入集合" in t for t in seen.get("titles", [])),
+              str(seen.get("titles")))
+
+        # ---- 圆角遮罩：角上被裁掉，中心保留
+        from app.main_window import _rounded_region
+
+        region = _rounded_region(200, 120, 12)
+        check("圆角遮罩裁掉四个角", not region.contains(QPoint(1, 1))
+              and not region.contains(QPoint(198, 118)))
+        check("圆角遮罩保留中心", region.contains(QPoint(100, 60)))
+        # 第 1 行从 x=7 开始、第 3 行从 x=5 开始：每行只差 1px，才是平滑的弧
+        check("圆角遮罩边缘是一像素台阶",
+              region.contains(QPoint(7, 1)) and not region.contains(QPoint(6, 1))
+              and region.contains(QPoint(5, 3)))
+
+        # ---- Mock：AI 生成入口 + 常用例子
+        from app import mock_ai as _mai
+        from app.mock_panel import RouteDialog
+
+        dlg = RouteDialog(w.store, None, w)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        labels = [b.text() for b in dlg.findChildren(_Btn)]
+        check("路由编辑有 AI 生成入口", any("AI 生成" in t for t in labels), str(labels[:8]))
+        check("路由编辑有例子入口", any(t == "例子" for t in labels))
+        check("AI 提示词要求用循环", "{{for size}}" in _mai._SYS_BODY)
+        check("AI 有常用例子", len(_mai.BODY_PRESETS) >= 5
+              and all(isinstance(p, tuple) and len(p) == 2 for p in _mai.BODY_PRESETS))
+        check("例子片段可以直接插入", len(_mai.BODY_SNIPPETS) >= 3
+              and all("{{" in s for _l, s in _mai.BODY_SNIPPETS))
+        body = _mai.parse_body('```json\n{"a": 1}\n```')
+        check("AI 响应体清洗掉代码围栏", body.strip().startswith("{"), body[:30])
+        dlg.deleteLater()
+        return 0
+
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

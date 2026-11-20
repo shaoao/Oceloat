@@ -5,11 +5,13 @@ import base64
 import copy as _copy
 import json
 import os
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import (
     QEasingCurve,
+    QObject,
     QEvent,
     QPoint,
     QPointF,
@@ -28,7 +30,6 @@ from PyQt6.QtGui import (
     QGuiApplication,
     QKeySequence,
     QPainter,
-    QPainterPath,
     QPen,
     QRegion,
     QShortcut,
@@ -46,12 +47,13 @@ from PyQt6.QtWidgets import (
 
 from . import i18n, icons
 from .brand import BrandMark, app_icon as brand_icon
-from .code_editor import CodeView, human_elapsed
+from .code_editor import CodeView, human_elapsed, human_size
 from .dialogs import CodeDialog, CommandPalette, EnvDialog, ImportCurlDialog, SettingsDialog
 from .http_client import ApiClient, Response
 from .ws_client import WsClient
 from .sio_client import SocketIoClient
-from .request_panel import REALTIME_METHODS, SIO_METHOD, RequestEditor
+from .sse_client import SseClient, SseFrame
+from .request_panel import REALTIME_METHODS, SIO_METHOD, SSE_METHOD, RequestEditor
 from .response_panel import ResponsePanel
 from .sidebar import Sidebar
 from .store import Store, kv, new_request, resolve_vars, uid
@@ -407,6 +409,57 @@ class SideHandle(QSplitterHandle):
         p.end()
 
 
+def _rounded_region(w: int, h: int, radius: int) -> QRegion:
+    """按解析圆裁出窗口遮罩。
+
+    以前把圆角路径压成多边形再转 QRegion：弧线只剩几段折线，
+    圆弧只剩几段折线，实际显示就是右下角「缺一小块」的台阶（用户截图）。
+    这里改成「整块矩形减去四角的『方角减圆角』」：QRegion 的椭圆是逐扫描线
+    解析出来的，每一行只差 1px，边缘看起来才是连续的弧。
+    """
+    region = QRegion(0, 0, max(1, w), max(1, h))
+    r = max(0, min(int(radius), w // 2, h // 2))
+    if r <= 0:
+        return region
+    for cx, cy in ((0, 0), (w - 2 * r, 0), (0, h - 2 * r), (w - 2 * r, h - 2 * r)):
+        square = QRegion(cx, cy, 2 * r, 2 * r)
+        circle = QRegion(cx, cy, 2 * r, 2 * r, QRegion.RegionType.Ellipse)
+        region = region.subtracted(square.subtracted(circle))
+    return region
+
+
+class _UrlFetcher(QObject):
+    """后台抓一个集合地址（最多 8 MB），抓完用信号把文本丢回主线程。
+
+    只为一个「从 URL 导入」开线程不值得建类，但网络请求绝不能在界面线程里
+    urllib.urlopen —— 网慢一点整个窗口就假死。
+    """
+
+    done = pyqtSignal(str, str)          # (文本, 错误)
+
+    def start(self, url: str) -> None:
+        def worker():
+            text, error = "", ""
+            try:
+                import urllib.request
+
+                req = urllib.request.Request(url, headers={"User-Agent": "Ocelot"})
+                with urllib.request.urlopen(req, timeout=20) as resp:   # noqa: S310
+                    raw = resp.read(8 * 1024 * 1024 + 1)
+                if len(raw) > 8 * 1024 * 1024:
+                    error = "文件超过 8 MB，请先下载到本地再导入"
+                else:
+                    text = raw.decode("utf-8", "replace")
+            except Exception as exc:      # noqa: BLE001
+                error = str(exc)
+            try:
+                self.done.emit(text, error)
+            except RuntimeError:          # 窗口已经销毁
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+
 class CardRoot(QWidget):
     """内容根容器：尺寸一变就请主窗重裁一次圆角。
 
@@ -671,6 +724,14 @@ class MainWindow(QWidget):
         self.sio.closed.connect(self._on_ws_closed)
         self.sio.failed.connect(self._on_ws_failed)
         self.sio.ponged.connect(self._on_ws_pong)
+        # SSE：只收不发的事件流，状态槽与 WS 共用（日志 / 计时 / 胶囊都复用）
+        self.sse_client = SseClient(self)
+        self.sse_client.stateChanged.connect(self._on_ws_state)
+        self.sse_client.frame.connect(self._on_ws_frame)
+        self.sse_client.opened.connect(self._on_ws_opened)
+        self.sse_client.closed.connect(self._on_ws_closed)
+        self.sse_client.failed.connect(self._on_ws_failed)
+        self.sse_client.retrying.connect(self._on_sse_retry)
         self._ws_tab: Optional[str] = None
         self._ws_replay_hook = None
         # 连接时长每秒走一格：不然「已连接 42.60s」会一直停在连上那一刻
@@ -684,6 +745,7 @@ class MainWindow(QWidget):
         # 误关标签的兜底：草稿留 60 秒，重开同一个请求就接上；最近关掉的几个
         # 还能用 ⌘⇧T 整条捡回来（含响应）。
         self._closed_tabs: List[Dict[str, Any]] = []
+        self._last_import_url = ""
         self.DRAFT_TTL = 60
         self.DRAFT_MAX = 6
         self._sidebar_target = int(store.settings.get("sidebar_width", 268))
@@ -805,7 +867,9 @@ class MainWindow(QWidget):
         self.sidebar.requestDeleted.connect(self._on_request_deleted)
         self.sidebar.changed.connect(self._on_store_changed)
         self.sidebar.runFolder.connect(self.run_collection)
-        self.sidebar.transferRequested.connect(self.open_transfer)
+        # 侧栏那颗导入/导出：菜单贴着那颗按钮弹，不再铺一层全屏模糊
+        self.sidebar.transferRequested.connect(
+            lambda: self.open_transfer("import", self.sidebar.transfer_btn))
         self.sidebar.trashRequested.connect(self.open_trash)
         self.sidebar.notify.connect(lambda msg: self.toast.show_message(msg, "success"))
 
@@ -951,7 +1015,9 @@ class MainWindow(QWidget):
         bar.setFixedHeight(46)
         bar.setMouseTracking(True)
         lay = QHBoxLayout(bar)
-        lay.setContentsMargins(16, 0, 12, 0)
+        # 左右内边距必须一样：以前右边 12、左边 16，齿轮比交通灯更贴边，
+        # 右上角看着就「不齐」；间距也统一成 10，胶囊与两颗图标同一条基线。
+        lay.setContentsMargins(16, 0, 16, 0)
         lay.setSpacing(10)
         self.lights = TrafficLights(self, bar)
         lay.addWidget(self.lights, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -973,13 +1039,21 @@ class MainWindow(QWidget):
         self.env_pill.manageRequested.connect(self.show_envs)
         self.env_pill.clicked.connect(lambda: self.toast.show_message("已切换环境", "success"))
         lay.addWidget(self.env_pill)
+        lay.addSpacing(2)
+        # 两颗图标自成一组：组内 2px、组间 10px，视觉上比三个等距按钮更像
+        # 「一个工具区」，右侧也不会因为间距过大显得松散。
         palette_btn = icon_button("keyboard", "命令面板  ⌘K", 26, 14)
         palette_btn.clicked.connect(self.show_palette)
         settings_btn = icon_button("gear", "设置与更多  ⌘,", 26, 15)
         self._settings_btn = settings_btn
         settings_btn.clicked.connect(lambda: self._show_settings_menu(settings_btn))
-        lay.addWidget(palette_btn)
-        lay.addWidget(settings_btn)
+        tools = QWidget()
+        tl = QHBoxLayout(tools)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(2)
+        tl.addWidget(palette_btn)
+        tl.addWidget(settings_btn)
+        lay.addWidget(tools, 0, Qt.AlignmentFlag.AlignVCenter)
         return bar
 
     def _settings_menu(self) -> Tuple[Menu, Dict[str, Any]]:
@@ -1025,9 +1099,9 @@ class MainWindow(QWidget):
         elif chosen is a_curl:
             self.import_curl()
         elif chosen is a_import:
-            self.import_collection()
+            self.open_transfer("import", anchor)
         elif chosen is a_export:
-            self.export_collection()
+            self.open_transfer("export", anchor)
         elif chosen is a_quit:
             self.close()
 
@@ -1077,9 +1151,7 @@ class MainWindow(QWidget):
         if getattr(self, "_mask_size", None) == (w, h):
             return
         self._mask_size = (w, h)
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, w, h), self.CARD_RADIUS, self.CARD_RADIUS)
-        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        self.setMask(_rounded_region(w, h, self.CARD_RADIUS))
         self.root.clearMask()
 
     def paintEvent(self, _e):
@@ -1243,7 +1315,8 @@ class MainWindow(QWidget):
             return
         method = str(req.get("method") or "GET").upper()
         if method in REALTIME_METHODS:
-            self.toast.show_message(i18n.tr("WebSocket / Socket.IO 不能做 HTTP Mock"), "info")
+            self.toast.show_message(i18n.tr("实时协议（WebSocket / Socket.IO / SSE）不能做 HTTP Mock"),
+                                    "info")
             return
         resp = tab.get("response")
         body, ctype, status = "", "application/json", 200
@@ -1329,6 +1402,16 @@ class MainWindow(QWidget):
 
         req = new_request("WebSocket Request", "WS", "")
         req["ws"] = default_ws()
+        self._open_request_obj(req, node_id=None)
+        self.editor.focus_url()
+
+    def new_sse(self) -> None:
+        """新建 SSE 请求：只填地址就能连，连上后接收服务器推送。"""
+        from .sse_panel import default_sse
+
+        req = new_request("SSE Request", SSE_METHOD, "")
+        req["sse"] = default_sse()
+        req["params"] = []
         self._open_request_obj(req, node_id=None)
         self.editor.focus_url()
 
@@ -1902,8 +1985,13 @@ class MainWindow(QWidget):
     def send_current(self) -> None:
         tab = self.current_tab()
         if tab is not None and (tab["request"].get("method") or "").upper() in REALTIME_METHODS:
-            # 已连上时 ⌘↵ 就是「发这条消息 / 事件」；没连上就是「建立连接」
-            client = self.sio if (tab["request"].get("method") or "").upper() == SIO_METHOD else self.ws
+            # 已连上时 ⌘↵ 就是「发这条消息 / 事件」；没连上就是「建立连接」。
+            # SSE 只收不发：连上后 ⌘↵ 不再有「发送」语义，只负责断开。
+            method = (tab["request"].get("method") or "").upper()
+            if method == SSE_METHOD:
+                self.ws_toggle(tab)
+                return
+            client = self.sio if method == SIO_METHOD else self.ws
             if client.is_open and self._ws_tab == tab["id"]:
                 self._ws_send_from_composer()
             else:
@@ -1937,7 +2025,7 @@ class MainWindow(QWidget):
         self.client.send(req, settings, self.store.env_vars())
 
     def _abort(self) -> None:
-        for client in (self.sio, self.ws):
+        for client in (self.sio, self.ws, self.sse_client):
             if client.busy:
                 client.disconnect_ws()
                 return
@@ -1947,8 +2035,11 @@ class MainWindow(QWidget):
     def _realtime_client(self):
         """当前实时标签用哪条连接；不依赖界面当前页，避免跨标签串线。"""
         tab = self._tab(self._ws_tab) if self._ws_tab else None
-        if tab is not None and (tab.get("request", {}).get("method") or "").upper() == SIO_METHOD:
+        method = (tab.get("request", {}).get("method") or "").upper() if tab else ""
+        if method == SIO_METHOD:
             return self.sio
+        if method == SSE_METHOD:
+            return self.sse_client
         return self.ws
 
     @staticmethod
@@ -1967,7 +2058,10 @@ class MainWindow(QWidget):
         raw = resolve_vars(self.editor.urlbar.url_text(), self.store.env_vars()).strip()
         if not raw:
             return ""
-        composer = self.editor.sio if self.editor.is_sio() else self.editor.ws
+        if self.editor.is_sse():
+            composer = self.editor.sse
+        else:
+            composer = self.editor.sio if self.editor.is_sio() else self.editor.ws
         env = self.store.env_vars()
         pairs = [(resolve_vars(str(r["key"]), env),
                   resolve_vars(str(r.get("value", "")), env))
@@ -2013,9 +2107,10 @@ class MainWindow(QWidget):
     def _ws_show(self, tab: Dict[str, Any]) -> None:
         sess = self._ws_session(tab)
         method = (tab.get("request", {}).get("method") or "").upper()
-        kind = "sio" if method == SIO_METHOD else "ws"
+        kind = ("sio" if method == SIO_METHOD else
+                "sse" if method == SSE_METHOD else "ws")
         if self._ws_tab == tab["id"]:
-            client = self.sio if kind == "sio" else self.ws
+            client = self._realtime_client()
             sess["state"] = client.state
             sess["uptime"] = client.stats().get("uptime", 0.0)
         # 切回一个还连着（或已断开）的标签时，按钮要保持「断开 / 连接」的正确语义
@@ -2027,15 +2122,18 @@ class MainWindow(QWidget):
         """连接 / 断开。切换标签时连接跟着走，但日志各存各的。"""
         tid = tab["id"]
         req = tab["request"]
-        sio = (req.get("method") or "").upper() == SIO_METHOD
-        client = self.sio if sio else self.ws
+        method = (req.get("method") or "").upper()
+        sio = method == SIO_METHOD
+        sse = method == SSE_METHOD
+        client = self.sse_client if sse else (self.sio if sio else self.ws)
         if self._ws_tab == tid and client.busy:
             client.disconnect_ws()
             return
         url = self._realtime_url()
         if not url:
             self.toast.show_message(
-                i18n.tr("请先填写 Socket.IO 地址") if sio
+                i18n.tr("请先填写 SSE 地址") if sse
+                else i18n.tr("请先填写 Socket.IO 地址") if sio
                 else i18n.tr("请先填写 WebSocket 地址"), "error")
             self.editor.focus_url()
             return
@@ -2052,9 +2150,16 @@ class MainWindow(QWidget):
                      "uptime": 0.0, "url": url})
         self.editor.set_ws_state("connecting")
         if self.tabstrip.current() == tid:
-            self.response.show_ws(sess, url, kind="sio" if sio else "ws")
+            self.response.show_ws(sess, url, kind="sio" if sio else ("sse" if sse else "ws"))
         verify = bool(self.store.settings.get("verify_ssl", True))
-        if sio:
+        if sse:
+            from .sse_panel import ensure_sse
+            option = ensure_sse(req)
+            ok = self.sse_client.connect_to(
+                url, self._ws_headers(req), str(option.get("last_event_id") or ""),
+                auto_reconnect=bool(option.get("auto_reconnect", True)),
+                verify_ssl=verify, retry_ms=int(option.get("retry_ms") or 1500))
+        elif sio:
             from .sio_panel import ensure_sio
             option = ensure_sio(req)
             ok = self.sio.connect_to(
@@ -2161,6 +2266,7 @@ class MainWindow(QWidget):
         tab = self._tab(self._ws_tab) if self._ws_tab else None
         client = self._realtime_client()
         sio = client is self.sio
+        sse = client is self.sse_client
         if tab is not None:
             sess = self._ws_session(tab)
             sess["protocol"] = protocol or ""
@@ -2169,7 +2275,9 @@ class MainWindow(QWidget):
         self._ws_tick.start()
         if tab is not None and self.tabstrip.current() == tab["id"]:
             self.response.ws_set_state("open", client.stats())
-        if sio:
+        if sse:
+            self.toast.show_message(i18n.tr("已连上 SSE 事件流，等服务器推送"), "success")
+        elif sio:
             self.toast.show_message(
                 i18n.trf("Socket.IO 已连接 · {p}", p=protocol or i18n.tr("默认命名空间")),
                 "success")
@@ -2189,6 +2297,19 @@ class MainWindow(QWidget):
         if code not in (1000, 1005, 1006):
             self.toast.show_message(i18n.trf("连接已关闭（{code}）{reason}",
                                              code=code, reason=reason), "info")
+
+    def _on_sse_retry(self, attempt: int, delay_ms: int) -> None:
+        """SSE 断线重连：日志里留一句，别让界面看起来「什么都没发生」。"""
+        tab = self._tab(self._ws_tab) if self._ws_tab else None
+        if tab is None:
+            return
+        frame = SseFrame(dir="sys", kind="retry", data=b"", size=0)
+        msg = i18n.trf("第 {n} 次重连，{s} 秒后重试", n=attempt, s=round(delay_ms / 1000, 1))
+        frame.data = msg.encode("utf-8")
+        frame.size = len(frame.data)
+        self._on_ws_frame(frame)
+        if tab is not None and self.tabstrip.current() == tab["id"]:
+            self.editor.set_ws_state("connecting")
 
     def _on_ws_failed(self, message: str) -> None:
         self.editor.set_ws_state("idle")
@@ -2684,13 +2805,220 @@ class MainWindow(QWidget):
     def export_collection(self) -> None:
         self.open_transfer("export")
 
-    def open_transfer(self, page: str = "import") -> None:
-        """集合的导入 / 导出：一个对话框里切换来源、选文件、导出。"""
+    def open_transfer(self, page: str = "import", anchor: Optional[QWidget] = None) -> None:
+        """导入 / 导出：一颗按钮弹出的小菜单，不再开一个带背景模糊的大窗口。
+
+        以前这里是一个 580×660 的模态窗，铺一层全屏模糊遮罩，切页签时还要
+        在窗里翻页；实际每次只是「选个来源 → 选个文件」。现在做成贴着按钮的
+        小弹层：菜单里直接列来源与导出格式，点完就进系统文件选择框，结果用
+        toast 报一句，整个主界面不动。
+        """
+        from .transfer import EXPORT_TARGETS, IMPORT_SOURCES
+
+        t = theme()
+        menu = Menu(self)
+        imp = Menu(menu, "导入集合")
+        imp.setIcon(icons.icon("download", t.text, 14))
+        menu.addMenu(imp)
+        for key, title, desc in IMPORT_SOURCES:
+            act = imp.addAction(icons.icon("file", t.text_dim, 13, 1.5), title)
+            act.setToolTip(desc)
+            act.triggered.connect(lambda _c=False, k=key, ti=title: self._import_file(k, ti))
+        imp.addSeparator()
+        a_clip = imp.addAction(icons.icon("paste", t.text_dim, 13, 1.5), "从剪贴板导入")
+        a_clip.setToolTip("自动识别 JSON 集合或 cURL 命令，直接粘过来")
+        a_clip.triggered.connect(self._import_clipboard)
+        a_url = imp.addAction(icons.icon("link", t.text_dim, 13, 1.5), "从 URL 导入")
+        a_url.setToolTip("填一个远程 JSON / YAML 地址，自动下载并识别来源")
+        a_url.triggered.connect(self._import_url)
+
+        exp = Menu(menu, "导出集合")
+        exp.setIcon(icons.icon("file", t.text, 14))
+        menu.addMenu(exp)
+        for key, title, desc in EXPORT_TARGETS:
+            act = exp.addAction(icons.icon("download", t.text_dim, 13, 1.5), title)
+            act.setToolTip(desc)
+            act.triggered.connect(lambda _c=False, k=key: self._export_bundle(k))
+
+        menu.addSeparator()
+        a_more = menu.addAction(icons.icon("transfer", t.text, 14), "打开导入导出面板…")
+        a_more.setToolTip("需要拖放文件、逐个勾选时可以打开完整面板")
+        a_more.triggered.connect(lambda: self._open_transfer_window(page))
+
+        if anchor is not None:
+            pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
+        else:
+            # 没有锚点（命令面板 / 快捷键触发）就贴着鼠标弹，仍在主窗口范围内
+            from PyQt6.QtGui import QCursor
+
+            pos = QCursor.pos()
+        menu.exec(pos)
+
+    def _open_transfer_window(self, page: str) -> None:
         from .dialogs import TransferDialog
 
         dlg = TransferDialog(self.store, self)
         dlg.imported.connect(self._on_imported)
         dlg.exec()
+
+    # -------------------------------------------------- 导入 / 导出（小弹层）
+    def _import_file(self, key: str, title: str) -> None:
+        """选文件 → 识别 → 追加到集合列表，一步到位。"""
+        from PyQt6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, i18n.tr(title), "",
+            "集合文件 (*.json *.yaml *.yml *.har);;所有文件 (*)")
+        if not path:
+            return
+        try:
+            text = open(path, encoding="utf-8").read()
+        except UnicodeDecodeError:
+            try:
+                text = open(path, encoding="utf-8-sig").read()
+            except Exception as exc:      # noqa: BLE001
+                self.toast.show_message(i18n.trf("读取失败：{err}", err=exc), "error")
+                return
+        except Exception as exc:          # noqa: BLE001
+            self.toast.show_message(i18n.trf("读取失败：{err}", err=exc), "error")
+            return
+        stem = os.path.splitext(os.path.basename(path))[0]
+        self._finish_import(text, stem)
+
+    def _import_clipboard(self) -> None:
+        from .importer import parse_curl
+        from .transfer import count_requests, parse_text
+
+        text = QApplication.clipboard().text() or ""
+        if not text.strip():
+            self.toast.show_message(i18n.tr("剪贴板是空的"), "info")
+            return
+        if text.strip().lower().startswith("curl"):
+            req, err = parse_curl(text)
+            if err or req is None:
+                self.toast.show_message(err or i18n.tr("cURL 解析失败"), "error")
+                return
+            self.store.collections.append(req)
+            self.store.save()
+            self._on_imported(1)
+            self.toast.show_message(i18n.tr("已从剪贴板导入 1 个请求"), "success")
+            return
+        nodes, _fmt, err = parse_text(text, fallback_name=i18n.tr("剪贴板集合"))
+        if err or not nodes:
+            self.toast.show_message(err or i18n.tr("剪贴板内容不是可识别的集合"), "error")
+            return
+        self.store.collections.extend(nodes)
+        self.store.save()
+        total = count_requests(nodes)
+        self._on_imported(total)
+        self.toast.show_message(i18n.trf("已从剪贴板导入 {n} 个请求", n=total), "success")
+
+    def _import_url(self) -> None:
+        from .dialogs import PromptDialog
+
+        clip = QApplication.clipboard().text() or ""
+        dlg = PromptDialog(i18n.tr("从 URL 导入"), i18n.tr("集合 JSON / YAML 的地址"),
+                           clip.strip() if clip.strip().startswith("http") else "https://", self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        url = dlg.value().strip()
+        if not url.lower().startswith(("http://", "https://")):
+            self.toast.show_message(i18n.tr("地址要以 http:// 或 https:// 开头"), "error")
+            return
+        self.toast.show_message(i18n.tr("正在下载…"), "info")
+        self._last_import_url = url
+        fetcher = _UrlFetcher(self)
+        fetcher.done.connect(self._on_url_text)
+        fetcher.start(url)
+
+    def _on_url_text(self, text: str, error: str) -> None:
+        if error or not text.strip():
+            self.toast.show_message(
+                i18n.trf("下载失败：{err}", err=error or "内容为空"), "error")
+            return
+        stem = ""
+        try:
+            from urllib.parse import urlparse
+
+            tail = urlparse(self._last_import_url).path.rstrip("/").split("/")[-1]
+            stem = tail.rsplit(".", 1)[0] if "." in tail else tail
+        except Exception:      # noqa: BLE001
+            stem = ""
+        self._finish_import(text, stem or i18n.tr("远程集合"))
+
+    def _finish_import(self, text: str, stem: str) -> None:
+        """识别文本 → 落库 → toast。识别失败时给的是模型的原始错误说明。"""
+        from .transfer import FORMAT_LABELS, environments_of, parse_text, summarize
+
+        nodes, fmt, err = parse_text(text, fallback_name=stem)
+        if err or not nodes:
+            self.toast.show_message(err or i18n.tr("文件里没有可导入的请求"), "error")
+            return
+        self.store.collections.extend(nodes)
+        existing = {e.get("name") for e in self.store.environments}
+        added_envs = 0
+        for env in environments_of(text):
+            if env.get("name") in existing:
+                continue
+            env["id"] = uid()
+            self.store.environments.append(env)
+            existing.add(env.get("name"))
+            added_envs += 1
+        self.store.save()
+        stats = summarize(nodes)
+        self._on_imported(stats["requests"])
+        bits = [i18n.trf("{n} 个请求", n=stats["requests"])]
+        if stats["folders"]:
+            bits.append(i18n.trf("{n} 个文件夹", n=stats["folders"]))
+        if added_envs:
+            bits.append(i18n.trf("{n} 套环境变量", n=added_envs))
+        self.toast.show_message(
+            i18n.trf("✓ 已识别 {fmt}：{detail}", fmt=FORMAT_LABELS.get(fmt, fmt),
+                     detail=" · ".join(bits)), "success")
+
+    def _export_bundle(self, key: str) -> None:
+        """导出到文件：选路径 → 写盘 → toast，不再进「完成」页。"""
+        from PyQt6.QtWidgets import QFileDialog
+
+        from .transfer import EXT, to_har, to_ocelot, to_openapi, to_postman, to_yaml
+
+        stem = self._export_stem()
+        suffix = "YAML (*.yaml)" if key == "openapi-yaml" else (
+            "HAR (*.har)" if key == "har" else "JSON (*.json)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, i18n.tr("导出集合"), stem + EXT.get(key, ".json"), suffix)
+        if not path:
+            return
+        if key == "openapi-yaml" and not path.lower().endswith((".yaml", ".yml")):
+            path += ".yaml"
+        try:
+            if key == "ocelot":
+                text = json.dumps(to_ocelot(self.store), ensure_ascii=False, indent=2)
+            elif key == "postman":
+                text = json.dumps(to_postman(self.store), ensure_ascii=False, indent=2)
+            elif key == "openapi-json":
+                text = json.dumps(to_openapi(self.store), ensure_ascii=False, indent=2)
+            elif key == "openapi-yaml":
+                text = to_yaml(to_openapi(self.store))
+            else:
+                text = json.dumps(to_har(self.store), ensure_ascii=False, indent=2)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except Exception as exc:              # noqa: BLE001
+            self.toast.show_message(i18n.trf("导出失败：{err}", err=exc), "error")
+            return
+        self.toast.show_message(
+            i18n.trf("已导出 {name} · {size}", name=os.path.basename(path),
+                     size=human_size(len(text.encode("utf-8")))), "success")
+
+    def _export_stem(self) -> str:
+        import re
+
+        names = [str(c.get("name") or "").strip() for c in self.store.collections
+                 if str(c.get("name") or "").strip()]
+        stem = names[0] if len(names) == 1 else ""
+        stem = re.sub(r'[\\/:*?"<>|\n\r\t]+', "-", stem).strip(" .-")
+        return stem[:60] or "ocelot-collection"
 
     def open_trash(self) -> None:
         """回收站：恢复误删的集合 / 请求，恢复后立即回到原位置。"""
@@ -2843,6 +3171,8 @@ class MainWindow(QWidget):
             self.new_websocket()
         elif key == "new_sio":
             self.new_socketio()
+        elif key == "new_sse":
+            self.new_sse()
         elif key == "new_folder":
             self.sidebar._new_folder()
             self.toast.show_message("已新建文件夹", "success")

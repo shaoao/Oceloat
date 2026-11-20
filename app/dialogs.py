@@ -252,6 +252,12 @@ class GlassDialog(QDialog):
                                 and (self.BLUR_FIXED or _glass_everywhere()))
         if not self._user_moved:
             self._place_center()
+        # 内容多的窗口（Mock 路由编辑）在 13 寸屏上会顶到菜单栏，统一压一下高度
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            limit = max(360, screen.availableGeometry().height() - 96)
+            if self.height() > limit:
+                self.resize(self.width(), limit)
         if self._fixed_mode and not self._backdrop_on:
             self._backdrop_on = True
             backdrop.acquire(self)
@@ -3312,6 +3318,7 @@ class CommandPalette(QWidget):
         ("new_request", "新建请求", "plus", "⌘N"),
         ("new_ws", "新建 WebSocket 请求", "link", ""),
         ("new_sio", "新建 Socket.IO 请求", "link", ""),
+        ("new_sse", "新建 SSE 请求", "link", ""),
         ("new_folder", "新建文件夹", "folder", ""),
         ("send", "发送当前请求", "send", "⌘↵"),
         ("save", "保存到集合", "download", "⌘S"),

@@ -1103,6 +1103,8 @@ class Sidebar(QWidget):
         a_ws = menu.addAction(icons.icon("link", t.text, 14), i18n.tr("WebSocket 请求"))
         a_sio = menu.addAction(icons.icon("link", method_color("SIO", t), 14),
                                i18n.tr("Socket.IO 请求"))
+        a_sse = menu.addAction(icons.icon("send", method_color("SSE", t), 14),
+                               i18n.tr("SSE 请求"))
         menu.addSeparator()
         a_folder = menu.addAction(icons.icon("folder", t.text, 14), i18n.tr("新建文件夹"))
         pos = self.new_btn.mapToGlobal(QPoint(0, 0))
@@ -1114,6 +1116,8 @@ class Sidebar(QWidget):
             self.create_request_in(self._selected_folder(), "WS")
         elif chosen is a_sio:
             self.create_request_in(self._selected_folder(), "SIO")
+        elif chosen is a_sse:
+            self.create_request_in(self._selected_folder(), "SSE")
         elif chosen is a_folder:
             self._new_folder()
 
@@ -1216,6 +1220,11 @@ class Sidebar(QWidget):
 
             node["name"] = "Socket.IO Request"
             node["sio"] = default_sio()
+        elif upper == "SSE":
+            from .sse_panel import default_sse
+
+            node["name"] = "SSE Request"
+            node["sse"] = default_sse()
         self.store.add_node(parent_id, node)
         self.store.save()
         self.refresh()

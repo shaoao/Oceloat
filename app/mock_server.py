@@ -90,6 +90,13 @@ _WORDS = ["接口", "调试", "响应", "字段", "分页", "缓存", "重试", 
 _TLD = ["com", "dev", "io", "cn", "app"]
 
 PH_RE = re.compile(r"\{\{\s*@([a-zA-Z_]+)\s*(?:\(\s*([^)]*)\))?\s*\}\}")
+# 循环：{{for 5}} … {{/for}}；括号里可以是数字，也可以是 size / page / total / {{@size}}
+LOOP_OPEN_RE = re.compile(r"\{\{\s*for\s+([^{}]+?)\s*\}\}")
+LOOP_CLOSE = "{{/for}}"
+# 一页最多 100 条、一次最多展开 500 行：模板写错（比如把 total 写成 100000）
+# 也不至于让 Mock 服务把内存打满。
+MAX_PAGE_SIZE = 100
+MAX_REPEAT = 500
 
 
 def _rng() -> random.Random:
@@ -167,16 +174,134 @@ def _gen(kind: str, arg: str, rnd: random.Random) -> str:
     return f"{{{{@{kind}}}}}"
 
 
-def render_placeholders(text: str) -> str:
-    """把 {{@xxx}} 换成现算的值；不认识的占位符原样留着，方便发现拼写错误。"""
-    if not text or "{{" not in text:
-        return text or ""
-    rnd = _rng()
+def page_args(query: Optional[Dict[str, Any]] = None) -> Tuple[int, int]:
+    """从查询串里取分页：?page=2&size=20。取值不合法就回到 1 / 10。"""
+    query = query or {}
 
+    def pick(name: str, default: int) -> int:
+        try:
+            return int(str(query.get(name, default)).strip())
+        except (TypeError, ValueError):
+            return default
+
+    page = max(1, pick("page", 1))
+    size = max(1, min(MAX_PAGE_SIZE, pick("size", 10)))
+    return page, size
+
+
+def _loop_count(expr: str, ctx: Dict[str, Any]) -> int:
+    """`{{for 5}}` / `{{for size}}` / `{{for {{@size}}}}` 都归一到行数。"""
+    text = (expr or "").strip()
+    inner = re.fullmatch(r"\{\{\s*@([a-zA-Z_]+)\s*(?:\(([^)]*)\))?\s*\}\}", text)
+    if inner:
+        text = _scalar(inner.group(1), inner.group(2) or "", ctx)
+    key = text.strip().lower()
+    if key in ("size", "page", "total", "pages"):
+        try:
+            return max(0, min(MAX_REPEAT, int(ctx.get(key, 0) or 0)))
+        except (TypeError, ValueError):
+            return 0
+    try:
+        return max(0, min(MAX_REPEAT, int(float(key))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _find_close(text: str, start: int) -> int:
+    """找与 start 之后那个 {{for}} 配对的 {{/for}}，支持嵌套。"""
+    depth = 1
+    pos = start
+    while True:
+        nxt_open = LOOP_OPEN_RE.search(text, pos)
+        nxt_close = text.find(LOOP_CLOSE, pos)
+        if nxt_close < 0:
+            return -1
+        if nxt_open is not None and nxt_open.start() < nxt_close:
+            depth += 1
+            pos = nxt_open.end()
+            continue
+        depth -= 1
+        if depth == 0:
+            return nxt_close
+        pos = nxt_close + len(LOOP_CLOSE)
+
+
+def _scalar(kind: str, arg: str, ctx: Dict[str, Any]) -> str:
+    """占位符取值：分页 / 行号类先查上下文，其余交给 _gen。"""
+    k = (kind or "").lower()
+    parts = [p.strip() for p in (arg or "").split(",")] if arg else []
+    if k in ("page", "pageno"):
+        return str(ctx.get("page", 1))
+    if k == "size":
+        return str(ctx.get("size", 10))
+    if k in ("i", "index"):
+        return str(ctx.get("i", 1))
+    if k in ("j", "idx"):
+        return str(ctx.get("j", 0))
+    if k in ("row", "seq"):
+        return str(ctx.get("row", 1))
+    if k in ("total", "count"):
+        try:
+            return str(int(float(parts[0]))) if parts else "100"
+        except (TypeError, ValueError):
+            return "100"
+    if k in ("pages", "pagecount"):
+        total = int(float(parts[0])) if parts else 100
+        size = max(1, int(ctx.get("size", 10) or 10))
+        return str(max(1, (total + size - 1) // size))
+    return _gen(kind, arg, ctx["rnd"])
+
+
+def _render_scalars(text: str, ctx: Dict[str, Any]) -> str:
     def repl(m: "re.Match[str]") -> str:
-        return _gen(m.group(1), m.group(2) or "", rnd)
+        return _scalar(m.group(1), m.group(2) or "", ctx)
 
     return PH_RE.sub(repl, text)
+
+
+def _render_template(text: str, ctx: Dict[str, Any]) -> str:
+    """先展开循环，再换占位符；循环体里的占位符每行各算一次。"""
+    m = LOOP_OPEN_RE.search(text)
+    if m is None:
+        return _render_scalars(text, ctx)
+    end = _find_close(text, m.end())
+    if end < 0:
+        # 少了 {{/for}}：不猜用户意图，原样保留（占位符照常替换）
+        return _render_scalars(text, ctx)
+    head = text[:m.start()]
+    block = text[m.end():end]
+    tail = text[end + len(LOOP_CLOSE):]
+    count = _loop_count(m.group(1), ctx)
+    base_row = (int(ctx.get("page", 1)) - 1) * int(ctx.get("size", 10) or 10)
+    rows: List[str] = []
+    for i in range(count):
+        sub = dict(ctx)
+        sub["i"] = i + 1
+        sub["j"] = i
+        sub["row"] = base_row + i + 1
+        piece = _render_template(block, sub).strip()
+        # 用户很容易在循环体末尾多写一个逗号；这里统一收掉再补，
+        # 否则展开成 5 条会得到 ",," 这种非法 JSON。
+        piece = piece.rstrip()
+        while piece.endswith(","):
+            piece = piece[:-1].rstrip()
+        rows.append(piece)
+    joined = ",\n".join(r for r in rows if r)
+    return (_render_scalars(head, ctx) + joined
+            + _render_template(tail, ctx))
+
+
+def render_placeholders(text: str, query: Optional[Dict[str, Any]] = None) -> str:
+    """把 {{@xxx}} 换成现算的值，并展开 {{for n}}…{{/for}} 循环。
+
+    不认识的占位符原样留着，方便发现拼写错误。
+    """
+    if not text or "{{" not in text:
+        return text or ""
+    page, size = page_args(query)
+    ctx: Dict[str, Any] = {"page": page, "size": size, "rnd": _rng(),
+                           "i": 1, "j": 0, "row": 1}
+    return _render_template(text, ctx)
 
 
 # ---------------------------------------------------------------- 路由定义
@@ -539,7 +664,7 @@ class _Handler(BaseHTTPRequestHandler):
         text = source.get("body") or ""
         if hit_rule is not None and not text:
             text = item.get("body") or ""
-        text = render_placeholders(text)
+        text = render_placeholders(text, query)
         ctype = item.get("content_type") or "application/json; charset=utf-8"
         self._send(status, text.encode("utf-8"), ctype,
                    {"X-Ocelot-Route": item.get("name") or "",

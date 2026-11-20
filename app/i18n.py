@@ -504,8 +504,10 @@ _EN.update({
     "当前 {n} 条，超出后自动丢弃最旧的。": "{n} entries right now; the oldest are dropped "
                                           "automatically once you go over the limit.",
 
-    # Mock 中心
-    "Mock 中心": "Mock Center",
+    # Mock 服务（菜单与窗口同名，用户不用猜「数据」和「服务」是不是一个东西）
+    "Mock 中心": "Mock Server",
+    "Mock 数据…": "Mock server…",
+    "生成 Mock 路由": "Generate Mock route",
     "本地 Mock 服务": "Local Mock Server",
     "启动后：请求发到 http://127.0.0.1:<端口>/<路径>，本机的浏览器、脚本、别的设备都能连。":
         "Once running, point requests at http://127.0.0.1:<port>/<path> — browsers, scripts and "
@@ -1981,4 +1983,75 @@ _EN.update({
     "没有可恢复的标签了": "Nothing left to restore",
     "存储说明": "Storage notes",
     "文件": "Files",
+})
+
+# v1.0.76：SSE 请求、高级 Mock（循环 / 分页 / AI 响应体）、导入导出小弹层
+_EN.update({
+    "SSE 请求": "SSE request",
+    "新建 SSE 请求": "New SSE request",
+    "SSE 地址": "SSE URL",
+    "http(s):// 地址，例如 https://example.com/events":
+        "http(s):// URL, e.g. https://example.com/events",
+    "SSE 走普通 HTTP，填 http(s):// 地址即可":
+        "SSE runs over plain HTTP — just enter an http(s):// URL",
+    "请先填写 SSE 地址": "Enter an SSE URL first",
+    "已连上 SSE 事件流，等服务器推送": "SSE stream connected — waiting for events",
+    "尚未连接 SSE": "SSE not connected",
+    "连接参数": "Connection",
+    "重试间隔": "Retry delay",
+    "毫秒": "ms",
+    "续传": "Resume",
+    "可留空，断线重连时作为 Last-Event-ID 发回":
+        "Optional; sent back as Last-Event-ID when reconnecting",
+    "SSE 只接收服务器推送的事件；连上后每来一条事件就会实时出现在右侧日志里。"
+    "服务端断开时会按上面的间隔自动重连，并从最后一条事件的 id 继续。":
+        "SSE only receives events the server pushes; each one shows up in the log on the "
+        "right as it arrives. If the server disconnects, Ocelot reconnects with the given "
+        "delay and resumes from the last event id.",
+    "还没有事件。连接后服务器推送的事件会实时出现在这里。":
+        "No events yet. Server pushes will appear here once connected.",
+    "导出事件日志": "Export event log",
+    "条事件": "events",
+    "事件": "Event",
+    "心跳": "Heartbeat",
+    "第 {n} 次重连，{s} 秒后重试": "Reconnect attempt {n} in {s}s",
+    "实时协议（WebSocket / Socket.IO / SSE）不能做 HTTP Mock":
+        "Realtime protocols (WebSocket / Socket.IO / SSE) cannot be mocked over HTTP",
+    "AI 生成响应体": "Generate response with AI",
+    "AI 生成": "AI generate",
+    "例子": "Examples",
+    "常用例子": "Common examples",
+    "先用一句话说清楚要什么数据": "Describe the data you need in one sentence",
+    "生成的响应体会显示在这里；点「生成」开始。":
+        "The generated body appears here — press Generate to start.",
+    "可以直接插入；想微调就在编辑器里改。":
+        "Ready to insert — tweak it in the editor afterwards.",
+    "已插入 AI 生成的响应体，可以点「预览随机数据」看看效果":
+        "AI body inserted — try “Preview random data” to see it rendered",
+    "分页列表": "Paginated list",
+    "用户资料": "User profile",
+    "订单详情": "Order detail",
+    "20 条数组": "20-row array",
+    "401 错误": "401 error",
+    "嵌套树": "Nested tree",
+    "分页列表（模板）": "Paginated list (template)",
+    "循环 5 条": "Loop 5 rows",
+    "条件字段": "Conditional fields",
+    "导入集合": "Import collection",
+    "导出集合": "Export collection",
+    "导入 / 导出集合": "Import / export",
+    "从剪贴板导入": "Import from clipboard",
+    "从 URL 导入": "Import from URL",
+    "打开导入导出面板…": "Open the full import / export panel…",
+    "需要拖放文件、逐个勾选时可以打开完整面板":
+        "Use the full panel when you want drag & drop or per-item selection",
+    "正在下载…": "Downloading…",
+    "已从剪贴板导入 {n} 个请求": "Imported {n} requests from the clipboard",
+    "剪贴板内容不是可识别的集合": "The clipboard does not contain a recognised collection",
+    "剪贴板是空的": "The clipboard is empty",
+    "文件里没有可导入的请求": "No importable requests in this file",
+    "已导出 {name} · {size}": "Exported {name} · {size}",
+    "导出失败：{err}": "Export failed: {err}",
+    "地址要以 http:// 或 https:// 开头": "The URL must start with http:// or https://",
+    "✓ 已识别 {fmt}：{detail}": "✓ Recognised {fmt}: {detail}",
 })

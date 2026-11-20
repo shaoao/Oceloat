@@ -1,4 +1,4 @@
-"""Mock 中心：本地 Mock 服务 + 公开接口 + 请求日志。
+"""Mock 服务：本地 Mock 服务 + 公开接口 + 请求日志。
 
 三个页签，各管一件事：
 1. **本地 Mock** —— 在自己机器上起一个真的 HTTP 服务（127.0.0.1），
@@ -128,9 +128,19 @@ LIST_PAD = 14
 META_W = 74            # 右侧「状态码 / 命中次数」列，行与行严格对齐
 
 PLACEHOLDER_HINT = (
-    "动态数据：{{@id}} {{@uuid}} {{@name}} {{@cname}} {{@email}} {{@phone}} "
+    "{{@id}} {{@name}} {{@cname}} {{@email}} {{@float(1,999)}} {{@now}} …"
+    "｜多条数据 {{for size}}…{{/for}}｜分页 {{@page}} {{@size}} {{@row}}"
+)
+# 悬浮/展开时才需要看的完整说明：放在 tooltip 里，不占编辑区高度
+PLACEHOLDER_HELP = (
+    "随机字段：{{@id}} {{@uuid}} {{@name}} {{@cname}} {{@email}} {{@phone}} "
     "{{@city}} {{@company}} {{@now}} {{@date}} {{@timestamp}} {{@bool}} "
-    "{{@int(1,99)}} {{@float(1,999)}} {{@pick(a,b,c)}} {{@lorem(6)}} {{@avatar(80,80)}}"
+    "{{@int(1,99)}} {{@float(1,999)}} {{@pick(a,b,c)}} {{@lorem(6)}} {{@avatar(80,80)}}\n\n"
+    "多条数据：\n"
+    "  \"list\": [{{for size}}{\"id\": {{@row}}, \"name\": \"{{@cname}}\"}{{/for}}]\n"
+    "{{for size}} 按 ?size= 展开；循环里 {{@i}} 是本次第几条，{{@row}} 是跨页连续行号。\n\n"
+    "分页：{{@page}} 当前页、{{@size}} 每页条数、{{@total(86)}} 总数；"
+    "请求带 ?page=2&size=20 就返回第二页。"
 )
 
 
@@ -460,12 +470,134 @@ class RuleDialog(GlassDialog):
 # ---------------------------------------------------------------- 路由编辑
 
 
+class BodyAiDialog(GlassDialog):
+    """AI 生成响应体：一句话 → 一段带循环 / 分页的模板。
+
+    故意做小（560×430）：它只是「往里填一段文本」的小工具，不开大窗、不铺
+    全屏遮罩。常用例子做成一行小按钮，点一下就填好描述，省得用户自己组织语言。
+    """
+
+    def __init__(self, path: str = "", method: str = "GET", body: str = "", parent=None):
+        super().__init__(parent, 580, 470, "AI 生成响应体")
+        t = theme()
+        self._path = path
+        self._method = method
+        self._body = body
+        self._buf = ""
+        self._chat = None
+        self.result = ""
+
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(18, 8, 18, 14)
+        lay.setSpacing(9)
+
+        self.desc = QLineEdit()
+        self.desc.setObjectName("Field")
+        self.desc.setFixedHeight(30)
+        i18n.placeholder(self.desc, "例如：分页的商品列表，带价格、状态和创建时间")
+        self.desc.returnPressed.connect(self._go)
+        lay.addWidget(self.desc)
+
+        lay.addWidget(Label("常用例子", 10.2, t.text_faint))
+        grid = QWidget()
+        gl = QVBoxLayout(grid)
+        gl.setContentsMargins(0, 0, 0, 0)
+        gl.setSpacing(5)
+        btns = []
+        for label, prompt in mock_ai.BODY_PRESETS:
+            btn = Button(label, None, kind="subtle", height=23, padding=9, font_size=10.6)
+            btn.setToolTip(prompt)
+            btn.clicked.connect(lambda _c=False, p=prompt: self.desc.setText(p))
+            btns.append(btn)
+        for i in range(0, len(btns), 3):
+            row = HBox(*btns[i:i + 3], 1, spacing=5)
+            gl.addWidget(row)
+        lay.addWidget(grid)
+
+        self.out = CodeView(read_only=True, highlight=True, show_gutter=False)
+        self.out.setFont(mono(11))
+        self.out.setPlaceholderText(i18n.tr("生成的响应体会显示在这里；点「生成」开始。"))
+        card = Card(radius=8)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(8, 8, 8, 8)
+        cl.addWidget(self.out)
+        lay.addWidget(card, 1)
+
+        self.status = Label("", 10.4, t.text_faint)
+        self.status.setWordWrap(True)
+        lay.addWidget(self.status)
+
+        cancel = Button("取消", None, kind="ghost", height=28, padding=12, font_size=12)
+        cancel.clicked.connect(self.reject)
+        self.go = Button("生成", "spark", kind="primary", height=28, padding=16,
+                         font_size=12, icon_size=12)
+        self.go.clicked.connect(self._go)
+        self.ok = Button("插入", "check", kind="primary", height=28, padding=14, font_size=12)
+        self.ok.clicked.connect(self.accept)
+        self.ok.setEnabled(False)
+        lay.addWidget(HBox(1, cancel, self.ok, self.go, spacing=6))
+
+    def _go(self) -> None:
+        from . import ai
+
+        ok, why = ai.ready()
+        if not ok:
+            self.status.setText(why)
+            self.status.setStyleSheet(f"color: {theme().danger};")
+            return
+        text = (self.desc.text() or "").strip()
+        if not text:
+            self.status.setText(i18n.tr("先用一句话说清楚要什么数据"))
+            return
+        self._buf = ""
+        self.out.setPlainText("")
+        self.status.setText(i18n.tr("生成中…"))
+        self.status.setStyleSheet(f"color: {theme().text_faint};")
+        self.go.setEnabled(False)
+        self.ok.setEnabled(False)
+        self._chat = ai.start(mock_ai.messages_for_body(text, self._path, self._method, self._body),
+                              on_chunk=self._chunk, on_done=self._done, on_error=self._fail)
+
+    def _chunk(self, piece: str) -> None:
+        self._buf += piece
+        self.out.setPlainText(self._buf)
+        bar = self.out.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def _done(self, _text: str) -> None:
+        self.go.setEnabled(True)
+        try:
+            self.result = mock_ai.parse_body(self._buf)
+        except ValueError as exc:
+            self.status.setText(str(exc))
+            self.status.setStyleSheet(f"color: {theme().danger};")
+            return
+        self.out.setPlainText(self.result)
+        self.status.setText(i18n.tr("可以直接插入；想微调就在编辑器里改。"))
+        self.status.setStyleSheet(f"color: {theme().success};")
+        self.ok.setEnabled(True)
+
+    def _fail(self, msg: str) -> None:
+        self.go.setEnabled(True)
+        self.status.setText(msg)
+        self.status.setStyleSheet(f"color: {theme().danger};")
+
+    def closeEvent(self, e):  # noqa: N802
+        chat = self._chat
+        if chat is not None and chat.isRunning():
+            try:
+                chat.cancel()
+            except Exception:      # noqa: BLE001
+                pass
+        super().closeEvent(e)
+
+
 class RouteDialog(GlassDialog):
     """新建 / 编辑一条 Mock 路由：基本信息 + 响应体 + 条件规则。"""
 
     def __init__(self, store, item: Optional[Dict[str, Any]] = None, parent=None):
         editing = item is not None
-        super().__init__(parent, 660, 700, "编辑 Mock 路由" if editing else "新建 Mock 路由")
+        super().__init__(parent, 680, 762, "编辑 Mock 路由" if editing else "新建 Mock 路由")
         self.store = store
         src = dict(item or {})
         self._echo = bool(src.get("echo"))
@@ -534,6 +666,16 @@ class RouteDialog(GlassDialog):
         self.echo_switch.toggled.connect(self._on_echo)
         hl.addWidget(Label("回显请求", 10.8, t.text_faint))
         hl.addWidget(self.echo_switch)
+        # AI 生成：一句话写清楚要什么数据，直接产出带循环 / 分页的模板
+        ai_btn = Button("AI 生成", "spark", kind="subtle", height=24, padding=9,
+                        font_size=10.8, icon_size=11)
+        ai_btn.setToolTip("用一句话描述数据，让 AI 写出带循环与分页的响应体")
+        ai_btn.clicked.connect(self._ai_body)
+        hl.addWidget(ai_btn)
+        # 例子：不联网也能用的模板片段，点一下插到光标处
+        ex_btn = Button("例子", None, kind="ghost", height=24, padding=8, font_size=10.8)
+        ex_btn.clicked.connect(lambda: self._examples(ex_btn))
+        hl.addWidget(ex_btn)
         prev = Button("预览随机数据", "refresh", kind="ghost", height=24, padding=8,
                       font_size=10.8, icon_size=11)
         prev.clicked.connect(self._preview)
@@ -550,7 +692,7 @@ class RouteDialog(GlassDialog):
         self.body_view = CodeView(read_only=False, highlight=True, show_gutter=True)
         self.body_view.setFont(mono(11.4))
         self.body_view.setPlainText(src.get("body") or _sample_body())
-        self.body_view.setMinimumHeight(120)
+        self.body_view.setMinimumHeight(112)
         el.addWidget(self.body_view, 1)
         self.echo_hint = Label(
             "回显模式：服务会把收到的请求（方法 / 路径 / 头 / 请求体）原样返回，"
@@ -558,8 +700,11 @@ class RouteDialog(GlassDialog):
         self.echo_hint.setWordWrap(True)
         self.echo_hint.setVisible(False)
         el.addWidget(self.echo_hint)
-        ph = Label(PLACEHOLDER_HINT, 10.2, t.text_faint, mono_font=True)
-        ph.setWordWrap(True)
+        # 一行、按宽度省略：完整语法放 tooltip，编辑区的高度全留给响应体本身
+        ph = ElideLabel(PLACEHOLDER_HINT, 9.8, t.text_faint, mono_font=True,
+                        mode=Qt.TextElideMode.ElideRight)
+        ph.setFixedHeight(15)
+        ph.setToolTip(PLACEHOLDER_HELP)
         el.addWidget(ph)
         body.addWidget(editor_card, 1)
 
@@ -657,8 +802,33 @@ class RouteDialog(GlassDialog):
         self.echo_hint.setVisible(bool(on))
 
     def _preview(self) -> None:
-        text = render_placeholders(self.body_view.toPlainText() or "")
+        # 预览时按「第一页、5 条」展开，分页占位符也能看到真实效果
+        text = render_placeholders(self.body_view.toPlainText() or "", {"page": 1, "size": 5})
         PreviewDialog(text, self).exec()
+
+    def _ai_body(self) -> None:
+        """AI 生成响应体：生成期间不影响编辑器，插入是显式动作。"""
+        dlg = BodyAiDialog(self.path_edit.text().strip(),
+                           self.method_tabs.current(),
+                           self.body_view.toPlainText() or "", self)
+        if dlg.exec() != dlg.DialogCode.Accepted or not dlg.result.strip():
+            return
+        self.body_view.setPlainText(dlg.result)
+        self.body_view.set_language(None)
+        self.hint.setText(i18n.tr("已插入 AI 生成的响应体，可以点「预览随机数据」看看效果"))
+
+    def _examples(self, anchor: QWidget) -> None:
+        menu = Menu(self)
+        actions = []
+        for label, snippet in mock_ai.BODY_SNIPPETS:
+            actions.append((menu.addAction(label), snippet))
+        chosen = menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+        for act, snippet in actions:
+            if chosen is act:
+                self.body_view.insertPlainText(snippet)
+                self.body_view.set_language(None)
+                self.hint.setText("")
+                return
 
     def _format(self) -> None:
         try:
@@ -1431,7 +1601,7 @@ class MockDialog(GlassDialog):
     stateChanged = pyqtSignal()               # 启停后通知主窗口刷新状态徽章
 
     def __init__(self, store, server: Optional[MockHub] = None, parent=None):
-        super().__init__(parent, 960, 690, "Mock 中心")
+        super().__init__(parent, 960, 690, "Mock 服务")
         self.store = store
         if isinstance(server, MockHub):
             self.hub = server

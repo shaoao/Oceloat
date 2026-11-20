@@ -1,5 +1,24 @@
 # What's Changed
 
+## v1.0.76 — 2026-11-20
+
+**Added**
+- SSE requests. "New request → SSE request" gives you a full page in the same style as WebSocket: enter an http(s) URL, connect, and server-pushed events stream into the log line by line. Automatic reconnect with backoff, `Last-Event-ID` resume, filtering by event name or heartbeat, and log export. Import and export understand SSE requests too — the connection options ride along in `x-ocelot`.
+- Mock responses can loop and paginate. `{{for size}} … {{/for}}` expands according to `?size=`, `{{@i}}` is the row within the page and `{{@row}}` the continuous index across pages; `{{@page}}`, `{{@size}}` and `{{@total(86)}}` describe paging, so `?page=2&size=20` returns page two without writing any repeated data by hand. Expansion is capped at 500 rows so a typo cannot eat memory.
+- "AI generate" in the route editor writes a whole response template from one sentence, loops and pagination included. The "Examples" menu next to it inserts ready-made snippets (paginated list, five-row loop, conditional fields) at the cursor.
+- Import and export are now a small popover attached to the button: pick a source or a format, the system file dialog opens, and a toast reports the result. No full-screen blurred window for a two-click task; the full panel is still one menu item away when you want drag & drop.
+
+**Changed**
+- "Quick Mock" is now "Generate Mock route", and "Mock Data…" is "Mock Server…" everywhere — menu, window title and settings all use the same name.
+- Fixed the window corner mask. The rounded path was flattened into a polygon, leaving the bottom-right corner looking clipped. The mask is built from analytic circle regions now, one pixel per scanline, so the arc is smooth.
+- The title bar's right side is aligned again: 16 px on both sides, with the two icons grouped (2 px inside the group, 10 px before it) instead of the gear sitting closer to the edge than the traffic lights do.
+
+**Fixed**
+- Exporting a normal request could mark it as WebSocket, because the editor attached a default `ws` block to every request and the exporter trusted its presence. Export and import now go by the method, and the editor only fills in the protocol block that matches the request.
+
+**Verified**
+- Smoke suite: 802 checks (SSE round-trip, template loops and pagination, AI body parsing, popover entry, corner mask shape). Brand suite: 245 checks. Bundled self-test: 8/8.
+
 ## v1.0.75 — 2026-11-20
 
 **Fixed**
