@@ -2263,12 +2263,15 @@ def main() -> int:
         req_ed = _rp.RequestEditor(w.store)
         got = []
         req_ed.mockRequested.connect(lambda: got.append("mock"))
+        req_ed.mockizeRequested.connect(lambda: got.append("mockize"))
         req_ed.duplicateRequested.connect(lambda: got.append("dup"))
         req_ed.copyCurlRequested.connect(lambda: got.append("curl"))
         orig_menu = _rp.Menu
         _rp.Menu = _FakeMenu
         try:
-            picked[0] = "Mock"
+            picked[0] = "Mock 数据"
+            req_ed._on_more(req_ed.urlbar.more_btn)
+            picked[0] = "一键 Mock"
             req_ed._on_more(req_ed.urlbar.more_btn)
             picked[0] = "复制请求"
             req_ed._on_more(req_ed.urlbar.more_btn)
@@ -2276,7 +2279,7 @@ def main() -> int:
             req_ed._on_more(req_ed.urlbar.more_btn)
         finally:
             _rp.Menu = orig_menu
-        check("更多菜单的每一项都能走通", got == ["mock", "dup", "curl"], str(got))
+        check("更多菜单的每一项都能走通", got == ["mock", "mockize", "dup", "curl"], str(got))
         check("编辑器把 Mock / 复制的信号转发出去",
               hasattr(req_ed, "mockRequested") and hasattr(req_ed, "duplicateRequested"))
         req_ed.deleteLater()
@@ -3756,15 +3759,87 @@ def main() -> int:
         w.store.settings["auto_trim"] = True
         w.store.settings["auto_trim_min"] = 5
         w._auto_trim.apply()
-        check("间隔跟随设置", w._auto_trim.interval_ms() == 300_000,
+        check("间隔固定，不受旧设置影响", w._auto_trim.interval_ms() == 900_000,
               str(w._auto_trim.interval_ms()))
-        w.store.settings["auto_trim_min"] = 15
-        w._auto_trim.apply()
+        w.store.settings.pop("auto_trim_min", None)
+        from app.dialogs import SettingsDialog as _SD
+
+        _sd = _SD(w.store, w, page="general")
+        check("设置页只有一个内存开关",
+              hasattr(_sd, "auto_trim") and not hasattr(_sd, "trim_seg")
+              and not hasattr(_sd, "trim_now"))
+        _sd.done(0)
 
         _dlg.done(0)
         check("关窗后停止刷新", not _dlg._timer.isActive())
         import shutil as _shutil
         _shutil.rmtree(_tmp, ignore_errors=True)
+
+        # --- 存储说明：和文件列表切着看，说明是只读视角
+        _dlg2 = _resmon.ResourceDialog(w.store, w, analysis_cache=w._analysis_cache,
+                                      tabs_count=len(w.tabs_data))
+        _dlg2.show()
+        app.processEvents()
+        check("有文件 / 说明两个视角", hasattr(_dlg2, "view_seg")
+              and _dlg2.view_stack.count() == 2)
+        check("默认停在文件列表", _dlg2.view_stack.currentIndex() == 0)
+        _dlg2._on_view("notes")
+        app.processEvents()
+        check("能切到存储说明", _dlg2.view_stack.currentIndex() == 1)
+        check("说明是只读视角，文件操作收起", _dlg2.actions_card.isHidden())
+        notes = _dlg2.view_stack.widget(1)
+        texts = [lab.text() for lab in notes.findChildren(type(_dlg2.status))]
+        joined = " ".join(texts)
+        for token in ("state.json", "collections/", "history.json", "trash.json",
+                      "cache.json", "backups/", "corrupted/"):
+            check(f"说明里讲了 {token}", token in joined)
+        for token in ("校验和", "临时文件", "隔离", "上限"):
+            check(f"说明里讲了保障手段「{token}」", token in joined)
+        _dlg2._on_view("files")
+        app.processEvents()
+        check("切回文件列表，操作恢复", not _dlg2.actions_card.isHidden())
+        _dlg2.done(0)
+
+        # --- 误关标签：60 秒草稿 + ⌘⇧T
+        _req_node = next(n for n, _p in w.store.walk() if n.get("type") == "request")
+        _orig_url = str(_req_node.get("url") or "")
+        _tab = w._open_request_obj(w.store.find(_req_node["id"]), node_id=_req_node["id"])
+        _tab["request"]["url"] = "http://draft.local/typo"
+        _tab["dirty"] = True
+        w.close_tab(_tab["id"])
+        check("关标签后留下了草稿",
+              any(d.get("node_id") == _req_node["id"]
+                  for d in w.store.data.get("drafts") or []))
+        _tab2 = w._open_request_obj(w.store.find(_req_node["id"]), node_id=_req_node["id"])
+        check("重开同一个请求接回未保存内容",
+              _tab2["request"].get("url") == "http://draft.local/typo",
+              str(_tab2["request"].get("url")))
+        check("接回的内容标为未保存", _tab2.get("dirty") is True)
+        check("草稿用过就消费掉",
+              not any(d.get("node_id") == _req_node["id"]
+                      for d in w.store.data.get("drafts") or []))
+        w.close_tab(_tab2["id"])
+        _before = len(w.tabs_data)
+        w.reopen_closed_tab()
+        check("⌘⇧T 把标签捞回来", len(w.tabs_data) == _before + 1)
+        check("捞回来的还是那份内容",
+              (w.current_tab() or {}).get("request", {}).get("url")
+              == "http://draft.local/typo",
+              str((w.current_tab() or {}).get("request", {}).get("url")))
+        check("草稿只活 60 秒", w.DRAFT_TTL == 60)
+        for _t in [t for t in w.tabs_data if t.get("node_id") == _req_node["id"]]:
+            w.close_tab(_t["id"])
+        w.store.data["drafts"] = []
+        _req_node["url"] = _orig_url
+
+        # --- 一键 Mock 收进更多菜单，地址栏不再单独占位
+        check("地址栏没有独立的一键 Mock 按钮",
+              not hasattr(w.editor.urlbar, "mockize_btn"))
+        check("一键 Mock 的信号还在", hasattr(w.editor, "mockizeRequested"))
+        _rp_src = (Path(__file__).resolve().parent.parent / "app" / "request_panel.py").read_text(
+            encoding="utf-8")
+        check("更多菜单里有一键 Mock", "一键 Mock（生成 Mock 路由）" in _rp_src
+              and "self.mockizeRequested.emit()" in _rp_src)
 
         return 0
 

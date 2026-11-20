@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from PyQt6.QtCore import (
     QEasingCurve,
@@ -158,9 +158,11 @@ class FocusPulse(QWidget):
         fade = 1.0 - self._p
         grow = 3.0 + self._p * 5.0
         r = self._rect.adjusted(-grow, -grow, grow, grow)
-        pen = QPen(C(t.accent))
+        # QPen 没有 setAlphaF：透明度要放在颜色上，否则新建文件夹时直接崩
+        ring = C(t.accent)
+        ring.setAlphaF(max(0.0, min(1.0, fade)))
+        pen = QPen(ring)
         pen.setWidthF(1.6 * fade + 0.4)
-        pen.setAlphaF(fade)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(r, 8, 8)

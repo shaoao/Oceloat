@@ -51,7 +51,9 @@ LIST_BACKUP_KEEP = {"history": 1, "trash": 2}
 # 纯缓存的东西（远端共享列表、命令面板的命中次数）再单独一个文件：
 # 丢了不影响任何数据，也不该跟设置挤在一份索引里。
 SIDE_FILE = "cache.json"
-SIDE_FIELDS = ("remote_nodes", "remote_nodes_at", "palette_hits")
+# 缓存类字段：都不值得进索引，丢了也只是「下次慢一点」。
+# drafts 是误关标签时留 60 秒的草稿，过期自己就没，所以也放这里。
+SIDE_FIELDS = ("remote_nodes", "remote_nodes_at", "palette_hits", "drafts")
 # 每个集合 / 索引各留几份备份、最快多久一份
 BACKUPS_KEEP = 5
 BACKUP_EVERY = 600

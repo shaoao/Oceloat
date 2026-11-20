@@ -26,9 +26,30 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.74"
+VERSION = "1.0.75"
 
 CHANGELOG = [
+    {
+        "version": "1.0.75",
+        "date": "2026-11-20",
+        "items": [
+            "修崩溃：新建文件夹时侧栏画聚焦环用了 QPen 上不存在的 setAlphaF，"
+            "直接段错误退出；现在透明度设在颜色上，动画照旧",
+            "「一键 Mock」不再单独占一颗图标，收进地址栏右侧「更多操作」菜单，"
+            "和「Mock 数据…」放在一起；地址栏回到「保存 / 代码 / 更多」三个动作",
+            "自动释放内存只留一个开关：间隔固定 15 分钟，去掉了 5 / 15 / 30 分钟三档"
+            "和「立即释放」按钮 —— 定时器自己会做，不用人操心",
+            "误关标签能捡回来：关闭带未保存修改的标签后 60 秒内重新打开同一个请求，"
+            "参数、请求头、请求体原样接上（标记为未保存）；⌘⇧T 也能把刚关掉的标签"
+            "整条恢复，连上一次的响应一起回来",
+            "点 Mock 里「用这条路由新建请求」后焦点回到主窗口：以前点完还停在 Mock 窗口，"
+            "接着敲键盘全是白敲",
+            "Mock 运行中的状态胶囊去掉描边，只留一层极淡底色，和旁边状态栏更齐整",
+            "资源管理器多一个「存储说明」视角：每个文件管哪一块、为什么这样拆、"
+            "校验和 / 原子写 / 隔离区这些保障手段，都用大白话说清，"
+            "和文件列表共用同一块区域，切换不跳尺寸",
+        ],
+    },
     {
         "version": "1.0.74",
         "date": "2026-11-20",
@@ -1509,6 +1530,8 @@ def _sample_state() -> Dict[str, Any]:
         },
         "open_tabs": [],
         "last_request": None,
+        # 误关标签时的 60 秒草稿（放 cache.json，过期自己消失）
+        "drafts": [],
         "mock": {"port": 8787, "routes": [], "fallback_echo": False, "auto_start": False},
     }
 

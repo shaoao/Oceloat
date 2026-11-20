@@ -21,6 +21,7 @@ ACTIONS: List[Tuple[str, str, str, str]] = [
     ("save", "保存到集合", "请求", "Meta+S"),
     ("duplicate", "复制当前请求", "请求", "Meta+D"),
     ("close_tab", "关闭当前标签", "标签", "Meta+W"),
+    ("reopen_tab", "重新打开关闭的标签", "标签", "Meta+Shift+T"),
     ("next_tab", "下一个标签", "标签", "Ctrl+Tab"),
     ("prev_tab", "上一个标签", "标签", "Ctrl+Shift+Tab"),
     ("palette", "命令面板", "界面", "Meta+K"),

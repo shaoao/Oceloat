@@ -1966,3 +1966,19 @@ _EN.update({
         "Uploading overwrites the cloud snapshot; restoring replaces this Mac with the "
         "cloud copy (a full snapshot is taken first).",
 })
+
+# v1.0.75：一键 Mock 收进更多菜单、内存回收只留开关、误关标签可恢复、存储说明
+_EN.update({
+    "一键 Mock（生成 Mock 路由）": "Quick Mock (create a mock route)",
+    "每 15 分钟悄悄放掉一次闲置内存，把空闲页还给系统；"
+    "只清可再生的缓存，不碰正在做的事。":
+        "Quietly releases idle memory every 15 minutes and hands free pages back to the "
+        "system. Only regenerable caches are dropped; nothing in progress is touched.",
+    "已关闭 · ⌘⇧T 可以恢复刚才的修改": "Closed · ⌘⇧T restores your unsaved changes",
+    "已恢复关闭的标签": "Restored the closed tab",
+    "已恢复关闭前的修改，保存后才会写进集合":
+        "Restored your unsaved changes — save to keep them",
+    "没有可恢复的标签了": "Nothing left to restore",
+    "存储说明": "Storage notes",
+    "文件": "Files",
+})

@@ -625,7 +625,8 @@ class MockBadge(QWidget):
         r = QRectF(self.rect()).adjusted(0.5, 1.5, -0.5, -1.5)
         bg = C(t.hover if self._hover else t.panel_alt)
         bg.setAlpha(int(bg.alpha() * (0.9 if self._hover else 0.72)))
-        p.setPen(QPen(C(t.border), 1))
+        # 不描边：靠一层极淡的底色托住文字就够了，加边框反而显得像按钮
+        p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(bg)
         p.drawRoundedRect(r, 9, 9)
         # 小圆点：运行中是语义绿，未启动是灰
@@ -680,6 +681,11 @@ class MainWindow(QWidget):
         self.tabs_data: List[Dict[str, Any]] = []
         self._inflight_tab: Optional[str] = None
         self._active_tab_id: Optional[str] = None
+        # 误关标签的兜底：草稿留 60 秒，重开同一个请求就接上；最近关掉的几个
+        # 还能用 ⌘⇧T 整条捡回来（含响应）。
+        self._closed_tabs: List[Dict[str, Any]] = []
+        self.DRAFT_TTL = 60
+        self.DRAFT_MAX = 6
         self._sidebar_target = int(store.settings.get("sidebar_width", 268))
         self._side_anim: Optional[QVariantAnimation] = None
         self._side_animating = False
@@ -1209,6 +1215,11 @@ class MainWindow(QWidget):
         """点了某条本地路由的「试用」：建一条指向它的请求，直接发。"""
         req = new_request(f"Mock · {url.rstrip('/').split('/')[-1] or 'root'}", method, url)
         self._open_request_obj(req, node_id=None)
+        # 试用完接着就在主窗口里调参数 / 改地址，焦点必须跟着回来：
+        # 以前点完还停在 Mock 窗口上，敲键盘全是白敲。
+        self.raise_()
+        self.activateWindow()
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
         self.toast.show_message("已连上本地 Mock 路由", "success")
         QTimer.singleShot(80, self.send_current)
 
@@ -1456,7 +1467,8 @@ class MainWindow(QWidget):
         self._open_request_obj(request, node_id=node_id)
 
     def _open_request_obj(self, request: Dict[str, Any], node_id: Optional[str],
-                          preview: bool = False, activate: bool = True) -> None:
+                          preview: bool = False, activate: bool = True,
+                          draft: bool = True) -> Optional[Dict[str, Any]]:
         tab_id = f"tab_{int(time.time() * 1000)}_{len(self.tabs_data)}"
         # 每个标签持有独立快照：绝不与集合树/store 节点共享同一个 dict，
         # 否则一边编辑另一边跟着变（用户反馈的「两个页面内容一样」）。
@@ -1466,6 +1478,13 @@ class MainWindow(QWidget):
             "method": request.get("method", "GET"),
             "dirty": False, "response": None, "preview": preview,
         }
+        # 刚关掉又打开：把 60 秒内的未保存草稿接回来，别让人重敲一遍参数
+        restored = self._take_draft(node_id) if draft else None
+        if restored is not None:
+            tab["request"] = _copy.deepcopy(restored["request"])
+            tab["title"] = tab["request"].get("name") or tab["title"]
+            tab["method"] = tab["request"].get("method", "GET")
+            tab["dirty"] = True
         self.tabs_data.append(tab)
         self.tabstrip.add_tab({"id": tab_id, "title": tab["title"], "method": tab["method"],
                                "preview": preview}, activate=activate,
@@ -1475,6 +1494,78 @@ class MainWindow(QWidget):
         if activate:
             self._on_tab_changed(tab_id)
             self._update_stack()
+        if restored is not None:
+            self.toast.show_message(i18n.tr("已恢复关闭前的修改，保存后才会写进集合"), "info")
+        return tab
+
+    def _prune_drafts(self) -> List[Dict[str, Any]]:
+        """丢掉过期草稿，顺手把数量压到上限。草稿本来就不该常驻。"""
+        now = time.time()
+        out: List[Dict[str, Any]] = []
+        raw = self.store.data.get("drafts")
+        for item in (raw if isinstance(raw, list) else []):
+            if not isinstance(item, dict):
+                continue
+            if now - float(item.get("at") or 0) > self.DRAFT_TTL:
+                continue
+            req = item.get("request")
+            if not isinstance(req, dict):
+                continue
+            out.append(item)
+        out = out[-self.DRAFT_MAX:]
+        if out != raw:
+            self.store.data["drafts"] = out
+        return out
+
+    def _save_draft(self, tab: Dict[str, Any]) -> None:
+        """关标签时留一份草稿：只留真改过的，60 秒内重开就还原。"""
+        node_id = tab.get("node_id")
+        req = tab.get("request")
+        if not node_id or not isinstance(req, dict) or not tab.get("dirty"):
+            return
+        drafts = [d for d in self._prune_drafts() if d.get("node_id") != node_id]
+        drafts.append({"node_id": node_id, "at": time.time(),
+                       "title": tab.get("title") or "", "request": _copy.deepcopy(req)})
+        self.store.data["drafts"] = drafts[-self.DRAFT_MAX:]
+
+    def _take_draft(self, node_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """取出并消费这份草稿：还原一次就够，不反复弹回去。"""
+        if not node_id:
+            return None
+        found = None
+        keep: List[Dict[str, Any]] = []
+        for item in self._prune_drafts():
+            if found is None and item.get("node_id") == node_id:
+                found = item
+                continue
+            keep.append(item)
+        if found is not None:
+            self.store.data["drafts"] = keep
+        return found
+
+    def reopen_closed_tab(self) -> None:
+        """⌘⇧T：把刚关掉的标签原样捞回来（请求、参数、响应都还在）。"""
+        now = time.time()
+        self._closed_tabs = [t for t in self._closed_tabs
+                             if now - float(t.get("at") or 0) <= self.DRAFT_TTL]
+        if not self._closed_tabs:
+            self.toast.show_message(i18n.tr("没有可恢复的标签了"), "info")
+            return
+        item = self._closed_tabs.pop()          # 后进先出：最近关的最先回来
+        tab = self._open_request_obj(_copy.deepcopy(item["request"]),
+                                     node_id=item.get("node_id"),
+                                     activate=True, draft=False)
+        if tab is not None:
+            tab["dirty"] = bool(item.get("dirty"))
+            self.tabstrip.update_tab(tab["id"], dirty=tab["dirty"])
+            resp = item.get("response")
+            if resp is not None:
+                tab["response"] = resp
+                try:
+                    self.response.set_response(resp)
+                except Exception:       # noqa: BLE001 — 旧结构对不上就不显示响应
+                    pass
+            self.toast.show_message(i18n.tr("已恢复关闭的标签"), "success")
 
     def close_tab(self, tab_id: str) -> None:
         tab = self._tab(tab_id)
@@ -1488,6 +1579,23 @@ class MainWindow(QWidget):
             if client.busy:
                 client.disconnect_ws()
             self._ws_tab = None
+        # 关之前留一份：草稿给「重新打开同一个请求」用，_closed_tabs 给 ⌘⇧T 用
+        self._save_draft(tab)
+        resp = tab.get("response")
+        # 响应只留小体积的：几十兆的下载体留在内存里 60 秒不值得
+        try:
+            keep_resp = resp is not None and len(getattr(resp, "body", b"") or b"") <= 512 * 1024
+        except TypeError:
+            keep_resp = False
+        now = time.time()
+        self._closed_tabs = [t for t in self._closed_tabs
+                             if now - float(t.get("at") or 0) <= self.DRAFT_TTL]
+        self._closed_tabs.append({
+            "at": now, "node_id": tab.get("node_id"), "dirty": tab.get("dirty"),
+            "request": _copy.deepcopy(tab.get("request") or {}),
+            "response": resp if keep_resp else None,
+        })
+        self._closed_tabs = self._closed_tabs[-self.DRAFT_MAX:]
         self.tabs_data = [t for t in self.tabs_data if t["id"] != tab_id]
         if self._active_tab_id == tab_id:
             self._active_tab_id = None
@@ -1500,6 +1608,9 @@ class MainWindow(QWidget):
             self._update_stack()
             self.response.show_empty()
         self._persist()
+        if tab.get("dirty"):
+            # 手滑关掉时给一条退路：60 秒内 ⌘⇧T 或重新点开这个请求都能接上
+            self.toast.show_message(i18n.tr("已关闭 · ⌘⇧T 可以恢复刚才的修改"), "info")
 
     def _on_tabs_reordered(self, ids: List[str]) -> None:
         order = {tid: i for i, tid in enumerate(ids)}
@@ -2782,6 +2893,7 @@ class MainWindow(QWidget):
             "save": self.save_current,
             "duplicate": self._duplicate_request,
             "close_tab": lambda: current() and self.close_tab(current()["id"]),
+            "reopen_tab": self.reopen_closed_tab,
             "next_tab": self._next_tab,
             "prev_tab": self._prev_tab,
             "palette": self.show_palette,
@@ -2867,6 +2979,8 @@ class MainWindow(QWidget):
 
     # -------------------------------------------------- 会话恢复 / 退出
     def _restore_session(self) -> None:
+        # 草稿只活 60 秒：启动先清一遍，别让上次的残留一直躺在 cache.json 里
+        self._prune_drafts()
         if not self.store.settings.get("sidebar_visible", True):
             self.sidebar.setVisible(False)
             self.split.setSizes([0, 1200])

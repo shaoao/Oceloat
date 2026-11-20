@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.74", VERSION == "1.0.74", VERSION)
-check("更新内容是 1.0.74", CHANGELOG[0]["version"] == "1.0.74")
+check("版本 1.0.75", VERSION == "1.0.75", VERSION)
+check("更新内容是 1.0.75", CHANGELOG[0]["version"] == "1.0.75")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -451,9 +451,10 @@ check("有新建 / 重命名 / 删除", all(x in _res for x in
 check("定时回收支持 macOS 与 Linux",
       "malloc_zone_pressure_relief" in _trim and "malloc_trim" in _trim)
 check("回收只清可再生的缓存", "icons.clear_cache" in _trim and "gc.collect()" in _trim)
-check("AutoTrim 跟随设置启停", "def apply" in _trim and "auto_trim_min" in _trim)
+check("AutoTrim 跟随开关启停", "def apply" in _trim and "auto_enabled" in _trim)
 check("主窗口持有一个 AutoTrim", "self._auto_trim = AutoTrim(self.store, self)" in _mw_src)
-check("设置页有开关与间隔", "自动释放内存" in _dlg_src and "trim_seg" in _dlg_src)
+check("设置页只有一个内存开关", "自动释放内存" in _dlg_src
+      and "trim_seg" not in _dlg_src and "trim_now" not in _dlg_src)
 check("设置默认开启自动回收", '"auto_trim": True' in (ROOT / "app" / "store.py")
       .read_text(encoding="utf-8"))
 check("i18n 登记了文件管理文案",
@@ -544,6 +545,41 @@ check("历史与回收站各自一份文件",
       "\"history\": \"history.json\"" in _st and "\"trash\": \"trash.json\"" in _st)
 check("可丢弃的缓存单独放", "SIDE_FILE = \"cache.json\"" in _st)
 check("写历史只碰历史文件", "LIST_MODULES" in _st and "_write_lists" in _st)
+
+
+# ---------------------------------------------------------------- 1.0.75 新增
+print("\n[1.0.75 新增]")
+_rp2 = (ROOT / "app" / "request_panel.py").read_text(encoding="utf-8")
+_mw3 = (ROOT / "app" / "main_window.py").read_text(encoding="utf-8")
+_rs3 = (ROOT / "app" / "resmon.py").read_text(encoding="utf-8")
+_sb3 = (ROOT / "app" / "sidebar.py").read_text(encoding="utf-8")
+_sc3 = (ROOT / "app" / "shortcuts.py").read_text(encoding="utf-8")
+_rd3 = (ROOT / "README.md").read_text(encoding="utf-8")
+check("新建文件夹不再用不存在的 QPen.setAlphaF",
+      "pen.setAlphaF" not in _sb3 and "ring.setAlphaF" in _sb3)
+check("一键 Mock 收进更多菜单", "一键 Mock（生成 Mock 路由）" in _rp2
+      and "self.mockize_btn" not in _rp2)
+check("地址栏只剩保存 / 代码 / 更多", "tl.addWidget(self.mockize_btn)" not in _rp2)
+check("内存回收间隔固定 15 分钟", "return DEFAULT_MINUTES" in
+      (ROOT / "app" / "memtrim.py").read_text(encoding="utf-8"))
+check("设置页去掉间隔与手动按钮", "trim_seg" not in _dlg_src and "trim_now" not in _dlg_src)
+check("误关标签留 60 秒草稿", "DRAFT_TTL = 60" in _mw3 and "def _save_draft" in _mw3)
+check("重开请求能接回草稿", "self._take_draft(node_id)" in _mw3)
+check("⌘⇧T 恢复关闭的标签", "reopen_closed_tab" in _mw3 and "Meta+Shift+T" in _sc3)
+check("草稿放 cache.json 不进索引", '"drafts"' in
+      (ROOT / "app" / "storage.py").read_text(encoding="utf-8"))
+check("Mock 试用后焦点回主窗口", "self.setFocus(Qt.FocusReason.OtherFocusReason)" in _mw3)
+check("Mock 胶囊去掉描边", "p.setPen(QPen(C(t.border), 1))" not in _mw3.split("class MockBadge")[-1][:2600])
+check("资源管理器有存储说明视角", "def _build_notes" in _rs3 and "存储说明" in _rs3)
+check("存储说明讲清每个文件", all(x in _rs3 for x in
+      ("state.json", "collections/", "history.json", "trash.json", "cache.json",
+       "backups/", "corrupted/")))
+check("存储说明讲了保障手段", all(x in _rs3 for x in ("校验和", "临时文件", "隔离")))
+check("README 写了存储技术栈与好处", "纯文件" in _rd3 and "hashlib" in _rd3
+      and "改一点只写一点" in _rd3)
+check("更新内容写了误关恢复", any("误关标签" in x or "⌘⇧T" in x for x in ALL_ITEMS))
+check("更新内容写了崩溃修复", any("setAlphaF" in x for x in ALL_ITEMS))
+check("更新内容写了存储说明", any("存储说明" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

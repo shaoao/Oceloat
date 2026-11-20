@@ -8,8 +8,9 @@
    Linux 用 ``malloc_trim``。少了这一步，Python 已经释放的内存仍然挂在进程上，
    任务管理器里一点都不会降。
 
-默认 15 分钟一次，可在「设置 → 通用」里关掉或改成 5 / 30 分钟；同一页还有一颗
-「立即释放」，想马上收一次不用等定时器。资源管理器那边只管文件，不再显示内存。
+默认 15 分钟一次，可在「设置 → 通用」里关掉。间隔故意不做成可调：更短没必要，
+更长又看不出效果，手动按钮也去掉了 —— 定时器自己会做，用户不用为这件事操心。
+资源管理器那边只管文件，不再显示内存。
 """
 from __future__ import annotations
 
@@ -21,10 +22,9 @@ from typing import Any, Dict
 
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 
-# 间隔下限：再短就是无意义的抖动，GC 本身也要花时间
-MIN_MINUTES = 5
+# 间隔固定 15 分钟：写死在代码里，不读设置，避免老存档里残留的
+# auto_trim_min 又把节奏拖回 5 分钟那种无意义的高频 GC。
 DEFAULT_MINUTES = 15
-MAX_MINUTES = 120
 
 _LAST: Dict[str, Any] = {"at": 0.0, "freed": 0, "entries": 0, "runs": 0, "after": 0}
 
@@ -153,11 +153,8 @@ def auto_enabled(settings: Dict[str, Any]) -> bool:
 
 
 def auto_minutes(settings: Dict[str, Any]) -> int:
-    try:
-        value = int(settings.get("auto_trim_min", DEFAULT_MINUTES) or DEFAULT_MINUTES)
-    except (TypeError, ValueError):
-        value = DEFAULT_MINUTES
-    return max(MIN_MINUTES, min(MAX_MINUTES, value))
+    """固定 15 分钟。传入 settings 只是为了签名稳定，旧存档里的间隔不再生效。"""
+    return DEFAULT_MINUTES
 
 
 # ------------------------------------------------------------------ 定时器
@@ -178,7 +175,7 @@ class AutoTrim(QObject):
         self.apply()
 
     def apply(self) -> None:
-        """重读设置：开关与间隔。关掉就彻底停表，不留后台唤醒。"""
+        """重读设置：只认开关。关掉就彻底停表，不留后台唤醒。"""
         settings = getattr(self.store, "settings", {}) or {}
         self._timer.setInterval(auto_minutes(settings) * 60_000)
         if auto_enabled(settings):

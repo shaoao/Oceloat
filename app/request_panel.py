@@ -328,9 +328,6 @@ class UrlBar(QWidget):
         self.send_btn.clicked.connect(self._on_send)
         self.save_btn = icon_button("download", "保存到集合  ⌘S", 30, 15)
         self.save_btn.clicked.connect(self.saveRequested.emit)
-        # 一键 Mock：把当前 Method / Path 与真实响应体直接变成一条 Mock 路由
-        self.mockize_btn = icon_button("layers", "一键 Mock：用当前请求生成 Mock 路由", 30, 15)
-        self.mockize_btn.clicked.connect(self.mockizeRequested.emit)
         self.code_btn = icon_button("code", "生成代码片段  ⌘⇧C", 30, 15)
         self.code_btn.clicked.connect(self.codeRequested.emit)
         self.more_btn = icon_button("more", "更多操作", 30, 15)
@@ -341,7 +338,6 @@ class UrlBar(QWidget):
         tl = QHBoxLayout(tools)
         tl.setContentsMargins(0, 0, 0, 0)
         tl.setSpacing(2)
-        tl.addWidget(self.mockize_btn)
         tl.addWidget(self.save_btn)
         tl.addWidget(self.code_btn)
         tl.addWidget(self.more_btn)
@@ -1911,8 +1907,11 @@ class RequestEditor(QWidget):
         t = theme()
         menu = Menu(self)
         act_code = menu.addAction(icons.icon("code", t.text, 14), "生成代码片段  ⌘⇧C")
-        act_curl = menu.addAction(icons.icon("terminal" if False else "book", t.text, 14), "复制为 cURL")
+        act_curl = menu.addAction(icons.icon("book", t.text, 14), "复制为 cURL")
         menu.addSeparator()
+        # 一键 Mock 和 Mock 数据是一家人，收进这里比在地址栏再占一颗图标清爽
+        act_mockize = menu.addAction(icons.icon("layers", t.text, 14),
+                                     "一键 Mock（生成 Mock 路由）")
         act_mock = menu.addAction(icons.icon("grid", t.text, 14), "Mock 数据…")
         menu.addSeparator()
         act_dup = menu.addAction(icons.icon("copy", t.text, 14), "复制请求")
@@ -1922,6 +1921,8 @@ class RequestEditor(QWidget):
             self.codeRequested.emit()
         elif chosen is act_curl:
             self.copyCurlRequested.emit()
+        elif chosen is act_mockize:
+            self.mockizeRequested.emit()
         elif chosen is act_mock:
             self.mockRequested.emit()
         elif chosen is act_dup:

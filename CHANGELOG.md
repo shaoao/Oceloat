@@ -1,5 +1,23 @@
 # What's Changed
 
+## v1.0.75 — 2026-11-20
+
+**Fixed**
+- Creating a folder crashed the app: the sidebar's focus ring called `QPen.setAlphaF`, which does not exist, and Qt took the process down with it. The alpha now goes on the colour, and the animation still plays.
+- "Use this route to create a request" left the keyboard focus on the mock window, so typing afterwards went nowhere. The main window is raised and focused before the request is sent.
+
+**Changed**
+- Quick Mock moved into the request bar's "More" menu next to "Mock Data…", so the URL bar is back to three actions: save, code, more.
+- Automatic memory cleanup is a single switch again: a fixed 15-minute interval, no 5/15/30-minutes picker and no "release now" button. The timer does it quietly; there is nothing to tune.
+- The running-mock pill lost its outline and keeps only a faint fill, which sits better with the status row next to it.
+
+**Added**
+- Accidentally closing a tab no longer costs you the edits. A tab closed with unsaved changes keeps a 60-second draft: reopening the same request brings back params, headers and body, flagged as unsaved. ⌘⇧T restores the last closed tabs as they were, response included.
+- The resource manager gained a "Storage notes" view: what each file owns, why the data is split this way, and what checksums, atomic writes and the quarantine folder actually protect against — in plain language, in the same panel as the file list so switching does not resize anything.
+
+**Verified**
+- Smoke suite: 771 checks, including the draft round-trip, ⌘⇧T restore, storage notes content and the fixed 15-minute trimmer. Brand suite: 222 checks. Bundled self-test: 8/8.
+
 ## v1.0.74 — 2026-11-20
 
 **Changed**

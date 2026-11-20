@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLineEdit,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -40,7 +41,9 @@ from .widgets import (
     Card,
     Divider,
     Label,
+    SegmentedTabs,
     SmoothScrollArea,
+    VBox,
     fade_in,
     icon_button,
 )
@@ -1102,20 +1105,188 @@ class ResourceDialog(GlassDialog):
         card = Card(radius=12)
         box = QVBoxLayout(card)
         box.setContentsMargins(12, 10, 12, 8)
-        box.setSpacing(6)
+        box.setSpacing(8)
 
+        # 文件 / 说明两个视角共用这一块：说明看完切回文件，尺寸不跳
+        head = QHBoxLayout()
+        head.setContentsMargins(2, 0, 2, 0)
+        head.setSpacing(8)
+        self.view_seg = SegmentedTabs([("files", "文件"), ("notes", "存储说明")],
+                                      style="pill", height=24, pad_h=11, font_size=11.0)
+        self.view_seg.set_current("files", emit=False)
+        self.view_seg.changed.connect(self._on_view)
+        head.addWidget(self.view_seg, 0)
+        head.addStretch(1)
+        box.addLayout(head)
+
+        self.view_stack = QStackedWidget()
         self.browser = FileBrowser(app_root())
         self.browser.selection_changed.connect(self._on_selection)
         self.browser.path_changed.connect(lambda _p: self._restore_status())
         self.browser.revealed.connect(self._say_info)
         self.browser.delete_requested.connect(self._delete)
         self.browser.menu_requested.connect(self._show_menu)
-        box.addWidget(self.browser, 1)
+        self.view_stack.addWidget(self.browser)
+        self.view_stack.addWidget(self._build_notes())
+        box.addWidget(self.view_stack, 1)
         return card
+
+    def _on_view(self, key: str) -> None:
+        show_files = key == "files"
+        self.view_stack.setCurrentIndex(0 if show_files else 1)
+        # 说明是只读视角：底下的文件操作按钮跟着收起，免得点了没反应
+        self.actions_card.setVisible(show_files)
+        if show_files:
+            self._restore_status()
+
+    # -------------------------------------------------- 存储说明
+    @staticmethod
+    def _L(zh: str, en: str) -> str:
+        return en if i18n.current() == "en" else zh
+
+    def _note_row(self, name: str, title: str, desc: str) -> QWidget:
+        t = theme()
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+        key = Label(name, 10.4, t.text, mono_font=True)
+        key.setFixedWidth(126)
+        key.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        lay.addWidget(key, 0)
+        text = VBox(spacing=2)
+        text.layout().setContentsMargins(0, 0, 0, 0)
+        text.layout().setSpacing(2)
+        text.layout().addWidget(Label(title, 11.2, t.text))
+        body = Label(desc, 10.4, t.text_faint)
+        body.setWordWrap(True)
+        text.layout().addWidget(body)
+        lay.addWidget(text, 1)
+        return row
+
+    def _note_bullet(self, text: str) -> QWidget:
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(7)
+        dot = Label("·", 12, theme().text_faint)
+        dot.setFixedWidth(8)
+        dot.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(dot, 0)
+        body = Label(text, 10.6, theme().text_dim)
+        body.setWordWrap(True)
+        lay.addWidget(body, 1)
+        return row
+
+    def _build_notes(self) -> QWidget:
+        t = theme()
+        inner = QWidget()
+        lay = QVBoxLayout(inner)
+        lay.setContentsMargins(4, 4, 6, 6)
+        lay.setSpacing(9)
+
+        lay.addWidget(Label(self._L("数据都在这一个文件夹里", "Everything lives in one folder"),
+                            12.6, t.text, weight=QFont.Weight.DemiBold))
+        lead = Label(self._L(
+            "纯本地 JSON，没有数据库进程：双击就能看，复制一个文件夹就是完整备份，"
+            "出问题用文本编辑器也能救回来。按「改动的频率」拆成几份，各管一块。",
+            "Plain local JSON, no database process: double-click to read it, copy the "
+            "folder for a full backup, and fix it with any text editor. Files are split "
+            "by how often they change, each owning one job."), 10.6, t.text_faint)
+        lead.setWordWrap(True)
+        lay.addWidget(lead)
+        lay.addWidget(Divider())
+
+        rows = [
+            ("state.json", self._L("目录", "Index"),
+             self._L("放哪些集合、设置、开着的标签。只有清单不放内容，所以一直很小（约 9 KB）。",
+                     "Which collections exist, settings, open tabs. Just a manifest, so it "
+                     "stays tiny (~9 KB).")),
+            ("collections/", self._L("每个集合一份", "One file per collection"),
+             self._L("请求、参数、请求头、请求体、脚本都在里面。改一个请求只重写它自己那一份。",
+                     "Requests, params, headers, body, scripts. Editing one request rewrites "
+                     "only its own file.")),
+            ("history.json", self._L("发送记录", "Request history"),
+             self._L("最近 240 条（最多 500 条），超了从最旧的丢，不会越攒越大。",
+                     "The last 240 entries (500 max); the oldest are dropped first so it never "
+                     "grows without bound.")),
+            ("trash.json", self._L("回收站", "Trash"),
+             self._L("删掉的请求先放这，默认留 30 天，随时能还原。",
+                     "Deleted requests land here for 30 days and can be restored anytime.")),
+            ("cache.json", self._L("缓存", "Cache"),
+             self._L("图标索引、上次的位置、误关标签的 60 秒草稿。删了只是下次慢一点。",
+                     "Icon index, last position, 60-second drafts of closed tabs. Deleting it "
+                     "only costs a little speed.")),
+            ("backups/", self._L("自动备份", "Backups"),
+             self._L("整包快照留 3 份，历史与回收站另留几份轮换，总量不超过 96 MB。",
+                     "Three full snapshots plus a few rolling copies of history and trash, "
+                     "capped at 96 MB.")),
+            ("corrupted/", self._L("隔离区", "Quarantine"),
+             self._L("读坏的文件挪到这里留证据，不影响别人，也不会被下次写入覆盖。",
+                     "Files that fail to read are moved here as evidence — they do not affect "
+                     "anything else and are never overwritten.")),
+        ]
+        for name, title, desc in rows:
+            lay.addWidget(self._note_row(name, title, desc))
+
+        lay.addWidget(Divider())
+        lay.addWidget(Label(self._L("为什么要拆开", "Why split them"),
+                            10.4, t.text_faint, weight=QFont.Weight.DemiBold, spacing=0.6))
+        for line in (
+            self._L("改一个请求只写一个小文件，保存是毫秒级，也不会整份存档一起坏。",
+                    "Editing one request writes one small file: saves stay in the millisecond "
+                    "range and a mistake cannot damage the whole archive."),
+            self._L("出错时文件小、看得懂、修得动；单个集合坏了，其它集合照常打开。",
+                    "When something goes wrong the files are small enough to read and repair; "
+                    "one broken collection never blocks the rest."),
+            self._L("文本格式能进 Git、能 diff、能手改，不被某个软件版本锁住。",
+                    "Plain text works with Git, diffs, hand edits, and is never locked into one "
+                    "app version."),
+        ):
+            lay.addWidget(self._note_bullet(line))
+
+        lay.addWidget(Divider())
+        lay.addWidget(Label(self._L("怎么保证不丢", "How your data is protected"),
+                            10.4, t.text_faint, weight=QFont.Weight.DemiBold, spacing=0.6))
+        for line in (
+            self._L("每个文件带校验和，读的时候对一遍，被改坏能立刻发现。",
+                    "Every file carries a checksum, verified on read, so damage is caught "
+                    "immediately."),
+            self._L("写入先写临时文件再整体替换，断电或强杀不会留下半个文件。",
+                    "Writes go to a temp file first, then replace atomically — a crash or power "
+                    "loss never leaves half a file."),
+            self._L("索引最后写：集合先落地，索引没跟上只是「索引旧一点」。",
+                    "The index is written last: collections land first, so a stale index is the "
+                    "worst case."),
+            self._L("读不出来就隔离，再试这个文件自己的备份，实在不行也只跳过它一个。",
+                    "Unreadable files are quarantined and restored from their own backup; if "
+                    "that fails only that one file is skipped."),
+            self._L("磁盘上有、索引里没有的集合会被自动找回来，不会默默地看不见。",
+                    "Collections on disk but missing from the index are picked up again instead "
+                    "of silently disappearing."),
+            self._L("条数与体积都有硬上限，长期用下来存档仍然是小文件。",
+                    "Hard limits on entry count and size keep the archive small over time."),
+        ):
+            lay.addWidget(self._note_bullet(line))
+
+        tail = Label(self._L("正在用的就是这些文件 —— 想看哪一个，切回「文件」点进去。",
+                             "These are the files in use — switch to Files to open any of them."),
+                     10.4, t.text_faint)
+        tail.setWordWrap(True)
+        lay.addWidget(tail)
+        lay.addStretch(1)
+
+        scroll = SmoothScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(SmoothScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(inner)
+        return scroll
 
     def _build_actions(self) -> QWidget:
         card = Card(radius=12)
         card.setFixedHeight(50)
+        self.actions_card = card
         lay = QHBoxLayout(card)
         lay.setContentsMargins(14, 0, 13, 0)
         lay.setSpacing(8)
