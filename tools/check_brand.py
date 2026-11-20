@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.80", VERSION == "1.0.80", VERSION)
-check("更新内容是 1.0.80", CHANGELOG[0]["version"] == "1.0.80")
+check("版本 1.0.81", VERSION == "1.0.81", VERSION)
+check("更新内容是 1.0.81", CHANGELOG[0]["version"] == "1.0.81")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -717,6 +717,22 @@ check("分栏手柄按方向画线", 'if self.orientation() == Qt.Orientation.Ho
 check("更新内容写了这轮调整", any("状态灯放到" in x for x in ALL_ITEMS)
       and any("控制条不再单独占一行" in x for x in ALL_ITEMS)
       and any("左右分栏看得清" in x for x in ALL_ITEMS))
+
+# ---------------------------------------------------------------- 1.0.81 新增
+print("\n[1.0.81 新增]")
+_wp8 = (ROOT / "app" / "ws_panel.py").read_text(encoding="utf-8")
+_rq8 = (ROOT / "app" / "request_panel.py").read_text(encoding="utf-8")
+
+check("播放按钮归到头部右侧按钮组", 'hl.insertWidget(hl.indexOf(self.more_btn), self.sse_view.pause_btn)' in _rp8
+      and '_strip_lay.removeWidget(self.sse_view.pause_btn)' in _rp8)
+check("实时空态共用品牌动画", "self.empty_mark = BrandMark" in _wp8
+      and "autoplay=True" in _wp8)
+check("节点按钮按模式收起", "self.node_btn.setVisible(not realtime)" in _rq8)
+check("节点代理只服务 HTTP", "node_proxy" in (ROOT / "app" / "http_client.py").read_text(encoding="utf-8")
+      and "node_proxy" not in (ROOT / "app" / "sse_client.py").read_text(encoding="utf-8"))
+check("更新内容写了这三项", any("播放 / 暂停按钮挪到" in x for x in ALL_ITEMS)
+      and any("三个页面没消息时" in x for x in ALL_ITEMS)
+      and any("实时协议页藏起节点" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

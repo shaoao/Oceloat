@@ -1,5 +1,12 @@
 # What's Changed
 
+## v1.0.81 — 2026-11-21
+
+**Changed**
+- The SSE play/pause button now sits in the header's right-hand button group next to "More", instead of trailing the "Not connected" status pill.
+- WebSocket, Socket.IO and SSE empty states now show the same brand animation as the HTTP empty state, so all three realtime pages look consistent.
+- Hid the node picker on realtime pages: nodes are HTTP proxy exits (`node_proxy` / `relay_node` are only read by `http_client`), WS / Socket.IO / SSE connections never use them.
+
 ## v1.0.80 — 2026-11-20
 
 **Changed**

@@ -596,13 +596,19 @@ class ResponsePanel(QWidget):
         self.center.addWidget(self.sio_view)
         self.sse_view = SseLogView()
         self.center.addWidget(self.sse_view)
-        # SSE 控制条（握手结果 / 速率 / 暂停）并入头部第一行，
-        # 不再单独占一条：把 strip 从视图里 take 出来塞进 meta。
+        # SSE 控制条（握手结果 / 速率）并入头部第一行，不再单独占一条：
+        # 把 strip 从视图里 take 出来塞进 meta。
+        # 播放/暂停按钮则归到头部右侧那组工具按钮里（和「更多」挨着），
+        # 不跟状态文字挤在一起。
         self.sse_view.layout().removeWidget(self.sse_view.strip)
         self.sse_view.strip_div.hide()
         self.sse_view.dot.hide()          # 顶部胶囊左侧的灯已经指示状态，别亮两颗
+        _strip_lay = self.sse_view.strip.layout()
+        _strip_lay.removeWidget(self.sse_view.pause_btn)
+        hl.insertWidget(hl.indexOf(self.more_btn), self.sse_view.pause_btn)
         self._meta_layout.addWidget(self.sse_view.strip)
         self.sse_view.strip.hide()
+        self.sse_view.pause_btn.hide()
         self._is_ws = False
         self._realtime_kind = "ws"
         self._stale_notice = True
@@ -989,6 +995,7 @@ class ResponsePanel(QWidget):
         self._set_head_visible(True)
         self.meta.show()
         self.sse_view.strip.setVisible(self._realtime_kind == "sse")
+        self.sse_view.pause_btn.setVisible(self._realtime_kind == "sse")
         self._set_actions_enabled(False)
         self.url_label.setVisible(bool(url))
         self.url_label.setText(url)
@@ -1256,6 +1263,7 @@ class ResponsePanel(QWidget):
         self._set_head_visible(True)
         self.meta.show()
         self.sse_view.strip.hide()
+        self.sse_view.pause_btn.hide()
         self._set_metrics_visible(True)
         self._set_dots(True)
         self.url_label.show()

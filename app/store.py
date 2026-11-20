@@ -26,9 +26,21 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.80"
+VERSION = "1.0.81"
 
 CHANGELOG = [
+    {
+        "version": "1.0.81",
+        "date": "2026-11-21",
+        "items": [
+            "SSE 的播放 / 暂停按钮挪到头部右侧，和「更多」挨在一起，不再贴在"
+            "「未连接」状态胶囊后面",
+            "WebSocket / Socket.IO / SSE 三个页面没消息时，也画上和 HTTP 空态"
+            "同一枚品牌动画，三个页面视觉统一",
+            "实时协议页藏起节点选择：节点是 HTTP 的代理出口，"
+            "WS / Socket.IO / SSE 的连接根本不走它，摆着只会误导",
+        ],
+    },
     {
         "version": "1.0.80",
         "date": "2026-11-20",

@@ -1139,11 +1139,19 @@ class WsLogView(QWidget):
         el = QVBoxLayout(self.empty)
         el.setContentsMargins(24, 0, 24, 0)
         el.setSpacing(0)
+        # 和 HTTP 空态用同一枚品牌动画（WS / Socket.IO / SSE 共用这个基类），
+        # 没帧时也会自己描一遍线，三个实时页的空态视觉统一。
+        from .brand import BrandMark
+
+        self.empty_mark = BrandMark(px(56), self.empty, autoplay=True,
+                                    token="text_faint", hover_token="text")
         self.empty_label = Label("", 11.6, theme().text_faint)
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setWordWrap(True)
         self.empty_label.setText(i18n.tr("还没有消息。连接后收发的内容会实时出现在这里。"))
         el.addStretch(1)
+        el.addWidget(self.empty_mark, 0, Qt.AlignmentFlag.AlignHCenter)
+        el.addSpacing(px(12))
         el.addWidget(self.empty_label)
         el.addStretch(1)
 

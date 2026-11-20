@@ -505,6 +505,9 @@ class UrlBar(QWidget):
             "支持 ws:// wss://；直接粘 http(s) 地址会自动补全 Socket.IO 路径")
             if sio else i18n.tr("支持 ws:// wss://；直接粘 http(s) 地址会自动改写"))
         self.method.set_locked(realtime)
+        # 节点 = HTTP 代理出口（node_proxy / relay_node 只有 http_client 读），
+        # WS / Socket.IO / SSE 的连接根本不经过它；摆在那里只会误导，收起来。
+        self.node_btn.setVisible(not realtime)
         if realtime:
             # 已连接时重新 load（切标签 / 刷新界面）不能把按钮打回「连接」。
             if self._ws_state not in ("open", "connecting", "closing"):
