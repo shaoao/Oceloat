@@ -1,5 +1,15 @@
 # What's Changed
 
+## v1.0.78 — 2026-11-20
+
+**Fixed**
+- The window no longer aborts on launch or while resizing. The rounded-corner mask used to draw the whole window at 8× (1320×840 needed a 284MB ARGB buffer, nearly 500MB when maximized) and repeat it on every resize step — enough to blow the process up. It is now computed analytically row by row from the circle equation: 0.02ms and no buffer at all, with exactly the same arc.
+- Paint and resize callbacks are guarded. An exception inside a `paintEvent` / `resizeEvent` makes PyQt6 call `qFatal`, which kills the process with SIGABRT and no visible message; now such a frame is skipped and the app keeps running.
+- Tracebacks that happen on the C++ side (the `qFatal` path) are copied into `crash.log`, so a future hard crash can be traced to the exact line instead of leaving nothing behind.
+
+**Verified**
+- Smoke suite: 823 checks. Brand suite: 277 checks. Bundled self-test: 8/8.
+
 ## v1.0.77 — 2026-11-20
 
 **Changed**

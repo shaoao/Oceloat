@@ -72,6 +72,55 @@ def _install_crash_log() -> None:
     sys.excepthook = hook
 
 
+def _tee_stderr() -> None:
+    """把 fd 2 同时接到终端和 crash.log。
+
+    PyQt6 在 paintEvent / resizeEvent 这类重写方法里抛异常时会直接 qFatal →
+    abort，走不到 sys.excepthook，也来不及写任何东西：终端里一闪而过，
+    crash.log 里一个字都没有（本机 21:52 / 21:56 两次 SIGABRT 就是这样）。
+    这里在 Python 层把 stderr 复制成两路，C++ 层写进去的 traceback 也能留下来。
+    """
+    if os.environ.get("OCELOT_NO_TEE"):
+        return
+    import threading
+
+    if _CRASH_FILE is None:
+        return
+    path = _CRASH_FILE.name
+    try:
+        read_fd, write_fd = os.pipe()
+        saved = os.dup(2)
+        os.dup2(write_fd, 2)
+        os.close(write_fd)
+    except OSError:
+        return
+
+    def pump() -> None:
+        try:
+            fh = open(path, "ab", buffering=0)  # noqa: SIM115
+        except OSError:
+            fh = None
+        while True:
+            try:
+                chunk = os.read(read_fd, 8192)
+            except OSError:
+                break
+            if not chunk:
+                break
+            for fd in (saved,):
+                try:
+                    os.write(fd, chunk)
+                except OSError:
+                    pass
+            if fh is not None:
+                try:
+                    fh.write(chunk)
+                except Exception:                      # noqa: BLE001
+                    pass
+
+    threading.Thread(target=pump, name="stderr-tee", daemon=True).start()
+
+
 from app.main_window import MainWindow  # noqa: E402
 from app.store import Store  # noqa: E402
 from app.theme import apply_theme, set_accent, theme_by_name  # noqa: E402
@@ -86,6 +135,7 @@ def main() -> int:
     app.setStyle("Fusion")
 
     _install_crash_log()
+    _tee_stderr()
     Store.migrate_legacy()          # 旧版 Reqly 的数据目录搬过来
     store = Store.load()
     set_accent(store.settings.get("accent", "auto"))

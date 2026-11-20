@@ -4,7 +4,9 @@ from __future__ import annotations
 import base64
 import copy as _copy
 import json
+import math
 import os
+import sys
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,15 +25,14 @@ from PyQt6.QtCore import (
     pyqtSignal,
 )
 from PyQt6.QtGui import (
-    QBitmap,
     QColor,
     QFont,
     QFontMetricsF,
     QGuiApplication,
-    QImage,
     QKeySequence,
     QPainter,
     QPen,
+    QRegion,
     QShortcut,
 )
 from PyQt6.QtWidgets import (
@@ -381,7 +382,7 @@ class PanelSplitter(QSplitter):
         super().resizeEvent(e)
         # 分栏尺寸只有它自己知道得最准：窗口 resizeEvent 时子控件还没排完，
         # 那时候定位「分栏右下角那颗小按钮」会算到旧尺寸上。
-        self.resized.emit()
+        _guard("PanelSplitter.resizeEvent", self.resized.emit)
 
 
 class SideSplitter(QSplitter):
@@ -416,40 +417,49 @@ class SideHandle(QSplitterHandle):
         p.end()
 
 
-def _rounded_mask(w: int, h: int, radius: int) -> QBitmap:
-    """把窗口裁成圆角：用「抗锯齿圆角图 → 1bit 掩码」而不是 QRegion。
+def _guard(label: str, fn, *args) -> None:
+    """在 Qt 的虚回调里执行，出错只记一笔，绝不让异常穿出到 C++ 层。
 
-    前两版都栽在同一件事上 —— 窗口掩码只有 1bit，谁能把边缘算准谁就好看：
-      · 把圆角路径压成多边形再转区域：圆弧只剩四五段折线，肉眼就是台阶；
-      · 用 QRegion 的椭圆：Qt 内部的椭圆同样是多边形近似，
-        radius=12 时一个角只有几段，裁出来就是「缺一小块」的方角（用户截图）。
-    这里换个思路：先把圆角矩形画到 8 倍大的图上（这时 AntiAliasing 是真的
-    平滑），缩回原尺寸得到带透明度的灰度边缘，再取 alpha 掩码（阈值 128）。
-    边缘位置精确到 1/8 像素，四个角就是真正连续的弧。
+    PyQt6 在 paintEvent / resizeEvent 这类重写方法里抛出 Python 异常时，
+    C++ 那边没有栈可退，只能 qFatal → abort：用户看到的就是「窗口一闪就没了」
+    （本机 21:52 / 21:56 两次 SIGABRT 就是这一类）。这些回调都只是界面修饰，
+    失败了大不了这一帧不画，没必要拉着整个进程一起死。
+    """
+    try:
+        fn(*args)
+    except Exception:                                  # noqa: BLE001
+        import traceback
+
+        print(f"[Ocelot] 界面回调 {label} 出错（已忽略）:", file=sys.stderr, flush=True)
+        traceback.print_exc()
+
+
+def _rounded_region(w: int, h: int, radius: int) -> QRegion:
+    """窗口圆角遮罩：按圆的方程逐行算出内缩量，整块减去四角的细条。
+
+    为什么不画一张抗锯齿的图再取 alpha：1bit 掩码本来就只有「显示 / 不显示」
+    两种取值，画再大最后还是要阈值化成逐行的台阶，形状和这里逐行算出来的
+    完全一样 —— 但那张图要开 w*8 × h*8 的 ARGB 缓冲，1320×840 的窗口就是
+    284MB，最大化直接冲到 500MB，dragging 窗口每帧都来一次，进程会被撑崩。
+    这里只做 4×r 次「减去一条 1px 高的细条」，内存几乎为零，形状分毫不差。
     """
     w, h = max(1, w), max(1, h)
+    region = QRegion(0, 0, w, h)
     r = max(0, min(int(radius), w // 2, h // 2))
     if r <= 0:
-        # 全可见：掩码里 1 = 显示，所以整块填 1（0 会把窗口整个藏起来）
-        full = QImage(w, h, QImage.Format.Format_Mono)
-        full.fill(1)
-        return QBitmap.fromImage(full)
-    ss = 8                      # 超采样倍数：8 倍已经肉眼看不出台阶
-    img = QImage(w * ss, h * ss, QImage.Format.Format_ARGB32_Premultiplied)
-    img.fill(QColor(0, 0, 0, 0))
-    p = QPainter(img)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(0, 0, 0, 255))
-    p.drawRoundedRect(QRectF(0, 0, w * ss, h * ss), r * ss, r * ss)
-    p.end()
-    img = img.scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio,
-                     Qt.TransformationMode.SmoothTransformation)
-    mono = img.createAlphaMask()
-    # createAlphaMask 把「透明」记成 1、「不透明」记成 0，正好和 QWidget 掩码
-    # 的语义相反（1 才是可见）。不反转的话圆角很「漂亮」，整块窗口却是空的。
-    mono.invertPixels()
-    return QBitmap.fromImage(mono)
+        return region
+    for y in range(r):
+        # 半像素采样：第 y 行圆心的纵向偏移，和抗锯齿图阈值化后的结果一致
+        dy = r - (y + 0.5)
+        inset = int(r - math.sqrt(max(0.0, r * r - dy * dy)) + 0.5)
+        if inset <= 0:
+            continue
+        bottom = h - 1 - y
+        region -= QRegion(0, y, inset, 1)               # 左上
+        region -= QRegion(w - inset, y, inset, 1)       # 右上
+        region -= QRegion(0, bottom, inset, 1)          # 左下
+        region -= QRegion(w - inset, bottom, inset, 1)  # 右下
+    return region
 
 
 class CardRoot(QWidget):
@@ -464,7 +474,7 @@ class CardRoot(QWidget):
         win = self.window()
         fn = getattr(win, "_round_corners", None)
         if callable(fn):
-            fn()
+            _guard("CardRoot.resizeEvent", fn)
 
 
 class ContentSurface(QWidget):
@@ -1143,7 +1153,7 @@ class MainWindow(QWidget):
         if getattr(self, "_mask_size", None) == (w, h):
             return
         self._mask_size = (w, h)
-        self.setMask(_rounded_mask(w, h, self.CARD_RADIUS))
+        self.setMask(_rounded_region(w, h, self.CARD_RADIUS))
         self.root.clearMask()
 
     def paintEvent(self, _e):
@@ -3346,8 +3356,8 @@ class MainWindow(QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        self._round_corners()
-        self._place_layout_btn()
+        _guard("MainWindow.resizeEvent", self._round_corners)
+        _guard("MainWindow.resizeEvent", self._place_layout_btn)
         if hasattr(self, "toast") and self.toast.isVisible():
             self.toast._place()
         if hasattr(self, "palette") and self.palette.isVisible():

@@ -26,9 +26,22 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.77"
+VERSION = "1.0.78"
 
 CHANGELOG = [
+    {
+        "version": "1.0.78",
+        "date": "2026-11-20",
+        "items": [
+            "修掉「窗口一闪就没了」：圆角遮罩改成按圆的方程逐行算出来再裁，"
+            "不再为整个窗口开一张 8 倍大的位图（1320×840 要 284MB，最大化快 500MB，"
+            "拖窗口时每帧都来一次，进程直接被打爆）。现在每次裁剪 0.02ms、内存几乎为零",
+            "界面回调加了兜底：自绘和尺寸变化里万一出错只跳过这一帧，"
+            "不会再把整个进程 abort 掉",
+            "崩溃现场会自己留下来：C++ 层 abort 前的 traceback 也抄进 crash.log，"
+            "下次再有闪退能直接定位到哪一行",
+        ],
+    },
     {
         "version": "1.0.77",
         "date": "2026-11-20",

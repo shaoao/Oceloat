@@ -248,6 +248,12 @@ class _StatusDot(QWidget):
             self.update()
 
     def paintEvent(self, _e):  # noqa: N802
+        # 自绘一律走兜底：paintEvent 里抛异常，PyQt6 会直接 abort 掉整个进程
+        from .main_window import _guard
+
+        _guard("SseStatusDot.paintEvent", self._paint_dot)
+
+    def _paint_dot(self) -> None:
         from PyQt6.QtCore import QRectF as _QRectF
         from PyQt6.QtGui import QColor as _QColor
         from PyQt6.QtGui import QPainter as _QPainter
@@ -468,6 +474,9 @@ class SseLogView(WsLogView):
     # -------------------------------------------------- 统计
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
+        self._fit_width()
+
+    def _fit_width(self) -> None:
         w = self.width()
         # 窄了就先让统计和搜索退场，保住「筛选 + 三个图标」，绝不叠字
         self.stats.setVisible(w >= 640)

@@ -4294,24 +4294,21 @@ def main() -> int:
             TransferDialog.exec = orig_exec_t
         check("导入导出仍是完整面板窗口", bool(opened.get("title")), str(opened))
 
-        # ---- 圆角遮罩：抗锯齿超采样出来的位图掩码
-        from app.main_window import _rounded_mask
+        # ---- 圆角遮罩：按圆的方程逐行算内缩，整块减去四角的细条
+        from PyQt6.QtCore import QPoint as _QP
 
-        mask = _rounded_mask(200, 120, 12)
-        img = mask.toImage()
+        from app.main_window import _rounded_region
 
-        def _vis(x, y):
-            return img.pixel(x, y) == 4294967295       # 1 = 显示
-
+        reg = _rounded_region(200, 120, 12)
         check("圆角遮罩裁掉四个角",
-              not _vis(0, 0) and not _vis(199, 0) and not _vis(0, 119) and not _vis(199, 119))
-        check("圆角遮罩保留中心和边中点", _vis(100, 60) and _vis(100, 0) and _vis(0, 60))
-        # 每行的左边缘只差 1px（半径 12 的圆弧：9 6 5 4 3 2 1 1 1 0 …），
-        # 出现 3px 以上的跳变就是多边形近似那种「缺角」。
+              not reg.contains(_QP(0, 0)) and not reg.contains(_QP(199, 0))
+              and not reg.contains(_QP(0, 119)) and not reg.contains(_QP(199, 119)))
+        check("圆角遮罩保留中心和边中点",
+              reg.contains(_QP(100, 60)) and reg.contains(_QP(100, 0)) and reg.contains(_QP(0, 60)))
         insets = []
         for y in range(12):
             x = 0
-            while x < 200 and not _vis(x, y):
+            while x < 200 and not reg.contains(_QP(x, y)):
                 x += 1
             insets.append(x)
         # 和理想圆逐行对比：偏差不超过 1.5px 才算真正的圆弧（多边形近似会差好几像素）
@@ -4319,6 +4316,24 @@ def main() -> int:
         check("圆角遮罩是连续弧线而非方块",
               max(abs(i - v) for i, v in zip(insets, ideal)) <= 1.5,
               f"{insets} vs {[round(v, 1) for v in ideal]}")
+        # 回归：以前用 8 倍超采样画整窗，1320×840 要开 284MB 的缓冲，拖着窗口就崩
+        _t0 = _time.perf_counter()
+        for _ in range(40):
+            _rounded_region(1320, 840, 12)
+        _cost = (_time.perf_counter() - _t0) * 1000 / 40
+        check("圆角遮罩是零拷贝的轻量计算", _cost < 3.0, f"{_cost:.2f} ms / 次")
+
+        # ---- 界面回调不许把异常抛进 C++（paintEvent 抛异常 = 进程 abort）
+        from app.main_window import _guard
+
+        _hit = {}
+
+        def _boom():
+            _hit["ok"] = True
+            raise ValueError("paint fail")
+
+        _guard("test", _boom)
+        check("界面回调异常被吞掉不崩进程", _hit.get("ok") is True)
 
         # ---- Mock：AI 生成入口 + 常用例子
         from app import mock_ai as _mai

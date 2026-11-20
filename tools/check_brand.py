@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.77", VERSION == "1.0.77", VERSION)
-check("更新内容是 1.0.77", CHANGELOG[0]["version"] == "1.0.77")
+check("版本 1.0.78", VERSION == "1.0.78", VERSION)
+check("更新内容是 1.0.78", CHANGELOG[0]["version"] == "1.0.78")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -399,10 +399,10 @@ check("更新内容写了 README 装修", any("README 重新排版" in x for x i
 print("\n[1.0.69 新增]")
 check("卡片铺满窗口，不留投影留白", "卡片铺满整个窗口" in _mw_src
       and "CARD_RADIUS = 12" in _mw_src)
-check("圆角改由窗口遮罩裁", "self.setMask(_rounded_mask" in _mw_src
+check("圆角改由窗口遮罩裁", "self.setMask(_rounded_region" in _mw_src
       and "self.root.clearMask()" in _mw_src)
-check("圆角掩码走抗锯齿超采样", "_rounded_mask" in _mw_src
-      and "SmoothTransformation" in _mw_src and "toFillPolygon" not in _mw_src)
+check("圆角逐行解析算弧", "_rounded_region" in _mw_src
+      and "math.sqrt" in _mw_src and "toFillPolygon" not in _mw_src)
 check("最大化时清掉窗口遮罩", "if not self.mask().isEmpty():" in _mw_src
       and "self.clearMask()" in _mw_src)
 check("窗口边缘有 1px 细描边", "p.setPen(QPen(C(t.border), 1))" in _mw_src)
@@ -616,8 +616,7 @@ check("路由编辑器有例子菜单", "def _examples" in _mp4 and "BODY_SNIPPE
 check("导入导出恢复成完整面板", "def open_transfer" in _mw4
       and "sidebar.transferRequested" in _mw4 and "TransferDialog(self.store, self)" in _mw4
       and "_import_clipboard" not in _mw4)
-check("圆角遮罩用抗锯齿位图", "_rounded_mask" in _mw4 and "createAlphaMask" in _mw4
-      and "invertPixels" in _mw4)
+check("圆角遮罩用解析区域", "_rounded_region" in _mw4 and "QRegion(0, 0, w, h)" in _mw4)
 check("标题栏左右留白一致", "lay.setContentsMargins(16, 0, 16, 0)" in _mw4)
 check("改名统一为 Mock 服务", "Mock 数据…" not in (ROOT / "app" / "request_panel.py").read_text(
       encoding="utf-8") and '"Mock 服务…"' in _mw4)
@@ -636,9 +635,10 @@ _sc5 = (ROOT / "app" / "sse_client.py").read_text(encoding="utf-8")
 _rp5 = (ROOT / "app" / "request_panel.py").read_text(encoding="utf-8")
 _rd5 = (ROOT / "README.md").read_text(encoding="utf-8")
 
-check("圆角掩码是抗锯齿超采样", "img.scaled(w, h" in _mw5
-      and "SmoothTransformation" in _mw5 and "createAlphaMask" in _mw5)
-check("掩码反转过（1 才是可见）", "mono.invertPixels()" in _mw5)
+check("圆角遮罩零拷贝", "_rounded_region" in _mw5 and "createAlphaMask" not in _mw5
+      and "SmoothTransformation" not in _mw5)
+check("界面回调有兜底", "def _guard" in _mw5 and "_guard(\"MainWindow.resizeEvent\"" in _mw5)
+check("崩溃现场抄进 crash.log", "_tee_stderr" in (ROOT / "main.py").read_text(encoding="utf-8"))
 check("不再用 QRegion 拼圆角", "RegionType.Ellipse" not in _mw5)
 check("导入导出恢复完整面板", "TransferDialog(self.store, self)" in _mw5
       and "_import_clipboard" not in _mw5 and "_export_bundle" not in _mw5)
@@ -663,6 +663,23 @@ check("更新内容写了圆角修复", any("圆角" in x for x in ALL_ITEMS))
 check("更新内容写了分栏切换", any("分栏" in x for x in ALL_ITEMS))
 check("更新内容写了 SSE 暂停", any("暂停" in x for x in ALL_ITEMS))
 check("更新内容写了断开变红", any("断开" in x and "红" in x for x in ALL_ITEMS))
+
+# ---------------------------------------------------------------- 1.0.78 新增
+print("\n[1.0.78 新增]")
+_mw6 = (ROOT / "app" / "main_window.py").read_text(encoding="utf-8")
+_main6 = (ROOT / "main.py").read_text(encoding="utf-8")
+
+check("圆角按圆的方程逐行算", "def _rounded_region" in _mw6 and "math.sqrt" in _mw6)
+check("圆角不再开整窗位图", "w * ss" not in _mw6 and "createAlphaMask" not in _mw6)
+check("圆角四角各减去细条", "_rounded_region(1320" not in _mw6 and "region -= QRegion(0, y, inset, 1)" in _mw6)
+check("窗口回调有兜底", "def _guard" in _mw6
+      and '_guard("MainWindow.resizeEvent", self._round_corners)' in _mw6)
+check("分栏回调有兜底", '_guard("PanelSplitter.resizeEvent", self.resized.emit)' in _mw6)
+check("SSE 状态点自绘有兜底", "_guard(\"SseStatusDot.paintEvent\"" in
+      (ROOT / "app" / "sse_panel.py").read_text(encoding="utf-8"))
+check("C 层 traceback 抄进 crash.log", "def _tee_stderr" in _main6
+      and "os.dup2(write_fd, 2)" in _main6)
+check("更新内容写了闪退修复", any("一闪就没了" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:
