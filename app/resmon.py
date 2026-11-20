@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QFontMetricsF, QPainter, QPen
 from PyQt6.QtWidgets import (
     QApplication,
@@ -143,6 +143,9 @@ def list_entries(path: Path, query: str = "", sort_key: str = "name",
         entries = [p for p in path.iterdir()]
     except OSError:
         return []
+    # 内部文件不摆出来：.lock 是写入互斥用的，.DS_Store 是系统垃圾。
+    # 想看得真切，右键「在 Finder 中显示」即可。
+    entries = [p for p in entries if not p.name.startswith(".") and p.name != ".lock"]
     query = (query or "").strip().lower()
     if query:
         entries = [p for p in entries if query in p.name.lower()]
@@ -222,23 +225,28 @@ def to_trash(path: Path) -> Tuple[bool, str]:
 # ------------------------------------------------------------------ 占用概览
 
 GROUP_META: Dict[str, str] = {
-    "state": "状态文件",
-    "backup": "自动备份",
-    "log": "运行日志",
-    "other": "其它文件",
+    "index": "索引",
+    "module": "集合文件",
+    "backup": "备份",
+    "quarantine": "隔离区",
+    "other": "其它",
 }
 
-STORAGE_TOKENS = {"state": "accent", "backup": "info",
-                  "log": "warning", "other": "text_faint"}
+STORAGE_TOKENS = {"index": "accent", "module": "info", "backup": "success",
+                  "quarantine": "danger", "other": "text_faint"}
 
 
 def _group_of(name: str) -> str:
     if name == "state.json":
-        return "state"
+        return "index"
+    if name == "collections":
+        return "module"
+    if name == "backups":
+        return "backup"
+    if name == "corrupted":
+        return "quarantine"
     if name.startswith("state.json.bak"):
         return "backup"
-    if name.endswith(".log"):
-        return "log"
     return "other"
 
 
@@ -318,10 +326,11 @@ def data_assets(store: Any, tabs: int = 0) -> Dict[str, int]:
 
 
 def free_backups(root: Path, days: int = 30, keep: int = 3) -> Tuple[int, int]:
-    """删掉 N 天前的 state.json.bak*，返回 (个数, 字节)。
+    """删掉 N 天前的旧备份，返回 (个数, 字节)。
 
-    只碰自己的备份，而且**永远留最近 keep 份**：哪怕全是老文件，也有三份能退回去。
-    这些备份现在就是存档损坏时的救命绳，不能为了省几百 KB 全清掉。
+    只碰自己的备份（``backups/`` 与老格式 ``state.json.bak*``），而且
+    **永远留最近 keep 份**：哪怕全是老文件，也有几份能退回去。
+    这些备份就是存档损坏时的救命绳，不能为了省几百 KB 全清掉。
     """
     cutoff = time.time() - days * 86400
     count = 0
@@ -329,6 +338,11 @@ def free_backups(root: Path, days: int = 30, keep: int = 3) -> Tuple[int, int]:
     try:
         entries = sorted(root.glob("state.json.bak*"),
                          key=lambda p: p.stat().st_mtime, reverse=True)
+        bucket = root / "backups"
+        if bucket.is_dir():
+            entries += sorted((p for p in bucket.glob("*.json") if p.is_file()),
+                              key=lambda p: p.stat().st_mtime, reverse=True)
+        entries.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     except OSError:
         return 0, 0
     for path in entries[keep:]:
@@ -356,6 +370,11 @@ class Dot(QWidget):
         self._size = size
         self.setFixedSize(size + 3, size + 3)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def set_token(self, token: str) -> None:
+        if token != self._token:
+            self._token = token
+            self.update()
 
     def paintEvent(self, _e):
         p = QPainter(self)
@@ -845,6 +864,99 @@ class FileBrowser(QWidget):
 # ------------------------------------------------------------------ 主窗口
 
 
+class ChipStrip(QWidget):
+    """一行集合快捷入口：点一下直接跳到那份 JSON。
+
+    不够宽时先省略名字，最后留一枚「+N」把剩下的交给文件列表。
+    """
+
+    picked = pyqtSignal(str)
+    more = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(24)
+        self.setMouseTracking(True)
+        self._items: List[Tuple[str, str]] = []
+        self._rects: List[Tuple[QRectF, str]] = []
+        self._hover = -1
+
+    def set_items(self, items: List[Tuple[str, str]]) -> None:
+        if items == self._items:
+            return
+        self._items = list(items)
+        self._hover = -1
+        self.update()
+
+    def _font(self):
+        return font(10.8, QFont.Weight.Medium)
+
+    def _layout_chips(self) -> None:
+        """按可用宽度排一遍，放不下的折成「+N」。"""
+        self._rects = []
+        if not self._items:
+            return
+        fm = QFontMetricsF(self._font())
+        x = 0.0
+        width = self.width()
+        gap = 6.0
+        for i, (label, key) in enumerate(self._items):
+            text_w = min(fm.horizontalAdvance(label) + 18, 132)
+            if x + text_w > width and i > 0:
+                # 放不下就折成「+N」：宁可少显示一个，也不让最后一个被裁掉
+                self._rects.append((QRectF(x, 3, 32, 18), "+%d" % (len(self._items) - i)))
+                break
+            self._rects.append((QRectF(x, 3, text_w, 18), key))
+            x += text_w + gap
+
+    def paintEvent(self, _e):
+        t = theme()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self._layout_chips()
+        fm = QFontMetricsF(self._font())
+        p.setFont(self._font())
+        for i, (rect, key) in enumerate(self._rects):
+            label = next((lab for lab, k in self._items if k == key), key)
+            if key.startswith("+"):
+                label = key
+            hot = i == self._hover
+            p.setPen(QPen(C(t.border), 1))
+            p.setBrush(C(t.elevated if hot else t.card))
+            p.drawRoundedRect(rect, 9, 9)
+            p.setPen(C(t.text if hot else t.text_dim))
+            room = rect.width() - (6 if label.startswith("+") else 14)
+            text = fm.elidedText(label, Qt.TextElideMode.ElideRight, room)
+            p.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), text)
+
+    def _hit(self, pos: QPointF):
+        for i, (rect, key) in enumerate(self._rects):
+            if rect.contains(pos):
+                return i, key
+        return -1, ""
+
+    def mouseMoveEvent(self, e):
+        idx, _key = self._hit(QPointF(e.position()))
+        if idx != self._hover:
+            self._hover = idx
+            self.setCursor(Qt.CursorShape.PointingHandCursor if idx >= 0
+                           else Qt.CursorShape.ArrowCursor)
+            self.update()
+
+    def leaveEvent(self, _e):
+        self._hover = -1
+        self.update()
+
+    def mouseReleaseEvent(self, e):
+        idx, key = self._hit(QPointF(e.position()))
+        if idx < 0:
+            return
+        if key.startswith("+"):
+            self.more.emit()
+        else:
+            self.picked.emit(key)
+
+
 class ResourceDialog(GlassDialog):
     """资源管理器：一个只针对应用数据目录的文件管理器。
 
@@ -933,7 +1045,7 @@ class ResourceDialog(GlassDialog):
 
         legend = QHBoxLayout()
         legend.setSpacing(12)
-        for key in ("state", "backup", "log", "other"):
+        for key in ("index", "module", "backup", "quarantine", "other"):
             item = QHBoxLayout()
             item.setSpacing(5)
             dot = Dot(STORAGE_TOKENS[key], 5)
@@ -948,6 +1060,42 @@ class ResourceDialog(GlassDialog):
         self.disk_label = Label("", 10.2, theme().text_faint)
         legend.addWidget(self.disk_label, 0, Qt.AlignmentFlag.AlignVCenter)
         box.addLayout(legend)
+        box.addWidget(Divider())
+
+        # 完整性一行：一句话说清「现在能不能放心」，需要时才露出「重建索引」
+        health = QHBoxLayout()
+        health.setSpacing(7)
+        self.health_dot = Dot("success", 5)
+        self.health_label = Label("正在读取…", 10.4, theme().text_faint)
+        health.addWidget(self.health_dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        health.addWidget(self.health_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        health.addStretch(1)
+        self.repair_btn = Button("重建索引", "refresh", kind="ghost", height=23,
+                                 padding=8, icon_size=11, font_size=10.8, gap=4,
+                                 tooltip="按当前内容重写索引与校验和，修掉对不上的地方")
+        self.repair_btn.clicked.connect(self._act_repair)
+        self.repair_btn.hide()
+        self.check_btn = Button("检查完整性", "check", kind="ghost", height=23,
+                                padding=8, icon_size=11, font_size=10.8, gap=4,
+                                 tooltip="逐个文件验一遍：缺了 / 坏了 / 有没有没登记的")
+        self.check_btn.clicked.connect(self._act_check)
+        health.addWidget(self.repair_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        health.addWidget(self.check_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        box.addLayout(health)
+
+        # 集合快捷条：点名字就跳到那份 JSON，不用在目录里翻
+        self.chips_row = QWidget()
+        chips = QHBoxLayout(self.chips_row)
+        chips.setContentsMargins(0, 0, 0, 0)
+        chips.setSpacing(7)
+        chips.addWidget(Label("集合", 10.2, theme().text_faint), 0,
+                        Qt.AlignmentFlag.AlignVCenter)
+        self.chips = ChipStrip()
+        self.chips.picked.connect(self._jump_module)
+        self.chips.more.connect(self._jump_modules_dir)
+        chips.addWidget(self.chips, 1)
+        self.chips_row.hide()
+        box.addWidget(self.chips_row)
         return card
 
     def _build_browser(self) -> QWidget:
@@ -1013,6 +1161,15 @@ class ResourceDialog(GlassDialog):
             refs = self._legend.get(g["key"])
             if refs is not None:
                 refs[2].setText(human_bytes(g["size"]))
+        self._refresh_health_line(data)
+        try:
+            st = self.store.storage_stats() if self.store is not None else {}
+        except Exception:  # noqa: BLE001
+            st = {}
+        modules = st.get("modules") or []
+        self.chips.set_items([(m.get("name") or m.get("file") or "?", m.get("file") or "")
+                              for m in modules])
+        self.chips_row.setVisible(bool(modules))
         disk = data["disk"]
         if disk["total"]:
             free_pct = disk["free"] / disk["total"] * 100
@@ -1021,6 +1178,104 @@ class ResourceDialog(GlassDialog):
                 free=human_bytes(disk["free"]), pct=f"{free_pct:.0f}"))
         else:
             self.disk_label.setText("")
+
+    def _refresh_health_line(self, data: Dict[str, Any]) -> None:
+        """一行说清现状：几个索引 / 几个集合 / 备份多大，上次检查结果优先。"""
+        t = theme()
+        checked = getattr(self, "_health", None)
+        if checked is not None and checked.get("at", 0) > 0:
+            problems = len(checked.get("problems") or [])
+            when = time.strftime("%H:%M", time.localtime(checked["at"]))
+            if problems:
+                self.health_dot.set_token("danger")
+                self.health_label.setText(i18n.trf(
+                    "{n} 个文件对不上 · 检查于 {when}", n=problems, when=when))
+                self.health_label.setStyleSheet(f"color: {t.danger}; background: transparent;")
+                self.repair_btn.show()
+                return
+            self.health_dot.set_token("success")
+            self.health_label.setText(i18n.trf(
+                "{n} 个文件都正常 · 检查于 {when}", n=checked.get("checked", 0), when=when))
+            self.health_label.setStyleSheet(f"color: {t.text_faint}; background: transparent;")
+            self.repair_btn.hide()
+            return
+        if not data.get("total"):
+            self.health_dot.set_token("accent")
+            self.health_label.setText(i18n.tr("还没写入过数据 · 第一次保存后这里会显示完整性"))
+            self.health_label.setStyleSheet(f"color: {t.text_faint}; background: transparent;")
+            return
+        groups = {g["key"]: g for g in data.get("groups") or []}
+        modules = groups.get("module") or {}
+        backups = groups.get("backup") or {}
+        self.health_dot.set_token("accent")
+        self.health_label.setText(i18n.trf(
+            "{c} 个集合 · 备份 {b} · 共 {s}",
+            c=human_count(modules.get("files", 0)),
+            b=human_bytes(backups.get("size", 0)),
+            s=human_bytes(data.get("total", 0))))
+        self.health_label.setStyleSheet(f"color: {t.text_faint}; background: transparent;")
+
+    def _act_check(self) -> None:
+        """真去逐个文件验一遍，结果留在这一行上，不弹窗打断。"""
+        if self.store is None:
+            return
+        try:
+            health = self.store.storage_health()
+        except Exception as exc:  # noqa: BLE001
+            self._say(i18n.trf("检查失败：{why}", why=str(exc)), "danger")
+            return
+        health["at"] = time.time()
+        self._health = health
+        self.check_btn.spin_once(420)
+        self.refresh_overview()
+        problems = len(health.get("problems") or [])
+        orphans = len(health.get("orphans") or [])
+        if health.get("empty"):
+            self._say_info(i18n.tr("还没有写入过数据"))
+        elif problems:
+            self._say(i18n.trf("{n} 个文件有问题，可以重建索引", n=problems), "warning", 5200)
+        elif orphans:
+            self._say(i18n.trf("{n} 个文件没登记（会成为孤儿）", n=orphans), "warning", 5200)
+        else:
+            self._say(i18n.trf("{n} 个文件全部正常", n=health.get("checked", 0)))
+
+    def _act_repair(self) -> None:
+        """重建索引：以内存里这份内容为准，把磁盘重写一遍。"""
+        if self.store is None:
+            return
+        from .dialogs import ConfirmDialog
+
+        if not ConfirmDialog.ask(
+                self, i18n.tr("重建索引"),
+                i18n.tr("会按当前打开的内容重写索引、集合文件与校验和，"
+                        "写之前先留一份整包快照。继续？"),
+                i18n.tr("重建")):
+            return
+        try:
+            report = self.store.repair_storage()
+        except Exception as exc:  # noqa: BLE001
+            self._say(i18n.trf("重建失败：{why}", why=str(exc)), "danger")
+            return
+        self._health = None
+        self.browser.reload()
+        self.refresh_overview()
+        errors = report.get("errors") or []
+        if errors:
+            self._say(i18n.trf("重建时出错：{why}", why=errors[0]), "danger", 5200)
+        else:
+            self._say(i18n.trf("索引已重建 · {n} 个集合", n=report.get("written", 0)))
+
+    def _jump_module(self, file_name: str) -> None:
+        target = app_root() / "collections" / file_name
+        if not target.exists():
+            self.browser.reload()
+            return
+        self.browser.set_path(target.parent, select=target)
+
+    def _jump_modules_dir(self) -> None:
+        path = app_root() / "collections"
+        if path.is_dir():
+            self.browser.set_path(path)
 
     def _manual_refresh(self) -> None:
         self.browser.reload()
@@ -1049,8 +1304,10 @@ class ResourceDialog(GlassDialog):
 
     def _on_selection(self, path: Optional[Path]) -> None:
         self._sync_buttons(path)
-        if not self._revert.isActive():
-            self._set_status(self._selection_text(), theme().text_faint)
+        # 用户开始选东西了，说明上一条「已清理…」的消息已经看过：立刻换成选中信息，
+        # 而不是等 3 秒后自己跳回去。
+        self._revert.stop()
+        self._set_status(self._selection_text(), theme().text_faint)
 
     def _set_status(self, text: str, color: str) -> None:
         self.status.setText(text)
@@ -1159,10 +1416,14 @@ class ResourceDialog(GlassDialog):
         act_copy = menu.addAction(icons.icon("copy", t.text_dim, 14), "复制路径")
         menu.addSeparator()
         act_restore = None
-        if path.name.startswith("state.json"):
+        # 能整份顶替当前数据的，只有「整包快照」：备份时的一份、老格式的 .bak
+        restorable = (path.name.startswith("full-")
+                      or path.name.startswith("legacy-state-")
+                      or path.name.startswith("state.json.bak"))
+        if restorable:
             menu.addSeparator()
             act_restore = menu.addAction(
-                icons.icon("undo", t.accent, 14), "用这份存档恢复")
+                icons.icon("undo", t.accent, 14), i18n.tr("用这份快照恢复"))
         menu.addSeparator()
         act_rename = menu.addAction(icons.icon("pencil", t.text, 14), "重命名")
         act_delete = menu.addAction(icons.icon("trash", t.danger, 14), "删除")
@@ -1183,7 +1444,7 @@ class ResourceDialog(GlassDialog):
             self._delete(path)
 
     def _restore_backup(self, path: Path) -> None:
-        """把某份 state.json 备份当成当前存档用（覆盖前自动再备份一次）。"""
+        """用某份整包快照顶替当前数据（覆盖前自动再留一份）。"""
         from .dialogs import ConfirmDialog
 
         try:
@@ -1193,8 +1454,8 @@ class ResourceDialog(GlassDialog):
             stamp, size = "", ""
         ok = ConfirmDialog.ask(
             self, i18n.tr("用这份备份恢复"),
-            i18n.trf("将用「{name}」（{stamp} · {size}）覆盖当前数据。"
-                     "当前数据会先自动备份一份，随时能退回来。恢复后建议重启一次窗口。",
+            i18n.trf("将用「{name}」（{stamp} · {size}）覆盖当前全部内容。"
+                     "覆盖前会先留一份当前的整包快照，随时能退回来。",
                      name=path.name, stamp=stamp, size=size),
             i18n.tr("恢复"))
         if not ok:
@@ -1207,7 +1468,7 @@ class ResourceDialog(GlassDialog):
         self._notify_data_changed()
         self.browser.reload()
         self.refresh_overview()
-        self._say(i18n.trf("已用 {name} 恢复；当前数据已另存为一份备份", name=path.name))
+        self._say(i18n.trf("已用 {name} 恢复；当前内容已另存为一份快照", name=path.name))
 
     def _act_clean(self) -> None:
         """清掉「扔了也不丢数据」的四类东西：过期回收站、旧备份、分析缓存、空 .trash。"""

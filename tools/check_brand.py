@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.73", VERSION == "1.0.73", VERSION)
-check("更新内容是 1.0.73", CHANGELOG[0]["version"] == "1.0.73")
+check("版本 1.0.74", VERSION == "1.0.74", VERSION)
+check("更新内容是 1.0.74", CHANGELOG[0]["version"] == "1.0.74")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -482,7 +482,8 @@ check("Mock 用 show() 打开而不是 exec()",
 check("对话框都设了系统窗口标题", "self.setWindowTitle(title or \"Ocelot\")" in _dlg_src)
 check("存档每次落盘前备份", "def backup_now" in
       (ROOT / "app" / "store.py").read_text(encoding="utf-8")
-      and "_backup_if_due" in (ROOT / "app" / "store.py").read_text(encoding="utf-8"))
+      and "_maybe_snapshot" in
+      (ROOT / "app" / "storage.py").read_text(encoding="utf-8"))
 check("坏存档先隔离再恢复", "corrupt-" in (ROOT / "app" / "store.py").read_text(encoding="utf-8")
       and "def _newest_valid_backup" in
       (ROOT / "app" / "store.py").read_text(encoding="utf-8"))
@@ -501,39 +502,48 @@ check("更新内容写了独立 Mock 窗口", any("Mock 中心改成独立窗口
 check("更新内容写了存档备份", any("存档自动备份" in x for x in ALL_ITEMS))
 check("更新内容写了窗口标题", any("⌘` 切换" in x for x in ALL_ITEMS))
 
-# ---------------------------------------------------------------- 1.0.73 新增
-print("\n[1.0.73 新增]")
-_oce_src = (ROOT / "app" / "oce.py").read_text(encoding="utf-8")
-_cli_src = (ROOT / "app" / "cli.py").read_text(encoding="utf-8")
-_store_src = (ROOT / "app" / "store.py").read_text(encoding="utf-8")
-_files_src = (ROOT / "app" / "files_ui.py").read_text(encoding="utf-8")
-_sb_src = (ROOT / "app" / "sidebar.py").read_text(encoding="utf-8")
-check("集合文件后缀是 .oce", 'EXT = ".oce"' in _oce_src)
-check("格式带版本号", 'FORMAT_KEY = "oce"' in _oce_src and "FORMAT_VERSION" in _oce_src)
-check("写盘是原子替换", "os.replace(tmp, path)" in _oce_src)
-check("重新读回来会复用 id", "def reconcile_ids" in _oce_src)
-check("存储层能关联集合文件", "def link_collection" in _store_src
-      and "def sync_files" in _store_src and "def reload_linked" in _store_src)
-check("落盘时会写回集合文件", "self.sync_files()" in _store_src)
-check("取消关联不删文件", "只断开关联，不动磁盘上的文件" in _store_src)
-check("侧栏给关联集合画标记", "linked_ids" in (ROOT / "app" / "sidebar.py").read_text(encoding="utf-8"))
-check("右键能存为 .oce", "保存为 .oce 文件…" in _sb_src
-      and "另存为 .oce 文件…" in _sb_src)
-check("有集合文件管理窗口", "class FilesDialog" in _files_src)
-check("主窗口监听文件变化", "QFileSystemWatcher" in _mw2.split("def _init_file_watch")[1][:400])
-check("外部改动会先问再用", "用文件版本" in _mw2)
-check("能拖文件进来打开", "def dropEvent" in _mw2 and "def _open_dropped" in _mw2)
-check("CLI 不 import Qt", "PyQt6" not in _cli_src)
-check("CLI 退出码有区分", "return 1 if failed else 0" in _cli_src)
-check("导入认 .oce", '"oce": "Ocelot .oce 集合文件"' in
-      (ROOT / "app" / "transfer.py").read_text(encoding="utf-8"))
-check("i18n 登记了集合文件文案",
-      "Collection Files" in (ROOT / "app" / "i18n.py").read_text(encoding="utf-8"))
-check("README 写了 .oce 与命令行", ".oce" in
-      (ROOT / "README.md").read_text(encoding="utf-8")
-      and "python3 -m app.cli run" in (ROOT / "README.md").read_text(encoding="utf-8"))
-check("更新内容写了集合落盘", any("集合可以存成一个 .oce 文件" in x for x in ALL_ITEMS))
-check("更新内容写了命令行", any("python3 -m app.cli run" in x for x in ALL_ITEMS))
+# ---------------------------------------------------------------- 1.0.74 新增
+print("\n[1.0.74 新增]")
+_st = (ROOT / "app" / "storage.py").read_text(encoding="utf-8")
+_sto = (ROOT / "app" / "store.py").read_text(encoding="utf-8")
+_res2 = (ROOT / "app" / "resmon.py").read_text(encoding="utf-8")
+_sb2 = (ROOT / "app" / "sidebar.py").read_text(encoding="utf-8")
+check("存储层是独立模块", (ROOT / "app" / "storage.py").is_file())
+check("每集合一份文件", "MODULES_DIR = \"collections\"" in _st
+      and "def _module_text" in _st)
+check("写入是原子替换", "os.replace(tmp, path)" in _st and "os.fsync(fh.fileno())" in _st)
+check("文件自带校验和", "checksum" in _st and "def digest" in _st)
+check("索引最后写", _st.index("atomic_write(path, text)")
+      < _st.index("atomic_write(self.index_path, text)"))
+check("坏文件先隔离", "def _quarantine" in _st and "corrupted" in _st)
+check("单个坏文件只跳过它", "已跳过" in _st or "读不出来，已跳过" in _st)
+check("孤儿集合会被挂回来", "未登记的集合" in _st)
+check("删掉的集合文件进备份", "def _retire" in _st and "removed-" in _st)
+check("备份有总量预算", "BACKUP_BUDGET" in _st and "SNAPSHOT_KEEP" in _st)
+check("旧单文件存档自动迁移", "已从单文件存档拆成按集合分文件" in _st)
+check("存储层有完整性检查", "def verify" in _st and "def repair" in _st)
+check("Store 走模块化存储", "self._storage.write(self.data)" in _sto
+      and "def snapshot_text" in _sto)
+check("历史 / 回收站有硬上限", "HISTORY_BYTES" in _sto and "TRASH_MAX" in _sto
+      and "def _trim" in _sto)
+check("云同步传完整快照", "self.store.snapshot_text()" in
+      (ROOT / "app" / "main_window.py").read_text(encoding="utf-8"))
+check("云恢复按模块重写", "replace_all(data)" in
+      (ROOT / "app" / "dialogs.py").read_text(encoding="utf-8"))
+check("资源管理器按存储分组", "\"quarantine\"" in _res2 and "ChipStrip" in _res2)
+check("能检查完整性 / 重建索引", "检查完整性" in _res2 and "重建索引" in _res2)
+check("连续新建文件夹不会层层嵌套", "_creation_parent" in _sb2
+      and "def _unique_name" in _sb2)
+check(".oce 与 CLI 已移除", not (ROOT / "app" / "oce.py").exists()
+      and not (ROOT / "app" / "cli.py").exists())
+check("README 写了模块化存储", "collections/<id>.json" in
+      (ROOT / "README.md").read_text(encoding="utf-8"))
+check("更新内容写了分文件", any("每个集合单独一份" in x for x in ALL_ITEMS))
+check("更新内容写了防膨胀", any("防无限膨胀" in x for x in ALL_ITEMS))
+check("历史与回收站各自一份文件",
+      "\"history\": \"history.json\"" in _st and "\"trash\": \"trash.json\"" in _st)
+check("可丢弃的缓存单独放", "SIDE_FILE = \"cache.json\"" in _st)
+check("写历史只碰历史文件", "LIST_MODULES" in _st and "_write_lists" in _st)
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

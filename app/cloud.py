@@ -93,7 +93,12 @@ def snapshot_stats(data: dict) -> dict:
 
     walk(collections)
     envs = data.get("environments") or []
-    variables = sum(len((e or {}).get("variables") or []) for e in envs if isinstance(e, dict))
+    variables = sum(len((e or {}).get("vars") or []) for e in envs if isinstance(e, dict))
+    variables += len(data.get("global_vars") or [])
+    mock = data.get("mock") or {}
+    mock_routes = len(mock.get("routes") or [])
+    mock_routes += sum(len((i or {}).get("routes") or [])
+                       for i in (mock.get("instances") or []) if isinstance(i, dict))
     text = json.dumps(data, ensure_ascii=False)
     raw = text.encode("utf-8")
     return {
@@ -102,8 +107,9 @@ def snapshot_stats(data: dict) -> dict:
         "environments": len(envs),
         "variables": variables,
         "history": len(data.get("history") or []),
-        "mocks": sum(len((i or {}).get("routes") or [])
-                     for i in ((data.get("mock") or {}).get("instances") or [])),
+        "trash": len(data.get("trash") or []),
+        "mocks": mock_routes,
+        "schema": data.get("schema") or 0,
         "size": len(raw),
         "sha": hashlib.sha256(raw).hexdigest()[:16],
     }

@@ -1,18 +1,21 @@
 # What's Changed
 
-## v1.0.73 — 2026-11-20
+## v1.0.74 — 2026-11-20
 
-**Added**
-- Collections can live in a `.oce` file: right-click a collection → "Save as .oce file…" and every later edit is written back to disk. One collection per file, in your own project folder, ready for Git.
-- The format is meant to be read: only fields that carry content are written, key order is fixed, and defaults are implied — a plain GET is a name, a method and a URL on three lines, so changing a URL shows up as one changed line in a diff. Internal state (ids, expanded folders, scroll position) never leaks into the file.
-- When the file changes underneath you — `git pull`, an editor save — the app notices and asks which version wins. Choosing your own keeps the other version as a `.bak` next to it. Reloading reuses ids, so open tabs do not lose their request.
-- Linked collections carry a small file glyph in the sidebar (hover for the path) and a context menu with write-now, reload-from-file, show in Finder and unlink. Unlinking only drops the link; the file is never deleted.
-- A "Collection Files" window (title bar menu / command palette) lists every linked collection with its path and sync state, and can write one or all of them back.
-- Drop a `.oce`, Postman or OpenAPI file onto the window to open it. The import dialog and "Export collection" understand `.oce` too.
-- `python3 -m app.cli run api/payments.oce --var base_url=$BASE` runs a collection from the terminal without importing Qt. Exit code 0 when everything passes, 1 when a request fails, 2 when the file is unusable; `--json` for pipelines, `--list` to preview.
+**Changed**
+- The store is modular now: `state.json` only holds the index (settings, environments, the list of collections), every collection lives in its own `collections/<id>.json`, history and trash get their own `history.json` / `trash.json`, disposable caches go to `cache.json`, and backups go to `backups/`. A 60-entry history used to make the one file 120 KB before every save; now the index is under 9 KB and writing history touches one file. One damaged file costs you one piece, not the whole dataset.
+- Each collection file carries its own checksum. Writes are `tmp → fsync → rename`, so a crash leaves a `.tmp` at worst; reads that fail the checksum quarantine the file and fall back to that collection's own backup, then skip just that one.
+- The index is written last: modules land first, so a stale index only means "index is a bit behind" and files win on the next read. A broken index is recovered from a full snapshot, with the original moved to `corrupted/`.
+- Two extra safety nets: collection files that are on disk but missing from the index are re-attached instead of ignored, and deleted ones are moved to `backups/` rather than unlinked.
+- The old single-file store migrates on first launch, with a copy of the original kept; old `state.json.bak` and corrupt files are moved into the new folders.
+- Growth is bounded: history 500 entries / 24 MB, trash 400 entries / 32 MB, op log 200, open tabs 60, backups 3 full snapshots plus a 96 MB budget — oldest goes first, the very first backup stays.
+- Cloud sync uploads a complete snapshot (with schema and real stats) and restores by rewriting modules, after taking a full snapshot. Also fixed the variable count in the stats, which was always zero.
+- The resource manager speaks storage now: size split across index / collections / backups / quarantine, one line of integrity status with "Check integrity" and "Rebuild index", collection chips that jump straight to the file, and internal files (`.lock`, `.DS_Store`) hidden.
+- Fixed new folders: repeated use used to nest one inside another; now they are siblings with numbered names, visible when created from the history view, and the list status bar no longer gets stuck behind the previous toast.
+- Removed the `.oce` collection files and the CLI added in 1.0.73 — local files belong to JSON, and the complexity was not worth it. JSON redundancy is the thing worth doing well.
 
 **Verified**
-- Smoke suite: 747 checks, including format round-trip stability, external edits, id reuse, unlink leaving the file alone, and the CLI hitting a real server with auth and query params.
+- Smoke suite: 735 checks, including module round-trip, single-file corruption isolation, orphan recovery, index recovery from a snapshot, legacy migration, retention caps, integrity check and rebuild.
 
 ## v1.0.72 — 2026-11-20
 

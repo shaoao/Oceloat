@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 from PyQt6.QtCore import (
     QEasingCurve,
@@ -405,16 +405,8 @@ class TreeDelegate(QStyledItemDelegate):
             x += 17
             count = len(node.get("children") or [])
             count_text = str(count) if count else ""
-            # 关联了 .oce 文件的集合：名字右边多一枚小文件标，提示「它有磁盘副本」
-            linked = node.get("id") in self.tree.linked_ids
-            pad_right = 0
-            if linked:
-                fpm = icons.pixmap("file", t.text_faint if hover < 0.5 else t.text_dim, 11, 1.7)
-                p.drawPixmap(QPointF(rect.right() - 14, cy - 5.5), fpm)
-                pad_right = 17
             p.setFont(font(12.5, QFont.Weight.DemiBold))
-            avail = (rect.width() - (x - rect.left()) - pad_right
-                     - (px(18) if count_text else 6))
+            avail = rect.width() - (x - rect.left()) - (px(18) if count_text else 6)
             name = QFontMetricsF(p.font()).elidedText(node.get("name", ""), Qt.TextElideMode.ElideRight, avail)
             p.setPen(text_color)
             p.drawText(QRectF(x, rect.top(), avail, rect.height()),
@@ -422,7 +414,7 @@ class TreeDelegate(QStyledItemDelegate):
             if count_text:
                 p.setFont(mono(9.5))
                 p.setPen(C(t.text_faint))
-                p.drawText(QRectF(rect.right() - pad_right - px(18), rect.top(), px(14), rect.height()),
+                p.drawText(QRectF(rect.right() - px(18), rect.top(), px(14), rect.height()),
                            int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), count_text)
         else:
             method = (node.get("method") or "GET").upper()
@@ -485,8 +477,6 @@ class CollectionsTree(QTreeWidget):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.open_ids: Set[str] = set()
-        # 哪些集合关联了 .oce 文件（委托画标记用，Sidebar.refresh 时同步）
-        self.linked_ids: Set[str] = set()
         self._hover_item: Optional[QTreeWidgetItem] = None
         self._hover_v = 0.0
         # 基类会把「选中行」整行（含缩进区）涂一层 Highlight，缩进区就露出一块方形灰底。
@@ -841,6 +831,8 @@ class Sidebar(QWidget):
         self._history_vanish = HistoryVanish(self)
         self._focus_pulse = FocusPulse(self)
         self.tree.renameCommitted.connect(self.rename_node)
+        # 刚建出来的节点（id, 它的父级）：连续新建时用来判断该建兄弟还是建子级
+        self._last_created: Optional[Dict[str, Any]] = None
         self.refresh()
 
     def resizeEvent(self, e):  # noqa: N802
@@ -942,7 +934,6 @@ class Sidebar(QWidget):
         self.tree.blockSignals(True)
         self.tree.clear()
         self.tree.open_ids = self.open_ids
-        self.tree.linked_ids = set(self.store.file_map())
         for node in self.store.collections:
             self._add_item(None, node, expanded)
         self.tree.blockSignals(False)
@@ -965,10 +956,6 @@ class Sidebar(QWidget):
         item.setData(0, ROLE_ID, node.get("id"))
         item.setData(0, ROLE_TYPE, node.get("type"))
         item.setData(0, ROLE_DATA, node)
-        if node.get("id") in self.tree.linked_ids:
-            path = self.store.link_path(node.get("id"))
-            if path is not None:
-                item.setToolTip(0, i18n.trf("集合文件：{path}", path=str(path)))
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsDragEnabled
         if node.get("type") == "folder":
             flags |= Qt.ItemFlag.ItemIsDropEnabled | Qt.ItemFlag.ItemIsEditable
@@ -1116,8 +1103,6 @@ class Sidebar(QWidget):
                                i18n.tr("Socket.IO 请求"))
         menu.addSeparator()
         a_folder = menu.addAction(icons.icon("folder", t.text, 14), i18n.tr("新建文件夹"))
-        menu.addSeparator()
-        a_open = menu.addAction(icons.icon("file", t.text, 14), i18n.tr("打开 .oce 文件…"))
         pos = self.new_btn.mapToGlobal(QPoint(0, 0))
         pos.setY(pos.y() - menu.sizeHint().height() - 4)
         chosen = menu.exec(pos)
@@ -1129,8 +1114,6 @@ class Sidebar(QWidget):
             self.create_request_in(self._selected_folder(), "SIO")
         elif chosen is a_folder:
             self._new_folder()
-        elif chosen is a_open:
-            self.open_oce_file()
 
     def _new_request(self) -> None:
         if self._mode == "history":
@@ -1146,13 +1129,46 @@ class Sidebar(QWidget):
         self.changed.emit()
 
     def _new_folder(self, parent_id: Optional[str] = None) -> None:
-        node = new_folder("New Folder")
-        target = parent_id if parent_id is not None else self._selected_folder()
+        """新建文件夹。
+
+        连着点几次「新建文件夹」应该得到一排平级文件夹，而不是一层套一层 ——
+        新建后焦点会落在刚建的那一项上，所以只有「焦点还在刚建的这个」时，
+        才把落点退回它的父级。手动选了别处，就按选中的位置来。
+        """
+        if self._mode != "collections":
+            # 在历史 / 搜索里点新建，建完必须能看见，而不是悄悄落进树里
+            self.seg.set_current("collections", emit=False)
+            self._on_mode("collections")
+        target = parent_id if parent_id is not None else self._creation_parent()
+        node = new_folder(self._unique_name("New Folder", target))
         self.store.add_node(target, node)
         self.store.save()
         self.refresh()
         self.changed.emit()
+        self._last_created = {"id": node.get("id"), "parent": target}
         self._focus_new_node(node.get("id"))
+
+    def _creation_parent(self) -> Optional[str]:
+        """新节点该落在哪一级。"""
+        last = self._last_created or {}
+        current = self.tree.currentItem()
+        node = (current.data(0, ROLE_DATA) or {}) if current is not None else {}
+        if last and node.get("id") == last.get("id"):
+            return last.get("parent")
+        return self._selected_folder()
+
+    def _unique_name(self, base: str, parent_id: Optional[str]) -> str:
+        """同级里重名会让树看着发糊，默认名自动加序号。"""
+        parent = self.store.find(parent_id) if parent_id else None
+        siblings = (parent.get("children") if parent is not None
+                    else self.store.collections) or []
+        names = {str(n.get("name") or "") for n in siblings if isinstance(n, dict)}
+        if base not in names:
+            return base
+        n = 2
+        while f"{base} {n}" in names:
+            n += 1
+        return f"{base} {n}"
 
     def _focus_new_node(self, node_id: Optional[str]) -> None:
         """焦点跳到新建节点：滚动居中 + 高亮脉冲 + 就地改名输入框。
@@ -1323,27 +1339,6 @@ class Sidebar(QWidget):
         act_export = (menu.addAction(icons.icon("download", t.text, 14),
                                      i18n.tr("导出集合"))
                       if is_folder else None)
-
-        # 集合文件（.oce）：只有顶层集合能关联文件 —— 一个文件里存的就是一个
-        # 集合，把子文件夹单独关联出去会让「这个文件属于谁」变得说不清。
-        top_level = is_folder and self._parent_of(node_id) is None
-        linked = self.store.is_linked(node_id)
-        act_save_as = act_write_back = act_reload_file = act_reveal = act_unlink = None
-        if top_level:
-            menu.addSeparator()
-            act_save_as = menu.addAction(
-                icons.icon("file", t.text, 14),
-                i18n.tr("另存为 .oce 文件…") if linked else i18n.tr("保存为 .oce 文件…"))
-            if linked:
-                act_write_back = menu.addAction(icons.icon("sync", t.text, 14),
-                                                i18n.tr("立即写回文件"))
-                act_reload_file = menu.addAction(icons.icon("refresh", t.text, 14),
-                                                 i18n.tr("从文件重新读取"))
-                act_reveal = menu.addAction(icons.icon("external", t.text, 14),
-                                            i18n.tr("在 Finder 中显示"))
-                act_unlink = menu.addAction(icons.icon("close", t.text_faint, 14),
-                                            i18n.tr("取消文件关联"))
-
         act_rename = menu.addAction(icons.icon("pencil", t.text, 14), i18n.tr("重命名…"))
         act_dup = menu.addAction(icons.icon("copy", t.text, 14), i18n.tr("创建副本"))
         if not is_folder:
@@ -1371,20 +1366,6 @@ class Sidebar(QWidget):
             path = export_folder(self.store, node, self.window(), global_pos)
             if path:
                 self.notify.emit(i18n.trf("已导出到 {name}", name=path.rsplit("/", 1)[-1]))
-        elif act_save_as is not None and chosen is act_save_as:
-            self._save_as_file(node)
-        elif act_write_back is not None and chosen is act_write_back:
-            self._write_back(node)
-        elif act_reload_file is not None and chosen is act_reload_file:
-            self._reload_file(node)
-        elif act_reveal is not None and chosen is act_reveal:
-            from .files_ui import reveal_in_finder
-
-            reveal_in_finder(self.store.link_path(node_id))
-        elif act_unlink is not None and chosen is act_unlink:
-            self.store.unlink_collection(node_id)
-            self.refresh()
-            self.notify.emit(i18n.tr("已取消文件关联（文件还在原处）"))
         elif chosen is act_rename:
             self._rename_dialog(node)
         elif chosen is act_dup:
@@ -1416,52 +1397,6 @@ class Sidebar(QWidget):
             return None
 
         return walk(None)
-
-    # -------------------------------------------------- 集合文件
-    def _save_as_file(self, node: Dict[str, Any]) -> None:
-        """把选中的集合写成一个 .oce，并保持双向关联。"""
-        from .files_ui import choose_save_path
-
-        path = choose_save_path(self.window(), node.get("name") or "collection", self.store)
-        if path is None:
-            return
-        ok, err = self.store.link_collection(node.get("id"), path)
-        if not ok:
-            self.notify.emit(err)
-            return
-        self.refresh()
-        self.changed.emit()
-        self.notify.emit(i18n.trf("已保存为 {name}", name=path.name))
-
-    def _write_back(self, node: Dict[str, Any]) -> None:
-        ok, err = self.store.write_back(node.get("id"))
-        self.refresh()
-        self.notify.emit(err if not ok else i18n.tr("已写回文件"))
-
-    def _reload_file(self, node: Dict[str, Any]) -> None:
-        ok, err = self.store.reload_linked(node.get("id"))
-        if not ok:
-            self.notify.emit(err)
-            return
-        self.refresh()
-        self.changed.emit()
-        self.notify.emit(i18n.tr("已按文件内容刷新"))
-
-    def open_oce_file(self) -> None:
-        """打开一个 .oce：新增集合并绑定文件，文件变了这边会跟着变。"""
-        from .files_ui import choose_open_path
-
-        path = choose_open_path(self.window(), self.store)
-        if path is None:
-            return
-        node, err = self.store.adopt_file(path)
-        if node is None:
-            self.notify.emit(err)
-            return
-        self.refresh()
-        self.changed.emit()
-        self.reveal(node.get("id"))
-        self.notify.emit(i18n.trf("已打开 {name}", name=path.name))
 
     def _rename_dialog(self, node: Dict[str, Any]) -> None:
         from .dialogs import PromptDialog

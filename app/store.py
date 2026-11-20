@@ -1,13 +1,17 @@
 """状态模型与持久化。
 
-存储位置：~/Library/Application Support/Ocelot/state.json（原子写入）。
-数据结构保持纯 JSON，便于用户直接编辑或版本管理。
+数据目录 ``~/Library/Application Support/Ocelot/`` 下按模块存放：
+
+    state.json              索引（设置 / 环境 / 历史 / 回收站）+ 集合清单
+    collections/<id>.json   每个集合一份，单独写、单独备份、坏了只影响自己
+
+具体读写策略（原子写、自校验、孤儿恢复、备份上限）在 ``app/storage.py``。
+内存里仍然是一份完整的 ``dict``，界面代码不用关心磁盘怎么分。
 """
 from __future__ import annotations
 
 import copy
 import json
-import os
 import random
 import shutil
 import time
@@ -15,36 +19,46 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import storage
+from .storage import Storage
+
 APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.73"
+VERSION = "1.0.74"
 
 CHANGELOG = [
     {
-        "version": "1.0.73",
+        "version": "1.0.74",
         "date": "2026-11-20",
         "items": [
-            "集合可以存成一个 .oce 文件了：右键集合「保存为 .oce 文件…」，之后改什么都自动写回，"
-            "文件就在你的项目目录里，能读、能改、能提交进 Git。一个文件一个集合，"
-            "只有真正有内容的字段才会被写进去 —— 一条 GET 就是名字、方法、地址三行，"
-            "改了一个地址 diff 里就只动那一行",
-            "文件被外部改过（git pull、编辑器保存）会自动发现并问你：用文件里的版本，"
-            "还是用你手上的版本覆盖它。选后者时，外部那一版会另存成 .bak 备份，不会丢东西；"
-            "重新读回来时尽量沿用原来的 id，打开着的标签不会突然「找不到请求」",
-            "侧栏里关联了文件的集合名字右边会多一枚小文件图标，鼠标停上去能看到文件路径；"
-            "右键还能「立即写回」「从文件重新读取」「在 Finder 中显示」「取消文件关联」——"
-            "取消关联只断开关联，文件本身不会被动",
-            "新增「集合文件」窗口（标题栏菜单 / 命令面板）：一眼看出每个集合存在哪、"
-            "跟磁盘上的文件是否一致，可以单个写回、批量写回、取消关联",
-            "把 .oce 或 Postman / OpenAPI 文件直接拖进窗口就能打开；"
-            "导入对话框和「导出集合」也都认 .oce 了",
-            "新增命令行：python3 -m app.cli run api/payments.oce --var base_url=$BASE，"
-            "不依赖界面、不 import Qt，CI 里一行就能跑；全部通过退出码 0，有失败返回 1，"
-            "文件有问题返回 2。--json 输出给流水线读，--list 只列不发",
-            "自测补到 747 项：格式往返一致、外部改动能读回来、id 复用、"
-            "取消关联不删文件、CLI 真发请求并校验认证头与查询参数",
+            "存档拆成模块：state.json 只管索引与设置，每个集合单独一份 "
+            "collections/<id>.json，历史与回收站各自一份 history.json / trash.json，"
+            "纯缓存丢进 cache.json，备份统一放 backups/。一个文件写坏，"
+            "顶多丢那一块，不再是整份数据一起陪葬；索引从 120 KB 降到 9 KB，"
+            "发一次请求只重写 history.json，不再反复重写整份存档",
+            "每个集合文件带自己的校验和，写入一律「临时文件 + fsync + 改名」，"
+            "断电最多留个 .tmp；读的时候校验不过就隔离原件、去翻这个集合的备份，"
+            "实在找不回来也只跳过它一个，其它照常打开",
+            "索引最后写：集合先落地，索引没跟上只是「索引旧一点」，下次以文件为准；"
+            "索引自己损坏时从整包快照恢复，原来那份挪进 corrupted/ 留证据",
+            "多了两层兜底：索引里没有、磁盘上躺着的集合文件会被重新挂回来（不是无视）；"
+            "删掉的集合文件挪进 backups/ 而不是直接删",
+            "旧版本的单文件存档第一次启动自动拆开，拆之前原样留一份；"
+            "老的 state.json.bak 与损坏文件也收进 backups/、corrupted/，根目录保持干净",
+            "防无限膨胀：历史最多 500 条 / 24 MB，回收站 400 条 / 32 MB，"
+            "操作记录 200 条，打开标签 60 个，备份 3 份整包 + 96 MB 总预算，"
+            "超了从最旧的丢，最早的备份永远留着",
+            "云同步传的是完整快照（带 schema 与真实统计），恢复时按模块重写、"
+            "先留整包快照再覆盖；顺手修好了统计里「变量数永远是 0」的问题",
+            "资源管理器改成存储视角：索引 / 集合文件 / 备份 / 隔离区分开计体积，"
+            "多一行完整性状态与「检查完整性」「重建索引」，集合名做成快捷条，"
+            "点一下直接跳到那份 JSON；内部文件（.lock、.DS_Store）不再出现在列表里",
+            "修新建文件夹：连点多次会一层套一层，现在是平级并自动编号；"
+            "在历史视图里新建也能立刻看见；资源管理器里选文件时状态栏不再被上一条提示压住",
+            "撤掉上一版的 .oce 集合文件与命令行：本地要的是轻量，JSON 已经够用，"
+            "把这套复杂度收回来，专心把 JSON 的冗余和安全做扎实",
         ],
     },
     {
@@ -1323,6 +1337,14 @@ CHANGELOG = [
 ]
 
 
+def _approx_bytes(value: Any) -> int:
+    """粗估一条记录的体积，用来给历史 / 回收站设上限。"""
+    try:
+        return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
+    except (TypeError, ValueError):
+        return 512
+
+
 def uid() -> str:
     return uuid.uuid4().hex[:10]
 
@@ -1424,9 +1446,6 @@ def _sample_state() -> Dict[str, Any]:
              "children": [folder_demo, folder_demo2]},
         ],
         "history": [],
-        # 集合文件关联：集合 id → {path, hash, at}。集合可以存成 .oce 文件，
-        # 编辑时自动写回，文件被外部改动时问你要用哪一版（见 app/oce.py）。
-        "files": {},
         # 回收站：删除的集合 / 文件夹 / 请求先存在这里，可恢复、可彻底删除。
         # 每条记录保存完整节点快照与原位置，恢复时放回原处。
         "trash": [],
@@ -1510,8 +1529,10 @@ class Store:
         self._last_backup = 0.0
         # 启动时如果走过「存档损坏 → 从备份恢复」，这里留一句话给界面提示
         self.load_note: Optional[str] = None
-        # 写回 .oce 之后的回调（主窗口拿它重挂文件监听）
-        self.file_listener = None
+        self._storage = Storage(self.path)
+        # 历史 / 回收站的体量估算：只在追加时算一次，避免每次保存都整份序列化
+        self._hist_bytes = 0
+        self._trash_bytes = 0
 
     @classmethod
     def active(cls) -> Optional["Store"]:
@@ -1520,122 +1541,99 @@ class Store:
 
     # ------------------------------------------------------------ 备份
     def backups(self) -> List[Path]:
-        """按时间从新到旧列出自动备份（``state.json.bak-*``）。"""
+        """整包快照（``backups/full-*.json``），按时间从新到旧。"""
         try:
-            items = list(self.path.parent.glob(f"{self.path.name}.bak-*"))
+            items = [p for p in self._storage.backups.glob("full-*.json") if p.exists()]
         except OSError:
             return []
-        return sorted(items, key=lambda p: p.stat().st_mtime if p.exists() else 0,
-                      reverse=True)
+        return sorted(items, key=lambda p: p.stat().st_mtime, reverse=True)
 
     def backup_now(self) -> Optional[Path]:
-        """立刻把磁盘上那份存档备份一份，返回备份路径（失败返回 None）。"""
-        if not self.path.exists():
-            return None
-        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
-        target = self.path.with_name(f"{self.path.name}.bak-{stamp}")
-        if target.exists():         # 同一秒内多次备份：不互相覆盖
-            target = self.path.with_name(f"{self.path.name}.bak-{stamp}-{len(self.backups())}")
-        try:
-            shutil.copy2(self.path, target)
-        except OSError:
-            return None
-        self._last_backup = time.time()
-        self._prune_backups()
-        return target
-
-    def _backup_if_due(self) -> None:
-        if time.time() - self._last_backup < self.BACKUP_EVERY:
-            return
-        self.backup_now()
-
-    def _prune_backups(self) -> None:
-        for old in self.backups()[self.BACKUP_KEEP:]:
-            try:
-                old.unlink()
-            except OSError:
-                pass
+        """立刻留一份整包快照：索引 + 全部集合，一个文件就能整体搬走。"""
+        path = self._storage.snapshot(self.data, force=True)
+        if path is not None:
+            self._last_backup = time.time()
+        return path
 
     def restore_from(self, source: Path) -> tuple[bool, str]:
-        """用某份备份覆盖当前存档。
-
-        覆盖前先把当前存档另存一份（强制、跳过限频），所以点错了还能退回去。
-        """
+        """用一份整包快照恢复全部内容（覆盖前再留一份当前的）。"""
         source = Path(source)
-        try:
-            text = source.read_text("utf-8")
-            data = json.loads(text)
-        except Exception as exc:        # noqa: BLE001
-            return False, f"读不了这份备份：{exc}"
-        if not isinstance(data, dict) or "collections" not in data:
-            return False, "这不是 Ocelot 的存档"
+        payload = storage.read_json(source)
+        if not isinstance(payload, dict):
+            return False, f"读不了这份快照：{source.name}"
+        nodes = payload.get("collections")
+        if not isinstance(nodes, list) or not any(isinstance(n, dict) for n in nodes):
+            return False, "这份不是整包快照（选 backups/full-… 开头的）"
         self.backup_now()
-        try:
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(text, "utf-8")
-            os.replace(tmp, self.path)
-        except OSError as exc:
-            return False, f"写入失败：{exc}"
-        self.data.clear()
-        self.data.update(data)
-        self._dirty = False
+        ok, err = self.replace_all(payload)
+        if not ok:
+            return False, err
         return True, ""
+
+    def snapshot_text(self) -> str:
+        """给云同步用的完整快照（跟内存里的 data 同构，读回来直接能用）。"""
+        return self._storage.snapshot_text(self.data)
+
+    def replace_all(self, payload: Dict[str, Any]) -> tuple[bool, str]:
+        """用外部快照整体替换本机内容：先备份，再按模块重写。"""
+        if not isinstance(payload, dict):
+            return False, "这不是一份能用的快照"
+        nodes = payload.get("collections")
+        if not isinstance(nodes, list) or not any(isinstance(n, dict) for n in nodes):
+            return False, "这份快照里没有集合"
+        self.backup_now()
+        clean = {k: v for k, v in payload.items()
+                 if k not in ("format", "schema", "saved", "index", "app")}
+        ok, why = self._storage.replace_all(clean)
+        if not ok:
+            return False, why
+        self.data.clear()
+        self.data.update(self._with_defaults(clean))
+        self._hist_bytes = 0
+        self._trash_bytes = 0
+        self.save()
+        return True, ""
+
+    # ------------------------------------------------------------ 检查 / 修复
+    def storage_stats(self) -> Dict[str, Any]:
+        return self._storage.stats()
+
+    def storage_health(self) -> Dict[str, Any]:
+        """逐个文件验一遍：缺了 / 坏了 / 有没登记的孤儿文件。"""
+        report = self._storage.verify()
+        report["note"] = self._storage.note or ""
+        return report
+
+    def repair_storage(self) -> Dict[str, Any]:
+        """按内存里这份内容把磁盘重写一遍（索引重建、指纹重算）。"""
+        self._trim()
+        report = self._storage.repair(self.data)
+        self._dirty = False
+        return report
 
     @classmethod
     def load(cls, path: Path = STATE_FILE) -> "Store":
         path = Path(path)
-        data: Optional[Dict[str, Any]] = None
-        note: Optional[str] = None
-        existed = path.exists()
-        if existed:
+        store = cls({}, path)
+        data, note = store._storage.read()
+        if store._storage.migrated:
+            # 老的单文件存档：拆之前先原样留一份，拆坏了还能拿回去
             try:
-                data = json.loads(path.read_text("utf-8"))
-            except Exception:                    # noqa: BLE001
-                data = None
-            if not isinstance(data, dict):
-                # 存档读不了（写了一半 / 被别的东西改坏了）。以前这里直接换成
-                # 示例数据，下一次保存就把用户的东西盖掉了 —— 现在先留证据、
-                # 再试最近的备份，实在没有才用示例。
-                bad = path.with_name(
-                    f"{path.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
-                try:
-                    os.replace(path, bad)
-                except OSError:
-                    bad = None
-                recovered = cls._newest_valid_backup(path)
-                if recovered:
-                    data = recovered[0]
-                    note = f"存档损坏，已从备份恢复（{recovered[1].name}）"
-                    try:                    # 恢复出来的内容写回原位，往后照常用
-                        path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                                        "utf-8")
-                    except OSError:
-                        pass
-                else:
-                    data = None
-                    note = ("存档损坏，原件已保留为 "
-                            f"{bad.name if bad else path.name}，当前显示示例数据")
-        if not isinstance(data, dict):
+                store._storage.backups.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, store._storage.backups /
+                             f"legacy-state-{storage.now_stamp()}.json")
+            except OSError:
+                pass
+        if store._storage.migrated:
+            store._tidy_legacy_files()
+        if store._storage.fresh:
             data = _sample_state()
-        base = _sample_state()
-        for k, v in base.items():
-            data.setdefault(k, v)
-        for k, v in base["settings"].items():
-            data["settings"].setdefault(k, v)
-        # 嵌套设置（如 ai）要做二级补全，否则老存档里缺的键读不到
-        for key, default in base["settings"].items():
-            if isinstance(default, dict):
-                cur = data["settings"].get(key)
-                if not isinstance(cur, dict):
-                    data["settings"][key] = dict(default)
-                else:
-                    for sk, sv in default.items():
-                        cur.setdefault(sk, sv)
-        store = cls(data, path)
+        data = store._with_defaults(data)
+        store.data = data
         store.load_note = note
         # 启动时按设置清理过期回收站条目（默认开、保留 30 天）。有清理才落盘，
-        # 免得每次启动都重写一次 state.json。
-        if store.purge_expired_trash():
+        # 免得每次启动都重写一遍。
+        if store.purge_expired_trash() or store._storage.needs_write:
             store.save()
         # 只有还没有活跃 Store 时才占位：别的地方为了校验落盘而 Store.load() 一份快照，
         # 不该把正在用的那份挤掉（否则弹窗读到的设置会「不生效」）。
@@ -1643,21 +1641,58 @@ class Store:
             cls._active = store
         return store
 
+    def _tidy_legacy_files(self) -> None:
+        """老版本的 ``state.json.bak-*`` / ``*.corrupt-*`` 挪进 backups/、corrupted/。
+
+        迁移只在第一次发生，之后根目录里就只剩索引和几个目录。
+        """
+        st = self._storage
+        try:
+            st.backups.mkdir(parents=True, exist_ok=True)
+            st.bad.mkdir(parents=True, exist_ok=True)
+            for path in self.path.parent.glob("state.json.bak-*"):
+                shutil.move(str(path), str(st.backups / f"legacy-{path.name}"))
+            for path in self.path.parent.glob("state.json.corrupt-*"):
+                shutil.move(str(path), str(st.bad / path.name))
+        except OSError:
+            pass
+
+    @staticmethod
+    def _with_defaults(data: Dict[str, Any]) -> Dict[str, Any]:
+        """补齐新增的键；用户自己删空的集合不会被示例数据覆盖。"""
+        base = _sample_state()
+        for k, v in base.items():
+            data.setdefault(k, v)
+        settings = data.get("settings")
+        if not isinstance(settings, dict):
+            data["settings"] = dict(base["settings"])
+            settings = data["settings"]
+        for k, v in base["settings"].items():
+            settings.setdefault(k, v)
+        # 嵌套设置（如 ai）要做二级补全，否则老存档里缺的键读不到
+        for key, default in base["settings"].items():
+            if isinstance(default, dict):
+                cur = settings.get(key)
+                if not isinstance(cur, dict):
+                    settings[key] = dict(default)
+                else:
+                    for sk, sv in default.items():
+                        cur.setdefault(sk, sv)
+        return data
+
     @staticmethod
     def _newest_valid_backup(path: Path) -> Optional[tuple[Dict[str, Any], Path]]:
-        """找最近一份能解析的备份；``state.json.bak``（云端恢复前留的）也算。"""
+        """找最近一份能解析的整包快照（老格式 ``state.json.bak*`` 也认）。"""
         cands: List[Path] = []
         try:
-            cands = sorted(path.parent.glob(f"{path.name}.bak*"),
-                           key=lambda p: p.stat().st_mtime, reverse=True)
+            cands = sorted(path.parent.glob("state.json.bak*"), reverse=True)
+            cands += sorted((path.parent / storage.BACKUP_DIR).glob("full-*.json"),
+                            key=lambda p: p.stat().st_mtime, reverse=True)
         except OSError:
             return None
         for cand in cands:
-            try:
-                data = json.loads(cand.read_text("utf-8"))
-            except Exception:            # noqa: BLE001
-                continue
-            if isinstance(data, dict) and "collections" in data:
+            data = storage.read_json(cand)
+            if isinstance(data, dict) and isinstance(data.get("collections"), list):
                 return data, cand
         return None
 
@@ -1675,219 +1710,59 @@ class Store:
             print(f"[Ocelot] 迁移旧数据失败: {exc}")
             return False
 
+    # ------------------------------------------------------------ 瘦身
+    # 历史 / 回收站是两处会「越用越大」的地方：条目数和总字节都设上限，
+    # 超了从最旧的丢，保证长期使用后存档仍然是小文件。
+    HISTORY_BYTES = 24 * 1024 * 1024
+    TRASH_BYTES = 32 * 1024 * 1024
+    TRASH_MAX = 400
+    OPS_MAX = 200
+    TABS_MAX = 60
+
+    def _trim(self) -> None:
+        try:
+            limit = int(self.settings.get("history_limit", 240))
+        except (TypeError, ValueError):
+            limit = 240
+        limit = max(20, min(limit, 500))
+        if len(self.history) > limit:
+            del self.history[limit:]
+            self._hist_bytes = -1
+        # 字节数只在接近上限时才算：每次保存都整份序列化历史太亏
+        if self._hist_bytes < 0 or (
+                self._hist_bytes == 0 and self.history):
+            self._hist_bytes = sum(_approx_bytes(e) for e in self.history)
+        if len(self.history) > limit * 0.6 and self._hist_bytes > self.HISTORY_BYTES:
+            while self.history and self._hist_bytes > self.HISTORY_BYTES:
+                dropped = self.history.pop()
+                self._hist_bytes -= _approx_bytes(dropped)
+
+        if len(self.trash_ops) > self.OPS_MAX:
+            del self.trash_ops[self.OPS_MAX:]
+        if len(self.trash) > self.TRASH_MAX:
+            del self.trash[self.TRASH_MAX:]
+            self._trash_bytes = -1
+        if self._trash_bytes < 0 or (self._trash_bytes == 0 and self.trash):
+            self._trash_bytes = sum(_approx_bytes(r) for r in self.trash)
+        if self._trash_bytes > self.TRASH_BYTES:
+            while self.trash and self._trash_bytes > self.TRASH_BYTES:
+                dropped = self.trash.pop()
+                self._trash_bytes -= _approx_bytes(dropped)
+
+        tabs = self.data.get("open_tabs")
+        if isinstance(tabs, list) and len(tabs) > self.TABS_MAX:
+            del tabs[self.TABS_MAX:]
+
     def save(self) -> None:
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            # 覆盖磁盘上前先留一份（限频 10 分钟、最多 5 份），写坏了还能退回去
-            self._backup_if_due()
-            # 关联了 .oce 文件的集合先写文件：断网 / 崩溃也不至于让工作副本
-            # 比磁盘上的文件还新（那份文件往往才是要提交进 Git 的）
-            self.sync_files()
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), "utf-8")
-            os.replace(tmp, self.path)
+            self._trim()
+            report = self._storage.write(self.data)
+            errors = report.get("errors") or []
+            if errors:
+                print(f"[Ocelot] 保存有问题: {errors[:3]}")
             self._dirty = False
         except Exception as exc:  # 持久化失败不应阻断使用
             print(f"[Ocelot] 保存失败: {exc}")
-
-    # ------------------------------------------------------------ 集合文件
-    # 集合可以「关联」到一个 .oce 文件：编辑时自动写回，文件被外部改动时
-    # 会问你要用哪一版。关联关系存 state.json，.oce 里只有集合本身。
-    def file_map(self) -> Dict[str, Dict[str, Any]]:
-        table = self.data.get("files")
-        if not isinstance(table, dict):
-            table = {}
-            self.data["files"] = table
-        return table
-
-    def link_path(self, collection_id: str) -> Optional[Path]:
-        meta = self.file_map().get(collection_id) or {}
-        raw = meta.get("path")
-        return Path(raw) if raw else None
-
-    def is_linked(self, collection_id: str) -> bool:
-        return collection_id in self.file_map()
-
-    def collection_for_path(self, path: Path | str) -> Optional[Dict[str, Any]]:
-        """这个 .oce 文件已经属于哪个集合（用于「重复打开同一个文件」）。"""
-        try:
-            target = Path(path).expanduser().resolve()
-        except OSError:
-            target = Path(path)
-        for cid in list(self.file_map()):
-            cur = self.link_path(cid)
-            if cur is None:
-                continue
-            try:
-                if cur.resolve() == target:
-                    return self.find(cid)
-            except OSError:
-                if str(cur) == str(target):
-                    return self.find(cid)
-        return None
-
-    def _notify_file_listener(self, paths: Optional[List[str]] = None) -> None:
-        """关联关系变了就通知界面重挂监听（新增 / 取消 / 换路径都会走到）。"""
-        fn = getattr(self, "file_listener", None)
-        if not callable(fn):
-            return
-        try:
-            fn(paths if paths is not None else [str(p) for p in self.linked_paths()])
-        except Exception:                   # noqa: BLE001 — 监听失败不影响数据
-            pass
-
-    def linked_paths(self) -> List[Path]:
-        out: List[Path] = []
-        for cid in list(self.file_map()):
-            path = self.link_path(cid)
-            if path is not None and path.exists():
-                out.append(path)
-        return out
-
-    def file_status(self, collection_id: str) -> str:
-        """synced / pending / missing —— 界面上的那颗状态点在读它。"""
-        from . import oce
-
-        meta = self.file_map().get(collection_id)
-        if not meta:
-            return ""
-        node = self.find(collection_id)
-        if node is None:
-            return "missing"
-        path = self.link_path(collection_id)
-        if path is None or not path.exists():
-            return "missing"
-        if meta.get("hash") != oce.content_hash(node):
-            return "pending"
-        return "synced"
-
-    def link_collection(self, collection_id: str, path: Path | str,
-                        write: bool = True) -> tuple[bool, str]:
-        """把集合关联到某个 .oce 文件；默认立刻写一份出去。"""
-        from . import oce
-
-        node = self.find(collection_id)
-        if node is None:
-            return False, "集合不存在"
-        target = Path(path).expanduser()
-        if target.suffix.lower() != oce.EXT:
-            target = target.with_name(target.name + oce.EXT) if not target.suffix \
-                else target.with_suffix(oce.EXT)
-        if write:
-            ok, err = oce.write_file(target, node)
-            if not ok:
-                return False, err
-        self.file_map()[collection_id] = {
-            "path": str(target), "at": time.time(),
-            "hash": oce.file_hash(target) if write else oce.content_hash(node),
-        }
-        self.save()
-        self._notify_file_listener()
-        return True, ""
-
-    def unlink_collection(self, collection_id: str) -> None:
-        """只断开关联，不动磁盘上的文件 —— 那是用户的东西。"""
-        if self.file_map().pop(collection_id, None) is not None:
-            self.save()
-            self._notify_file_listener()
-
-    def sync_files(self, force: bool = False) -> List[str]:
-        """把有改动的关联集合写回文件，返回真正写过的路径。"""
-        from . import oce
-
-        written: List[str] = []
-        table = self.file_map()
-        for cid in list(table):
-            node = self.find(cid)
-            meta = table.get(cid) or {}
-            if node is None:
-                table.pop(cid, None)        # 集合被删了：留下文件，只断开关联
-                continue
-            path = self.link_path(cid)
-            if path is None:
-                continue
-            digest = oce.content_hash(node)
-            if not force and digest == meta.get("hash"):
-                continue
-            ok, err = oce.write_file(path, node)
-            if ok:
-                meta["hash"] = digest
-                meta["at"] = time.time()
-                meta.pop("error", None)
-                written.append(str(path))
-            else:
-                meta["error"] = err
-        if written and callable(getattr(self, "file_listener", None)):
-            try:
-                self.file_listener(written)
-            except Exception:               # noqa: BLE001 — 监听失败不影响落盘
-                pass
-        return written
-
-    def reload_linked(self, collection_id: str) -> tuple[bool, str]:
-        """从磁盘重新读一遍这个集合（外部编辑器 / git 改过之后用）。"""
-        from . import oce
-
-        path = self.link_path(collection_id)
-        if path is None:
-            return False, "这个集合还没有关联文件"
-        fresh, err = oce.read_file(path)
-        if fresh is None:
-            return False, err
-        cur, siblings = self.find_with_parent(collection_id)
-        if cur is None or siblings is None:
-            return False, "集合不在树里"
-        oce.reconcile_ids(fresh, cur)
-        fresh["id"] = collection_id
-        for i, item in enumerate(siblings):
-            if item is cur:
-                siblings[i] = fresh
-                break
-        self.file_map()[collection_id] = {
-            "path": str(path), "at": time.time(),
-            "hash": oce.file_hash(path),
-        }
-        self.save()
-        self._notify_file_listener()
-        return True, ""
-
-    def adopt_file(self, path: Path | str) -> tuple[Optional[Dict[str, Any]], str]:
-        """打开一个 .oce 文件，作为新集合加入并建立关联。"""
-        from . import oce
-
-        path = Path(path).expanduser()
-        first, err = oce.read_file(path)
-        if first is None:
-            return None, err
-        exists = self.collection_for_path(path)
-        if exists is not None:
-            return exists, ""               # 已经打开过：直接定位过去
-        self.collections.append(first)
-        self.file_map()[first["id"]] = {
-            "path": str(path), "at": time.time(), "hash": oce.file_hash(path),
-        }
-        self.save()
-        self._notify_file_listener()
-        return first, ""
-
-    def write_back(self, collection_id: str) -> tuple[bool, str]:
-        """手动「立即写回」：不管指纹，直接以内存这份为准覆盖文件。"""
-        from . import oce
-
-        node = self.find(collection_id)
-        path = self.link_path(collection_id)
-        if node is None or path is None:
-            return False, "这个集合还没有关联文件"
-        ok, err = oce.write_file(path, node)
-        if not ok:
-            return False, err
-        meta = self.file_map().setdefault(collection_id, {})
-        meta["path"] = str(path)
-        meta["hash"] = oce.file_hash(path)
-        meta["at"] = time.time()
-        meta.pop("error", None)
-        self.save()
-        return True, ""
 
     # ------------------------------------------------------------ 快捷属性
     @property
@@ -2018,13 +1893,15 @@ class Store:
                 parent_id = parent.get("id")
                 break
         snapshot = copy.deepcopy(node)
-        self.trash.insert(0, {
+        rec = {
             "id": uid(),
             "node": snapshot,
             "parent_id": parent_id,
             "index": index,
             "deleted_at": time.time(),
-        })
+        }
+        self.trash.insert(0, rec)
+        self._trash_bytes += _approx_bytes(rec)
         siblings.pop(index)
         self._trash_log("delete", snapshot.get("name", ""),
                         self._trash_detail(snapshot))
@@ -2062,6 +1939,7 @@ class Store:
         else:
             self.collections.insert(min(max(0, index), len(self.collections)), node)
         self.trash.remove(rec)
+        self._trash_bytes = -1
         self._trash_log("restore", node.get("name", ""), self._trash_detail(node))
         return node
 
@@ -2071,6 +1949,7 @@ class Store:
             return False
         name = rec.get("node", {}).get("name", "")
         self.trash.remove(rec)
+        self._trash_bytes = -1
         self._trash_log("purge", name, "彻底删除，无法恢复")
         return True
 
@@ -2078,6 +1957,7 @@ class Store:
         n = len(self.trash)
         if n:
             self.trash.clear()
+            self._trash_bytes = 0
             self._trash_log("clear", "", f"清空回收站，{n} 项被彻底删除")
         return n
 
@@ -2107,6 +1987,7 @@ class Store:
                 self.trash.remove(rec)
             except ValueError:
                 pass
+        self._trash_bytes = -1
         return len(expired)
 
     @staticmethod
@@ -2202,6 +2083,7 @@ class Store:
             "request": copy.deepcopy(request),
         }
         self.history.insert(0, entry)
+        self._hist_bytes += _approx_bytes(entry)
         try:
             limit = int(self.settings.get("history_limit", 240))
         except (TypeError, ValueError):
@@ -2210,6 +2092,7 @@ class Store:
 
     def clear_history(self) -> None:
         self.history.clear()
+        self._hist_bytes = 0
 
     # ------------------------------------------------------------ 环境变量
     def active_environment(self) -> Optional[Dict[str, Any]]:

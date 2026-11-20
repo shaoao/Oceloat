@@ -1921,61 +1921,48 @@ _EN.update({
     "已取消恢复": "Restore cancelled",
 })
 
-# v1.0.73：集合落盘为 .oce（可读、可进 Git）+ 命令行跑集合
+# v1.0.74：存档拆成模块（索引 + 每集合一份 + 备份），资源管理器按存储视角
 _EN.update({
-    "集合文件": "Collection Files",
-    "集合文件…": "Collection Files…",
-    "集合文件…（.oce 关联管理）": "Collection Files… (.oce links)",
-    "保存为集合文件": "Save as Collection File",
-    "打开集合文件": "Open Collection File",
-    "打开 .oce 文件…": "Open .oce File…",
-    "打开 .oce 集合文件…": "Open .oce Collection File…",
-    "所有文件": "All Files",
-    "集合可以存成一个 .oce 文件：能读、能改、能进 Git。"
-    "在这里改过的内容会自动写回文件，文件被外部改过时会问你用哪一版。":
-        "A collection can live in a single .oce file: readable, editable, Git-friendly. "
-        "Edits are written back automatically, and when the file changes on disk you "
-        "choose which version wins.",
-    "还没有关联文件的集合。右键任意集合选「保存为 .oce 文件」，或者直接把 .oce 拖进来。":
-        "No collections are linked to a file yet. Right-click a collection and choose "
-        "“Save as .oce”, or drop a .oce file onto this window.",
-    "全部写回": "Write all back",
-    "完成": "Done",
-    "在 Finder 中显示": "Show in Finder",
-    "立即写回文件": "Write to file now",
-    "取消关联": "Unlink",
-    "取消文件关联": "Unlink file",
-    "从文件重新读取": "Reload from file",
-    "保存为 .oce 文件…": "Save as .oce file…",
-    "另存为 .oce 文件…": "Save as another .oce file…",
-    "删除": "Delete",
-    "已同步": "In sync",
-    "已同步 · {when}": "In sync · {when}",
-    "有改动未写回": "Unsaved changes",
-    "文件不在了": "File is gone",
-    "未关联": "Not linked",
-    "还没有关联文件": "No file linked yet",
-    "集合文件：{path}": "Collection file: {path}",
-    "已取消文件关联（文件还在原处）": "File unlinked (the file itself is untouched)",
-    "已保存为 {name}": "Saved as {name}",
-    "已写回文件": "Written to file",
-    "已按文件内容刷新": "Reloaded from file",
-    "已打开 {name}": "Opened {name}",
-    "已导入 {n} 个集合": "Imported {n} collections",
-    "这个文件里没有集合": "This file has no collection in it",
-    "读不了这个文件：{err}": "Could not read this file: {err}",
-    "集合文件被改动了": "Collection file changed",
-    "「{name}」在磁盘上的文件变过了：\n{path}\n\n"
-    "用文件里的内容替换当前集合？\n"
-    "选「取消」则保留当前内容并覆盖文件，外部那一版会另存一份备份。":
-        "The file for “{name}” changed on disk:\n{path}\n\n"
-        "Replace the current collection with the file’s contents?\n"
-        "Choosing Cancel keeps what you have and overwrites the file — the other "
-        "version is saved as a backup first.",
-    "用文件版本": "Use the file",
-    "「{name}」的集合文件被移走了": "The collection file for “{name}” moved away",
-    "已用当前内容覆盖文件{extra}": "Overwrote the file with the current contents{extra}",
-    "，外部版本存为 {name}": " (the other version is kept as {name})",
-    "导出为 .oce 集合文件": "Export as .oce collection",
-    "集合文件 (*.oce *.json)": "Collection files (*.oce *.json)",
+    "索引": "Index",
+    "集合文件": "Collections",
+    "备份": "Backups",
+    "隔离区": "Quarantine",
+    "其它": "Other",
+    "正在读取…": "Reading…",
+    "检查完整性": "Check integrity",
+    "重建索引": "Rebuild index",
+    "集合": "Collections",
+    "用这份快照恢复": "Restore from this snapshot",
+    "按当前内容重写索引与校验和，修掉对不上的地方":
+        "Rewrite the index and checksums from what is currently open",
+    "逐个文件验一遍：缺了 / 坏了 / 有没有没登记的":
+        "Verify every file: missing, broken, or not registered",
+    "{n} 个文件对不上 · 检查于 {when}": "{n} files do not match · checked at {when}",
+    "{n} 个文件都正常 · 检查于 {when}": "{n} files all good · checked at {when}",
+    "{c} 个集合 · 备份 {b} · 共 {s}": "{c} collections · backups {b} · {s} total",
+    "检查失败：{why}": "Check failed: {why}",
+    "{n} 个文件有问题，可以重建索引": "{n} files need attention — rebuilding the index may fix it",
+    "{n} 个文件没登记（会成为孤儿）": "{n} files are not registered",
+    "{n} 个文件全部正常": "{n} files all good",
+    "会按当前打开的内容重写索引、集合文件与校验和，写之前先留一份整包快照。继续？":
+        "The index, collection files and checksums will be rewritten from what is "
+        "currently open. A full snapshot is taken first. Continue?",
+    "重建": "Rebuild",
+    "重建失败：{why}": "Rebuild failed: {why}",
+    "重建时出错：{why}": "Rebuild hit an error: {why}",
+    "索引已重建 · {n} 个集合": "Index rebuilt · {n} collections",
+    "将用「{name}」（{stamp} · {size}）覆盖当前全部内容。"
+    "覆盖前会先留一份当前的整包快照，随时能退回来。":
+        "This replaces everything with “{name}” ({stamp} · {size}). "
+        "A full snapshot of the current data is taken first, so you can undo it.",
+    "已用 {name} 恢复；当前内容已另存为一份快照":
+        "Restored from {name}; the previous contents are kept as a snapshot",
+    "集合按文件分开存：索引是 state.json，每个集合在 collections/，"
+    "备份在 backups/ —— 都是本地纯 JSON，可以直接看、直接拷。":
+        "Collections live in separate files: state.json is the index, each collection "
+        "is under collections/, backups under backups/ — all plain local JSON you can "
+        "read and copy.",
+    "上传会覆盖云端快照；恢复会先用云端覆盖本机（覆盖前自动留一份整包快照）。":
+        "Uploading overwrites the cloud snapshot; restoring replaces this Mac with the "
+        "cloud copy (a full snapshot is taken first).",
 })

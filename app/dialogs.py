@@ -1812,7 +1812,7 @@ class SettingsDialog(GlassDialog):
                             self.cloud_local, mono_desc=True),
             self._row_stack("云端快照", "云端那一份的实际内容；读取失败或还没上传过时显示为空。",
                             self.cloud_remote, mono_desc=True),
-            self._row_stack("手动同步", "上传会覆盖云端快照；恢复会先用云端覆盖本机（自动备份为 state.json.bak）。",
+            self._row_stack("手动同步", "上传会覆盖云端快照；恢复会先用云端覆盖本机（覆盖前自动留一份整包快照）。",
                             HBox(up, down, 1, spacing=6)),
             self._row("退出时自动上传", "关闭窗口时把最新数据推上去，适合固定一台机器当主库。",
                       self.cloud_auto),
@@ -1961,12 +1961,12 @@ class SettingsDialog(GlassDialog):
                 if not ok:
                     self._cloud_say(False, i18n.tr("已取消恢复"))
                     return
-            self.store.backup_now()
             keep = {k: self.store.settings.get(k) for k in
                     ("turso_url", "turso_token", "cloud_enabled", "cloud_auto", "theme", "accent")}
-            self.store.data.clear()
-            self.store.data.update(data)
-            self.store.data.setdefault("settings", {})
+            ok, why = self.store.replace_all(data)
+            if not ok:
+                self._cloud_say(False, i18n.trf("恢复失败：{err}", err=why))
+                return
             self.store.settings.update({k: v for k, v in keep.items() if v is not None})
             self.store.save()
             self._refresh_local_stats()
@@ -2069,7 +2069,11 @@ class SettingsDialog(GlassDialog):
             self._row("回收站保留天数", "超过天数的条目在保存设置与启动时自动彻底删除。",
                       self.trash_days_seg),
         )
-        return self._page_shell("数据", "所有数据都是本地纯 JSON，可直接备份或版本管理。", block)
+        return self._page_shell(
+            "数据",
+            "集合按文件分开存：索引是 state.json，每个集合在 collections/，"
+            "备份在 backups/ —— 都是本地纯 JSON，可以直接看、直接拷。",
+            block)
 
     def _on_trash_days(self, value: str) -> None:
         try:
@@ -3377,8 +3381,6 @@ class CommandPalette(QWidget):
         ("toggle_sidebar", "显示 / 隐藏侧边栏", "layers", "⌘B"),
         ("import_curl", "导入 cURL…", "code", ""),
         ("import_collection", "导入集合…", "download", ""),
-        ("open_file", "打开 .oce 集合文件…", "file", "⌘O"),
-        ("files", "集合文件…（.oce 关联管理）", "file", ""),
         ("export_collection", "导出集合…", "file", ""),
         ("doc", "查看接口文档…", "file", ""),
         ("mock", "Mock 服务…", "grid", ""),
@@ -4158,7 +4160,7 @@ class TransferDialog(GlassDialog):
     def _pick_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, i18n.tr("选择要导入的文件"), "",
-            "集合文件 (*.oce *.json *.yaml *.yml *.har);;所有文件 (*)")
+            "集合文件 (*.json *.yaml *.yml *.har);;所有文件 (*)")
         if path:
             self._load_path(path)
 
@@ -4603,7 +4605,6 @@ def export_folder(store: Store, node: Dict[str, Any], parent=None,
     total = count_requests([node])
     title = i18n.tr("导出集合")
     targets = [
-        ("oce", i18n.tr("导出为 .oce 集合文件"), "file"),
         ("ocelot", i18n.tr("导出为 Ocelot JSON"), "grid"),
         ("postman", i18n.tr("导出为 Postman v2.1"), "send"),
         ("openapi-json", i18n.tr("导出为 OpenAPI 3.1 (JSON)"), "code"),
@@ -4626,21 +4627,14 @@ def export_folder(store: Store, node: Dict[str, Any], parent=None,
     stem = re.sub(r'[\\/:*?"<>|\n\r\t]+', "-", (node.get("name") or "").strip()).strip(" .-")
     default = (stem[:60] or "folder") + EXT.get(key, ".json")
     suffix = "YAML (*.yaml)" if key == "openapi-yaml" else (
-        "HAR (*.har)" if key == "har" else (
-            "Ocelot 集合 (*.oce)" if key == "oce" else "JSON (*.json)"))
+        "HAR (*.har)" if key == "har" else "JSON (*.json)")
     path, _ = QFileDialog.getSaveFileName(parent, title, default, suffix)
     if not path:
         return ""
     if key == "openapi-yaml" and not path.lower().endswith((".yaml", ".yml")):
         path += ".yaml"
-    if key == "oce" and not path.lower().endswith(".oce"):
-        path += ".oce"
     try:
-        if key == "oce":
-            from . import oce as oce_mod
-
-            text = oce_mod.dump(node)
-        elif key == "ocelot":
+        if key == "ocelot":
             text = json.dumps(to_ocelot(store, stem or "folder", nodes=[node]),
                               ensure_ascii=False, indent=2)
         elif key == "postman":

@@ -47,8 +47,7 @@ from PyQt6.QtWidgets import (
 from . import i18n, icons
 from .brand import BrandMark, app_icon as brand_icon
 from .code_editor import CodeView, human_elapsed
-from .dialogs import (CodeDialog, CommandPalette, ConfirmDialog, EnvDialog,
-                      ImportCurlDialog, SettingsDialog)
+from .dialogs import CodeDialog, CommandPalette, EnvDialog, ImportCurlDialog, SettingsDialog
 from .http_client import ApiClient, Response
 from .ws_client import WsClient
 from .sio_client import SocketIoClient
@@ -703,8 +702,6 @@ class MainWindow(QWidget):
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
-        # 把 .oce / Postman 文件拖进来就能开（子控件自己处理拖放的不受影响）
-        self.setAcceptDrops(True)
         self.setMinimumSize(1020, 660)
         self.resize(1320, 840)
 
@@ -725,7 +722,6 @@ class MainWindow(QWidget):
         from .memtrim import AutoTrim
 
         self._auto_trim = AutoTrim(self.store, self)
-        self._init_file_watch()
         self._restore_session()
         QTimer.singleShot(400, self._auto_start_mock)
         i18n.set_language(store.settings.get("language", "zh"), notify=False)
@@ -990,7 +986,6 @@ class MainWindow(QWidget):
         acts["resources"] = menu.addAction(icons.icon("grid", t.text, 14), "资源管理器…")
         acts["cloud"] = menu.addAction(icons.icon("cloud", t.text, 14), "云同步…")
         menu.addSeparator()
-        acts["files"] = menu.addAction(icons.icon("file", t.text, 14), "集合文件…")
         acts["mock"] = menu.addAction(icons.icon("grid", t.text, 14), "Mock 服务…")
         acts["curl"] = menu.addAction(icons.icon("code", t.text, 14), "导入 cURL…")
         acts["import"] = menu.addAction(icons.icon("download", t.text, 14), "导入集合…")
@@ -1006,7 +1001,6 @@ class MainWindow(QWidget):
         a_resources = acts["resources"]
         a_cloud = acts["cloud"]
         a_mock = acts["mock"]
-        a_files = acts["files"]
         a_curl = acts["curl"]
         a_import = acts["import"]
         a_export = acts["export"]
@@ -1022,8 +1016,6 @@ class MainWindow(QWidget):
             self.show_settings(page="cloud")
         elif chosen is a_mock:
             self.open_mock()
-        elif chosen is a_files:
-            self.open_files_dialog()
         elif chosen is a_curl:
             self.import_curl()
         elif chosen is a_import:
@@ -1780,7 +1772,6 @@ class MainWindow(QWidget):
                                              method=node.get("method", "GET"))
         self.env_pill.updateGeometry()
         self.env_pill.update()
-        self._refresh_file_watch()
         self._cloud_autosync()
 
     def _on_request_deleted(self, node_id: str) -> None:
@@ -1790,229 +1781,6 @@ class MainWindow(QWidget):
 
     def _sync_open_ids(self) -> None:
         self.sidebar.set_open_ids({t["node_id"] for t in self.tabs_data if t.get("node_id")})
-
-    # -------------------------------------------------- 集合文件（.oce）
-    def _init_file_watch(self) -> None:
-        """盯住关联的 .oce 文件：外部编辑器 / git 改过之后这边跟着动。
-
-        只监听「有关联」的那几个文件，不是整个目录；macOS 上每个监听占一个
-        kqueue fd，所以顺手设了个上限，关联几十个集合也不会把 fd 吃光。
-        """
-        from PyQt6.QtCore import QFileSystemWatcher
-
-        self._file_watch = QFileSystemWatcher(self)
-        self._file_watch.fileChanged.connect(self._on_file_event)
-        self._file_timer = QTimer(self)
-        self._file_timer.setSingleShot(True)
-        self._file_timer.setInterval(320)      # 一次保存常常连着好几个事件，攒一下
-        self._file_timer.timeout.connect(self._apply_file_changes)
-        self._pending_files: set = set()
-        # store 写完文件后回调：Qt 在原子替换后会丢掉这条监听，得重新挂上
-        self.store.file_listener = lambda _paths: self._refresh_file_watch()
-        self._refresh_file_watch()
-
-    def _refresh_file_watch(self) -> None:
-        watch = getattr(self, "_file_watch", None)
-        if watch is None:
-            return
-        want = [str(p) for p in self.store.linked_paths()][:64]
-        have = set(watch.files())
-        for path in have - set(want):
-            watch.removePath(path)
-        for path in set(want) - have:
-            watch.addPath(path)
-
-    def _on_file_event(self, path: str) -> None:
-        self._pending_files.add(path)
-        self._refresh_file_watch()             # Qt 吃掉监听后不会自己加回来
-        self._file_timer.start()
-
-    def _apply_file_changes(self) -> None:
-        pending = list(self._pending_files)
-        self._pending_files.clear()
-        for path in pending:
-            self._handle_file_change(path)
-
-    def _handle_file_change(self, path: str) -> None:
-        from pathlib import Path
-
-        from . import oce
-
-        table = self.store.file_map()
-        cid = next((c for c, m in table.items() if str(m.get("path") or "") == path), None)
-        if cid is None:
-            return
-        node = self.store.find(cid)
-        if node is None:
-            return
-        meta = table.get(cid) or {}
-        target = Path(path)
-        if not target.exists():
-            self.toast.show_message(i18n.trf("「{name}」的集合文件被移走了", name=node.get("name", "")),
-                                    "error")
-            self.sidebar.refresh()
-            return
-        disk = oce.file_hash(target)
-        if not disk or disk == meta.get("hash"):
-            return                             # 就是自己刚写出去的
-        if disk == oce.content_hash(node):
-            meta["hash"] = disk                # 内容一致（比如换了行尾）：只更新指纹
-            self.store.save()
-            return
-
-        same = i18n.tr("用文件版本")
-        if ConfirmDialog.ask(
-                self, i18n.tr("集合文件被改动了"),
-                i18n.trf("「{name}」在磁盘上的文件变过了：\n{path}\n\n"
-                         "用文件里的内容替换当前集合？\n"
-                         "选「取消」则保留当前内容并覆盖文件，外部那一版会另存一份备份。",
-                         name=node.get("name", ""), path=path), same):
-            ok, err = self.store.reload_linked(cid)
-            if not ok:
-                self.toast.show_message(err, "error")
-                return
-            self._refresh_file_watch()
-            self.sidebar.refresh()
-            self._reload_tabs_of(cid)
-            self.toast.show_message(i18n.tr("已按文件内容刷新"), "success")
-        else:
-            import shutil
-            import time as _time
-
-            stamp = _time.strftime("%Y%m%d-%H%M%S", _time.localtime())
-            backup = target.with_name(f"{target.name}.bak-{stamp}")
-            try:
-                shutil.copy2(target, backup)
-            except OSError:
-                backup = None
-            ok, err = self.store.write_back(cid)
-            if not ok:
-                self.toast.show_message(err, "error")
-                return
-            self._refresh_file_watch()
-            self.sidebar.refresh()
-            self.toast.show_message(
-                i18n.trf("已用当前内容覆盖文件{extra}",
-                         extra=(i18n.trf("，外部版本存为 {name}", name=backup.name)
-                                if backup is not None else "")), "success")
-
-    def _reload_tabs_of(self, collection_id: str) -> None:
-        """文件重新读进来之后，把没改过的标签换成新内容。
-
-        改过的标签（dirty）不动 —— 用户手上的编辑比磁盘上的版本新，
-        悄悄换掉等于把他刚敲的东西吞了。
-        """
-        ids = set()
-        stack = [self.store.find(collection_id)]
-        while stack:
-            node = stack.pop()
-            if not isinstance(node, dict):
-                continue
-            if node.get("type") == "request":
-                ids.add(node.get("id"))
-            stack.extend(node.get("children") or [])
-        current = self.tabstrip.current()
-        touched = False
-        for tab in self.tabs_data:
-            if tab.get("node_id") not in ids or tab.get("dirty"):
-                continue
-            fresh = self.store.find(tab["node_id"])
-            if fresh is None:
-                continue
-            tab["request"] = _copy.deepcopy(fresh)
-            tab["title"] = fresh.get("name", tab.get("title"))
-            self.tabstrip.update_tab(tab["id"], title=tab["title"], dirty=False)
-            touched = True
-        if touched and current:
-            self._on_tab_changed(current)
-
-    def open_files_dialog(self) -> None:
-        """「集合文件」窗口：看状态、重新读取、取消关联、批量写回。"""
-        from .files_ui import FilesDialog
-
-        dlg = FilesDialog(self.store, self)
-        dlg.changed.connect(self._on_files_changed)
-        dlg.exec()
-
-    def _on_files_changed(self) -> None:
-        self._refresh_file_watch()
-        self.sidebar.refresh()
-        self._on_store_changed()
-
-    def open_oce(self) -> None:
-        """⌘O：打开一个 .oce 集合文件。"""
-        self.sidebar.open_oce_file()
-
-    # -------------------------------------------------- 拖进来就能开
-    def _dropped_paths(self, event) -> List[str]:
-        if not event.mimeData().hasUrls():
-            return []
-        out = []
-        for url in event.mimeData().urls():
-            if not url.isLocalFile():
-                continue
-            path = url.toLocalFile()
-            if path.lower().endswith((".oce", ".json", ".yaml", ".yml", ".har")):
-                out.append(path)
-        return out
-
-    def dragEnterEvent(self, e):  # noqa: N802
-        if self._dropped_paths(e):
-            e.acceptProposedAction()
-            return
-        super().dragEnterEvent(e)
-
-    def dragMoveEvent(self, e):  # noqa: N802
-        if self._dropped_paths(e):
-            e.acceptProposedAction()
-            return
-        super().dragMoveEvent(e)
-
-    def dropEvent(self, e):  # noqa: N802
-        paths = self._dropped_paths(e)
-        if not paths:
-            super().dropEvent(e)
-            return
-        e.acceptProposedAction()
-        for path in paths:
-            self._open_dropped(path)
-
-    def _open_dropped(self, path: str) -> None:
-        """拖进来的文件：.oce 直接开成关联集合，其它格式走导入。"""
-        from pathlib import Path
-
-        target = Path(path)
-        if target.suffix.lower() == ".oce":
-            node, err = self.store.adopt_file(target)
-            if node is not None:
-                self.sidebar.refresh()
-                self._on_store_changed()
-                self.sidebar.reveal(node.get("id"))
-                self.toast.show_message(i18n.trf("已打开 {name}", name=target.name), "success")
-                return
-            self.toast.show_message(err, "error")
-            return
-        try:
-            text = target.read_text("utf-8")
-        except OSError as exc:
-            self.toast.show_message(i18n.trf("读不了这个文件：{err}", err=exc), "error")
-            return
-        from .transfer import parse_text
-
-        nodes, _fmt, why = parse_text(text, target.stem)
-        if not nodes:
-            self.toast.show_message(why or i18n.tr("这个文件里没有集合"), "error")
-            return
-        for node in nodes:
-            self.store.collections.append(node)
-        self.store.save()
-        self.sidebar.refresh()
-        self._on_store_changed()
-        total = sum(1 for _ in self.store.walk())
-        self.toast.show_message(i18n.trf("已导入 {n} 个集合", n=len(nodes)), "success")
-        if total:
-            self.sidebar.reveal(nodes[-1].get("id"))
-
 
     def _update_stack(self) -> None:
         has_tab = bool(self.tabs_data)
@@ -2500,7 +2268,7 @@ class MainWindow(QWidget):
             self._cloud_dirty = True
             return
         self._cloud_dirty = False
-        text = json.dumps(self.store.data, ensure_ascii=False)
+        text = self.store.snapshot_text()
         client = client_for(self.store.settings)
         worker = CloudWorker(lambda: client.push(text), self)
         self._cloud_worker = worker
@@ -3003,10 +2771,6 @@ class MainWindow(QWidget):
             self.import_collection()
         elif key == "export_collection":
             self.export_collection()
-        elif key == "open_file":
-            self.open_oce()
-        elif key == "files":
-            self.open_files_dialog()
 
     # -------------------------------------------------- 快捷键
     def _shortcut_targets(self) -> Dict[str, Any]:
@@ -3028,7 +2792,6 @@ class MainWindow(QWidget):
             "mock": self.open_mock,
             "env": self.show_envs,
             "run_collection": self.run_selected_collection,
-            "open_file": self.open_oce,
             "settings": lambda: self.show_settings(),
         }
 
@@ -3241,7 +3004,7 @@ class MainWindow(QWidget):
             from .cloud import client_for
 
             client = client_for(s)
-            text = json.dumps(self.store.data, ensure_ascii=False)
+            text = self.store.snapshot_text()
         except Exception:  # noqa: BLE001
             return
         import threading

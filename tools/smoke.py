@@ -3285,7 +3285,7 @@ def main() -> int:
 
         # ---- 回收站（v1.0.39）----
         tdir = Path(tempfile.mkdtemp(prefix="ocelot_trash_"))
-        st = _Store.load(tdir / "state.json")
+        st = Store.load(tdir / "state.json")
         base = len(st.collections)
         folder = _nf("回收测试文件夹")
         req = _nr("登录", "POST", "https://api.test/login")
@@ -3691,10 +3691,20 @@ def main() -> int:
               f"{_dlg.width()}x{_dlg.height()}")
         check("内存看板已移除", not hasattr(_dlg, "mem_value")
               and not hasattr(_dlg, "health_ring"))
-        check("顶部有占用概览", len(_dlg._legend) == 4 and _dlg.bar._segs != [])
+        check("顶部有占用概览", len(_dlg._legend) == 5 and _dlg.bar._segs != [])
+        check("概览按索引 / 集合 / 备份 / 隔离分组",
+              set(_dlg._legend) == {"index", "module", "backup", "quarantine", "other"},
+              str(sorted(_dlg._legend)))
+        check("有完整性检查入口", hasattr(_dlg, "check_btn") and _dlg.check_btn.isEnabled())
+        check("有集合快捷条", hasattr(_dlg, "chips"))
         check("列表读到了数据目录", _dlg.browser.path == _resmon.app_root())
         check("底部状态默认显示总数", "项" in _dlg.status.text() or _dlg.status.text() == "",
               _dlg.status.text())
+        _dlg._act_check()
+        app.processEvents()
+        check("检查后给出一句结论", "正常" in _dlg.health_label.text()
+              or "对不上" in _dlg.health_label.text(), _dlg.health_label.text())
+        _dlg._restore_status()
 
         # 文件操作：拿临时目录试，不碰真实数据
         _tmp = Path(tempfile.mkdtemp(prefix="ocelot-files-"))
@@ -3807,246 +3817,176 @@ def main() -> int:
         check("品牌图标资源目录在", (_icons.assets_root() / "sources").is_dir(),
               str(_icons.assets_root()))
 
-        # 4) 存档备份：限频、最多 5 份、能恢复、损坏能自救
-        folder = _P(_tf.mkdtemp(prefix="ocelot-bak-"))
-        state = folder / "state.json"
-        st = _Store.load(state)
-        st.data["collections"].append({"id": "mine1", "type": "request",
-                                       "name": "我的请求", "method": "GET",
-                                       "url": "https://example.com"})
-        st.save()
-        st._last_backup = 0
-        st.data["collections"].append({"id": "mine2", "type": "request",
-                                       "name": "第二个", "method": "GET",
-                                       "url": "https://example.com/2"})
-        st.save()
-        check("落盘前会留一份备份", len(st.backups()) >= 1, str(len(st.backups())))
-        for i in range(8):
-            st._last_backup = 0
-            st.data["collections"].append({"id": f"x{i}", "type": "request",
-                                           "name": f"p{i}", "method": "GET",
-                                           "url": "https://example.com"})
-            st.save()
-        check("备份最多留 5 份", len(st.backups()) == 5, str(len(st.backups())))
+        # 4) 存储的分文件、冗余与自救：见 step38
 
-        # 用最旧那份恢复：当前数据要先被备份
-        oldest = st.backups()[-1]
-        before = len(st.backups())
-        ok, why = st.restore_from(oldest)
-        check("能从备份恢复", ok, why)
-        check("恢复前先备份当前数据", len(st.backups()) >= before,
-              f"{before} -> {len(st.backups())}")
 
-        # 存档写坏：隔离原件 + 从备份救回来
-        state.write_text("{ 这不是 JSON", "utf-8")
-        healed = _Store.load(state)
-        names = [x.name for x in folder.iterdir()]
-        check("坏存档被隔离保留", any(".corrupt-" in n for n in names), str(names))
-        check("坏存档自动从备份恢复", bool(healed.load_note)
-              and "备份" in (healed.load_note or "") and healed.data["collections"],
-              healed.load_note or "")
-        check("恢复后存档可用", isinstance(_json.loads(state.read_text("utf-8")), dict))
-
-        import shutil as _sh
-        _sh.rmtree(folder, ignore_errors=True)
-
-    def step38():
-        """集合落盘 .oce：格式可读、双向同步、外部改动能读回来、界面有状态。"""
-        import json as _json
+    def step38() -> int:
+        """模块化存储：按集合分文件、原子写、单份损坏不牵连、孤儿恢复、上限。"""
         import tempfile as _tf
-        from pathlib import Path as _P
 
-        from app import oce as _oce
-        from app.store import Store as _Store
-
-        # 1) 格式：稳定、精简、不写 UI 状态
-        folder = _P(_tf.mkdtemp(prefix="ocelot-oce-"))
-        sample = w.store.collections[0]
-        text = _oce.dump(sample)
-        back, err = _oce.parse(text)
-        check(".oce 能解析回来", back is not None, err)
-        check(".oce 再导出完全一致（diff 友好）", _oce.dump(back) == text)
-        check(".oce 里没有内部 id", '"id"' not in text)
-        check(".oce 里不写 GET", '\n            "method": "GET"' not in text and
-              '"method": "GET"' not in text)
-        check(".oce 里不写展开状态", '"open"' not in text)
-        check(".oce 空字段不落盘", '"params": []' not in text and '"cookies": []' not in text)
-        check(".oce 带版本号", _json.loads(text).get("oce") == 1)
-        check(".oce 顶层就是集合名", _json.loads(text).get("name") == sample.get("name"))
-
-        # 2) 坏输入给出能看懂的原因
-        _bad, why = _oce.parse("{ 不是 JSON")
-        check("坏 JSON 有提示", "JSON" in why, why)
-        _other, why2 = _oce.parse('{"a": 1}')
-        check("不是 .oce 的文件会被拒绝", _other is None and "oce" in why2, why2)
-        _future, why3 = _oce.parse('{"oce": 99, "tree": {"name": "x"}}')
-        check("未来版本会提示升级", _future is None and "升级" in why3, why3)
-
-        # 3) 关联 → 自动写回 → 状态跟着变
+        folder = Path(_tf.mkdtemp(prefix="ocelot-store-"))
         state = folder / "state.json"
-        st = _Store.load(state)
+        mod_dir = folder / "collections"
+        bak_dir = folder / "backups"
+
+        st = Store.load(state)
+        st.save()
+        index_text = state.read_text("utf-8")
+        index = _json.loads(index_text)
+        check("索引是独立文件", state.exists() and index.get("format") == "ocelot.index")
+        check("索引里不存整棵树", "children" not in index_text)
+        files = sorted(mod_dir.glob("*.json"))
+        check("每个集合一个文件", len(files) == len(st.collections),
+              f"{len(files)} files / {len(st.collections)} collections")
+        first_text = files[0].read_text("utf-8")
+        check("集合文件带自校验", "checksum" in first_text and '"tree"' in first_text)
+
+        again = Store.load(state)
+        check("重新读回来内容一致", _json.dumps(again.collections, sort_keys=True)
+              == _json.dumps(st.collections, sort_keys=True))
+
+        # 没改动的集合不该被重写：mtime 一点不动
+        before = {p.name: p.stat().st_mtime_ns for p in files}
         cid = st.collections[0]["id"]
-        target = folder / "Examples.oce"
-        ok, err = st.link_collection(cid, target)
-        check("能关联到 .oce 文件", ok and target.exists(), err)
-        check("关联后状态是已同步", st.file_status(cid) == "synced", st.file_status(cid))
-        req = next(n for n, _ in st.walk() if n.get("type") == "request")
-        req["url"] = "https://edited.example/v1"
-        check("改了内容状态变成待写回", st.file_status(cid) == "pending", st.file_status(cid))
+        target = next(n for n, _ in st.walk() if n.get("type") == "request")
+        target["url"] = "https://changed.example/x"
         st.save()
-        check("保存时自动写回文件", "https://edited.example/v1" in target.read_text("utf-8"))
-        check("写回后状态回到已同步", st.file_status(cid) == "synced", st.file_status(cid))
+        after = {p.name: p.stat().st_mtime_ns for p in mod_dir.glob("*.json")}
+        touched = [n for n in after if before.get(n) != after[n]]
+        check("只重写改动过的集合", len(touched) <= 2, f"{len(touched)} rewritten")
+        check("没有留下 .tmp 文件", not list(mod_dir.glob("*.tmp")))
+        check("改动能读回来", any(n.get("url") == "https://changed.example/x"
+                                 for n, _ in Store.load(state).walk()))
 
-        # 4) 外部改动 → 重新读取；结构没变时 id 保持不变（标签不会「消失」）
-        before_ids = [n.get("id") for n, _ in st.walk()]
-        data = _json.loads(target.read_text("utf-8"))
-        data["tree"]["children"][1]["children"][0]["name"] = "外部改的名字"
-        target.write_text(_json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
-        check("外部改动后能读回来", "外部改的名字" in target.read_text("utf-8"))
-        ok, err = st.reload_linked(cid)
-        check("能从文件重新读取", ok, err)
-        check("读回来保留了新名字",
-              any(n.get("name") == "外部改的名字" for n, _ in st.walk()))
-        after_ids = [n.get("id") for n, _ in st.walk()]
-        check("重新读取后 id 全复用（打开的标签不会断）",
-              set(before_ids) == set(after_ids),
-              f"{len(before_ids)} -> {len(set(before_ids) & set(after_ids))}")
+        # 历史 / 回收站各自一个文件：写历史不该动索引和集合文件
+        st.push_history({"name": "h1", "method": "GET", "url": "https://h.example/1"}, 200, 1)
+        st.save()
+        check("历史独立成文件", (folder / "history.json").exists())
+        check("回收站独立成文件", (folder / "trash.json").exists())
+        check("索引里不塞历史", "https://h.example/1" not in
+              (folder / "state.json").read_text("utf-8"))
+        idx_mtime = (folder / "state.json").stat().st_mtime_ns
+        col_mtimes = {p.name: p.stat().st_mtime_ns for p in mod_dir.glob("*.json")}
+        st.push_history({"name": "h2", "method": "GET", "url": "https://h.example/2"}, 200, 1)
+        st.save()
+        check("写历史只动 history.json",
+              (folder / "state.json").stat().st_mtime_ns == idx_mtime
+              and all(col_mtimes.get(p.name) == p.stat().st_mtime_ns
+                      for p in mod_dir.glob("*.json")))
 
-        # 5) 打开一个 .oce = 新增集合并绑定；同一个文件不会重复加
-        other = folder / "另一个.oce"
-        other.write_text(_oce.dump(st.collections[0]), "utf-8")
-        n_before = len(st.collections)
-        node, err = st.adopt_file(other)
-        check("能打开 .oce 作为新集合", node is not None and len(st.collections) == n_before + 1, err)
-        again, _err2 = st.adopt_file(other)
-        check("同一个文件不会重复打开", len(st.collections) == n_before + 1
-              and again.get("id") == node.get("id"))
-        check("新集合状态是已同步", st.file_status(node["id"]) == "synced")
+        # 历史文件坏了：只丢历史，集合一条不少；有备份就捡回来
+        (folder / "history.json").write_text("{ 坏文件", "utf-8")
+        hurt_hist = Store.load(state)
+        check("历史坏了不影响集合",
+              len(hurt_hist.collections) == len(st.collections),
+              f"{len(hurt_hist.collections)} / {len(st.collections)}")
+        check("坏历史被隔离",
+              any("history" in p.name for p in (folder / "corrupted").glob("*")),
+              str([p.name for p in (folder / "corrupted").glob("*")]))
+        check("历史坏了也只是空的，不阻挡打开", isinstance(hurt_hist.history, list))
 
-        # 6) 取消关联不删文件
-        st.unlink_collection(cid)
-        check("取消关联后不再算关联", st.file_status(cid) == "")
-        check("取消关联不会删掉文件", target.exists())
+        # 备份：整包快照，份数有上限
+        for _i in range(6):
+            st.backup_now()
+        check("整包快照最多留 3 份", len(st.backups()) <= 3, str(len(st.backups())))
+        check("整包快照在 backups/ 下", all(p.parent == bak_dir for p in st.backups()))
 
-        # 7) 导入流程也认得 .oce
-        from app.transfer import parse_text as _parse
+        # 单个集合文件坏了：只跳过它，别的照常打开
+        st.collections.append({"id": "fresh1", "type": "folder", "name": "临时方案",
+                               "open": True, "children": []})
+        st.save()
+        fresh_file = mod_dir / "fresh1.json"
+        check("新集合也单独成文件", fresh_file.exists())
+        before_ids = [n["id"] for n in st.collections]
+        fresh_file.write_text('{"format": "ocelot.collection", "tree": {"type": "fol',
+                              "utf-8")
+        hurt = Store.load(state)
+        check("坏掉一个集合文件不牵连其它",
+              [n["id"] for n in hurt.collections] == [i for i in before_ids if i != "fresh1"],
+              str([n["id"] for n in hurt.collections]))
+        bads = list((folder / "corrupted").glob("*")) if (folder / "corrupted").is_dir() else []
+        check("坏文件被隔离", any("fresh1" in p.name for p in bads),
+              str([p.name for p in bads]))
+        check("读不出来时说明是哪一份", "读不出来" in (hurt.load_note or ""),
+              hurt.load_note or "")
 
-        nodes, fmt, perr = _parse(target.read_text("utf-8"), "Examples")
-        check("导入能识别 .oce", fmt == "oce" and bool(nodes), f"{fmt} {perr}")
+        # 索引坏了：从整包快照恢复
+        state.write_text("{ 这不是 JSON", "utf-8")
+        healed = Store.load(state)
+        check("索引坏了能从快照恢复", bool(healed.collections), str(len(healed.collections)))
+        check("恢复会说明来源", bool(healed.load_note), healed.load_note or "")
+        check("隔离区留了原件", any((folder / "corrupted").glob("state.json*")))
 
-        # 8) 侧栏与窗口：标记、监听、管理窗口
-        live = w.store.collections[0]["id"]
-        live_file = folder / "live.oce"
-        w.store.link_collection(live, live_file)
-        w.sidebar.refresh()
-        check("侧栏标出了关联文件的集合", live in w.sidebar.tree.linked_ids,
-              str(w.sidebar.tree.linked_ids))
-        check("主窗口监听关联文件",
-              str(live_file) in w._file_watch.files(), str(w._file_watch.files()))
+        # 孤儿文件（索引没有、磁盘有）自动挂回来，而不是默默无视
+        orphan = mod_dir / "manual.json"
+        orphan.write_text(_json.dumps({"type": "folder", "name": "手写的集合",
+                                       "children": []}, ensure_ascii=False), "utf-8")
+        adopted = Store.load(state)
+        check("未登记的集合文件会被找回",
+              any(n.get("name") == "手写的集合" for n in adopted.collections))
+        check("找回后立刻补进索引", "manual.json" in (folder / "state.json").read_text("utf-8"))
 
-        # 外部改动 → 选「用文件版本」→ 打开着的标签跟着换（含改名）
-        first_req = next(n for n, _ in w.store.walk()
-                         if n.get("type") == "request"
-                         and w.store.parent_id(n["id"]) is not None)
-        # 找它所属的顶层集合，确保改的是同一个文件里的节点
-        owner = first_req["id"]
-        while w.store.parent_id(owner) is not None:
-            owner = w.store.parent_id(owner)
-        w.store.link_collection(owner, live_file)
-        w.sidebar.openRequest.emit(first_req)
-        app.processEvents()
-        mine = next(t for t in w.tabs_data if t.get("node_id") == first_req["id"])
+        # 删掉的集合：文件挪进 backups，不是直接删
+        gone = adopted.collections[-1]
+        adopted.remove_node(gone["id"])
+        adopted.save()
+        retired = list(bak_dir.glob("removed-*"))
+        check("删掉的集合文件进备份", bool(retired), str([p.name for p in retired]))
 
-        def find_in_tree(tree, name):
-            if tree.get("children") is None and tree.get("name") == name:
-                return tree
-            for kid in tree.get("children") or []:
-                hit = find_in_tree(kid, name)
-                if hit is not None:
-                    return hit
-            return None
+        # 完整性检查 / 修复
+        health = adopted.storage_health()
+        check("完整性检查能跑", isinstance(health.get("checked"), int), str(health.get("ok")))
+        (mod_dir / "gone.json").write_text("{}", "utf-8")
+        health2 = adopted.storage_health()
+        check("检查能发现孤儿文件", bool(health2.get("orphans")) or health2.get("ok") is False)
+        adopted.repair_storage()
+        check("修复后索引与文件对齐", not adopted.storage_health().get("orphans"))
 
-        live_data = _json.loads(live_file.read_text("utf-8"))
-        target_json = find_in_tree(live_data["tree"], first_req.get("name"))
-        check("能在文件里定位到那条请求", target_json is not None)
-        if target_json is not None:
-            target_json["url"] = "https://from-disk.example/z"
-            target_json["name"] = "磁盘上的名字"
-            live_file.write_text(_json.dumps(live_data, ensure_ascii=False, indent=2), "utf-8")
-            from app.dialogs import ConfirmDialog as _Confirm
-
-            _orig_ask = _Confirm.ask
-            _Confirm.ask = classmethod(lambda cls, *a, **k: True)
-            try:
-                w._handle_file_change(str(live_file))
-            finally:
-                _Confirm.ask = _orig_ask
-            app.processEvents()
-            mine = next((t for t in w.tabs_data if t.get("node_id") == first_req["id"]), mine)
-            check("文件改了，标签里的地址跟着变",
-                  mine["request"].get("url") == "https://from-disk.example/z",
-                  str(mine["request"].get("url")))
-            check("文件改了，标签标题跟着变",
-                  mine["title"] == "磁盘上的名字", str(mine["title"]))
-
-        from app.files_ui import FilesDialog
-
-        dlg = FilesDialog(w.store, w)
-        app.processEvents()
-        check("集合文件窗口能打开", dlg.width() > 0)
-        check("窗口标题是「集合文件」", dlg.windowTitle() == "集合文件", dlg.windowTitle())
-        check("列表里列出了关联的集合", len(dlg._rows) >= 1, str(len(dlg._rows)))
-        dlg.hide()
-        w.store.unlink_collection(live)
-        w.sidebar.refresh()
-        check("取消关联后侧栏标记消失", live not in w.sidebar.tree.linked_ids)
-
-        import shutil as _sh
-        _sh.rmtree(folder, ignore_errors=True)
-
-    def step39():
-        """命令行跑集合：CI 里能跑、退出码有意义、不 import Qt。"""
-        import tempfile as _tf
-        from pathlib import Path as _P
-
-        from app import cli as _cli
-        from app import oce as _oce
-        from app.store import new_folder, new_request
-
-        folder = _P(_tf.mkdtemp(prefix="ocelot-cli-"))
-        get = new_request("list", "GET", "{{base_url}}/items")
-        get["params"] = [{"key": "page", "value": "2", "enabled": True}]
-        get["auth"] = {"type": "bearer", "token": "{{token}}", "add_to": "header"}
-        post = new_request("create", "POST", "{{base_url}}/items")
-        post["body"] = {"mode": "json", "raw": '{"a": 1}', "form": [], "file": ""}
-        coll = new_folder("CLI 测试")
-        coll["children"] = [post, get]      # GET 放最后：ECHO 记的是最后一条
-        target = folder / "cli.oce"
-        target.write_text(_oce.dump(coll), "utf-8")
-
-        base = f"http://127.0.0.1:{PORT}"
-        rc = _cli.main(["run", str(target), "--var", f"base_url={base}",
-                        "--var", "token=abc123"])
-        check("CLI 跑通了集合（退出码 0）", rc == 0, str(rc))
-        check("CLI 把变量替换进了地址", "page=2" in str(ECHO["data"].get("path")),
-              str(ECHO["data"].get("path")))
-        check("CLI 带上了 Bearer 认证",
-              ECHO["data"]["headers"].get("authorization") == "Bearer abc123",
-              str(ECHO["data"]["headers"].get("authorization")))
-
-        rc_fail = _cli.main(["run", str(target), "--var", "base_url=http://127.0.0.1:1"])
-        check("CLI 失败时退出码是 1", rc_fail == 1, str(rc_fail))
-        rc_missing = _cli.main(["run", str(folder / "nope.oce")])
-        check("CLI 文件不存在时退出码是 2", rc_missing == 2, str(rc_missing))
-        rc_list = _cli.main(["list", str(target)])
-        check("CLI 列表模式不真发请求", rc_list == 0, str(rc_list))
+        # 防膨胀：历史 / 回收站都有硬上限
+        for i in range(520):
+            adopted.push_history({"name": f"r{i}", "method": "GET", "url": "https://x",
+                                  "body": {"mode": "raw", "raw": "x" * 50}}, 200, 1)
+        adopted._trim()
+        check("历史有硬上限", len(adopted.history) <= 500, str(len(adopted.history)))
+        for i in range(450):
+            adopted.trash.append({"id": f"t{i}", "node": {"type": "request",
+                                  "name": f"d{i}", "children": []},
+                                  "parent_id": None, "index": 0, "deleted_at": 1})
+        adopted._trim()
+        check("回收站有硬上限", len(adopted.trash) <= adopted.TRASH_MAX, str(len(adopted.trash)))
+        adopted.save()
+        check("瘦身后存档仍然可读", isinstance(_json.loads(state.read_text("utf-8")), dict))
+        idx_bytes = state.stat().st_size
+        check("索引不随历史一起变大", idx_bytes < 40000, f"{idx_bytes} B")
+        check("历史落在自己那份文件里", (folder / "history.json").stat().st_size > 1000,
+              str((folder / "history.json").stat().st_size))
 
         import shutil as _sh
         _sh.rmtree(folder, ignore_errors=True)
+
+        # 老的单文件存档：自动拆成模块，原件留底
+        old_dir = Path(_tf.mkdtemp(prefix="ocelot-legacy-"))
+        old_state = old_dir / "state.json"
+        legacy = Store.load(old_state)
+        legacy_data = {"version": "1.0.73", "settings": dict(legacy.settings),
+                       "collections": [{"id": "c1", "type": "folder", "name": "旧集合",
+                                        "open": True, "children": [
+                                            {"id": "q1", "type": "request", "name": "旧请求",
+                                             "method": "GET", "url": "https://old.example"}]}],
+                       "history": [], "trash": [], "trash_ops": [], "environments": [],
+                       "active_env": None, "global_vars": [], "open_tabs": [],
+                       "last_request": None, "mock": {"port": 8787, "routes": []}}
+        old_state.write_text(_json.dumps(legacy_data, ensure_ascii=False), "utf-8")
+        moved = Store.load(old_state)
+        check("旧单文件存档自动拆开", (old_dir / "collections" / "c1.json").exists())
+        check("拆分后内容不丢", any(n.get("name") == "旧请求" for n, _ in moved.walk()))
+        check("拆分前留了原件", any((old_dir / "backups").glob("legacy-state-*")))
+        _sh.rmtree(old_dir, ignore_errors=True)
+        return 0
 
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

@@ -45,7 +45,7 @@ EXPORT_TARGETS = [
 ]
 
 EXT = {"ocelot": ".json", "postman": ".json", "openapi-json": ".json",
-       "openapi-yaml": ".yaml", "har": ".har", "oce": ".oce"}
+       "openapi-yaml": ".yaml", "har": ".har"}
 
 # 展示用名字（导入成功后告诉用户「这次认成了什么」）
 FORMAT_LABELS = {
@@ -59,7 +59,6 @@ FORMAT_LABELS = {
     "openapi": "OpenAPI / Swagger",
     "har": "HAR",
     "native": "Ocelot 集合",
-    "oce": "Ocelot .oce 集合文件",
 }
 
 
@@ -856,8 +855,6 @@ def format_of_data(data: Any) -> str:
         return "unknown"
     if not isinstance(data, dict):
         return "unknown"
-    if isinstance(data.get("oce"), int) and isinstance(data.get("tree"), dict):
-        return "oce"                          # 自己的 .oce 单集合文件
     if data.get("format") == "reqly-collection":
         return "native"
     log = data.get("log")
@@ -1056,14 +1053,7 @@ def parse_text(text: str, fallback_name: str = "") -> Tuple[List[Dict[str, Any]]
         except Exception as exc:  # noqa: BLE001
             return [], fmt, f"JSON 解析失败：{exc}"
 
-    if fmt == "oce":
-        from . import oce as oce_mod
-
-        node, why = oce_mod.parse(text, fallback_name)
-        if node is None:
-            return [], fmt, why
-        nodes = [node]
-    elif fmt == "ocelot":
+    if fmt == "ocelot":
         nodes = _from_ocelot(data, fallback_name)
     elif fmt in ("postman", "apifox"):
         if "apiCollection" in (data or {}):
