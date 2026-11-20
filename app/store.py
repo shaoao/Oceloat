@@ -26,9 +26,22 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.78"
+VERSION = "1.0.79"
 
 CHANGELOG = [
+    {
+        "version": "1.0.79",
+        "date": "2026-11-20",
+        "items": [
+            "Mock 跑起来不再把分栏按钮顶上去：状态条改成浮在内容区底部，"
+            "和右下角的切换按钮同一行、互不遮挡，下面的请求区一寸都不缩",
+            "标题栏和主体右边缘对齐了：以前内容区多铺 1px，看着上面窄一条",
+            "右下角的圆角锯齿没了：内容区背景改成沿窗口圆角画，四角都是平滑弧线",
+            "SSE 只显示一次「未连接」：顶部胶囊写过就不再重复，状态行留给握手结果",
+            "请求家族都添了类型灯：集合树、历史、标签页各按 HTTP / WS / SIO / SSE "
+            "亮对应的小圆点，一眼分清请求类型",
+        ],
+    },
     {
         "version": "1.0.78",
         "date": "2026-11-20",

@@ -31,6 +31,7 @@ from PyQt6.QtGui import (
     QGuiApplication,
     QKeySequence,
     QPainter,
+    QPainterPath,
     QPen,
     QRegion,
     QShortcut,
@@ -481,9 +482,28 @@ class ContentSurface(QWidget):
     """内容区背景：与侧栏同色（整块统一底色），只留一层薄薄的层次。"""
 
     def paintEvent(self, _e):
+        from .main_window import _guard
+        _guard("ContentSurface.paintEvent", self._paint_bg)
+
+    def _paint_bg(self) -> None:
         t = theme()
         p = QPainter(self)
-        p.fillRect(self.rect(), C(t.panel))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(C(t.panel))
+        # 右 / 下各留 1px：主窗圆角卡片是 adjusted(0.5) 再描 1px 边，视觉边缘在
+        # width-1；以前 fillRect 铺到 width，就比标题栏宽 1px。这里对齐到同一条线。
+        r = QRectF(0, 0, self.width() - 1, self.height() - 1)
+        radius = 11.5
+        path = QPainterPath()
+        path.moveTo(r.left(), r.top())
+        path.lineTo(r.right(), r.top())
+        path.lineTo(r.right(), r.bottom() - radius)
+        path.arcTo(QRectF(r.right() - radius * 2, r.bottom() - radius * 2,
+                          radius * 2, radius * 2), 90, -90)
+        path.lineTo(r.left(), r.bottom())
+        path.closeSubpath()
+        p.drawPath(path)
         p.end()
 
 
@@ -872,7 +892,7 @@ class MainWindow(QWidget):
         self.sidebar.trashRequested.connect(self.open_trash)
         self.sidebar.notify.connect(lambda msg: self.toast.show_message(msg, "success"))
 
-        content = ContentSurface()
+        self.content = content = ContentSurface()
         cl = QVBoxLayout(content)
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(0)
@@ -945,9 +965,9 @@ class MainWindow(QWidget):
         self.stack.addWidget(self.welcome)
         self.stack.addWidget(self.workspace)
         cl.addWidget(self.stack, 1)
-        # Mock 状态条只属于右半侧：放内容区底部，侧栏（新建请求那一列）
-        # 的高度和位置永远不变。服务停了整条收起，恢复成原来的样子。
-        cl.addWidget(self._build_statusbar())
+        # Mock 状态条只属于右半侧：浮在内容区底部（不占布局，免得压矮 workspace、
+        # 顶飞分栏按钮）。侧栏的高度和位置永远不变，服务停了整条收起。
+        self._build_statusbar()
 
         self.split = SideSplitter(Qt.Orientation.Horizontal)
         self.split.setObjectName("SideSplit")
@@ -979,8 +999,13 @@ class MainWindow(QWidget):
         """
         bar = QWidget()
         bar.setFixedHeight(28)
+        # 覆盖在 content 底部、不参与布局：以前它占 28px 会把上面的 workspace
+        # 压矮，分栏按钮被顶到上一行。现在它浮在右下角，下面的内容一寸不动。
+        bar.setParent(self.content)
         lay = QHBoxLayout(bar)
-        lay.setContentsMargins(12, 0, 12, 0)
+        # 右边留出 34px 给分栏按钮：Mock 胶囊靠右，按钮固定在同一行的最右，
+        # 两者并排不重叠；服务没跑时那条 34px 只是空白，不影响观感。
+        lay.setContentsMargins(12, 0, 46, 0)
         lay.setSpacing(8)
         lay.addStretch(1)
         self.mock_badge = MockBadge(self.mock)
@@ -1009,8 +1034,19 @@ class MainWindow(QWidget):
                 self._status_tick.start()
             else:
                 self._status_tick.stop()
+            self._place_statusbar()
+            self._place_layout_btn()
         elif on:
             badge.refresh()
+
+    def _place_statusbar(self) -> None:
+        """把浮层状态条钉在 content 底部，右边缘与分栏按钮同一行对齐。"""
+        bar = getattr(self, "status_wrap", None)
+        if bar is None or not hasattr(self, "content"):
+            return
+        c = self.content
+        bar.setGeometry(0, c.height() - bar.height(), c.width(), bar.height())
+        bar.raise_()
 
     def _build_titlebar(self) -> QWidget:
         bar = TitleBar(self)
@@ -3149,10 +3185,11 @@ class MainWindow(QWidget):
         以前「上下」是写死的：响应宽表格（JSON、事件日志）摆在大屏上左右空一大片。
         这颗按钮挂在分栏右下角，24px，鼠标扫过去才有底色，不抢视线。
         """
-        # 必须挂在 workspace 上：QSplitter 会把任何子控件都当成一个「窗格」，
-        # 挂上去就变成三栏，分栏最大宽度还被算成 24px。
+        # 挂在 content 上：QSplitter 会把任何子控件当成「窗格」，挂上去变三栏。
+        # 以前挂 workspace，Mock 状态条一出现就把 workspace 压矮 28px、按钮被顶上去；
+        # 现在挂 content，和状态条同一层，始终落在右下角那一行。
         self.layout_btn = icon_button("split", "", 24, 13, kind="subtle",
-                                      parent=self.workspace)
+                                      parent=self.content)
         self.layout_btn.setFixedWidth(24)
         self.layout_btn.clicked.connect(self.toggle_layout)
         self.layout_btn.raise_()
@@ -3169,15 +3206,18 @@ class MainWindow(QWidget):
 
     def _place_layout_btn(self) -> None:
         btn = getattr(self, "layout_btn", None)
-        if btn is None or not hasattr(self, "splitter"):
+        if btn is None or not hasattr(self, "content"):
             return
-        # 用 workspace 的尺寸兜底：刚 setOrientation 的那一瞬间分栏自己的
-        # geometry 还是旧值（甚至比父控件宽），直接算会把按钮推到窗口外面。
-        w = min(self.splitter.geometry().right() + 1, self.workspace.width())
-        h = min(self.splitter.geometry().bottom() + 1, self.workspace.height())
+        # 挂在 content 上、贴右下角：和 Mock 状态条同一行。状态条出现不再压矮
+        # workspace，按钮也就不可能被顶上去。用 content 的尺寸兜底避免越界。
+        c = self.content
+        w, h = c.width(), c.height()
         if w < 80 or h < 80:
             return
-        btn.move(w - btn.width() - 10, h - btn.height() - 10)
+        # 垂直方向和 28px 状态条的胶囊居中对齐；没有状态条时也在底部同样高度。
+        y = h - 28 + (28 - btn.height()) // 2 if getattr(self, "_status_on", False) \
+            else h - btn.height() - 8
+        btn.move(w - btn.width() - 12, y)
         btn.raise_()
 
     def _restore_layout(self) -> None:
@@ -3357,6 +3397,7 @@ class MainWindow(QWidget):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         _guard("MainWindow.resizeEvent", self._round_corners)
+        _guard("MainWindow.resizeEvent", self._place_statusbar)
         _guard("MainWindow.resizeEvent", self._place_layout_btn)
         if hasattr(self, "toast") and self.toast.isVisible():
             self.toast._place()

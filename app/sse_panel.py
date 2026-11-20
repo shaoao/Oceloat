@@ -374,7 +374,9 @@ class SseLogView(WsLogView):
                 self.status_label._token = "danger"
                 self.dot.set_token("danger")
             else:
-                self.status_label.setText(i18n.tr("未连接"))
+                # 顶部胶囊已经写了「未连接」，这里别再重复一遍：
+                # 留空只显示状态小圆点，等连上后这里换成握手结果。
+                self.status_label.setText("")
                 self.status_label._token = "text_faint"
         self.status_label.refresh_theme()
 

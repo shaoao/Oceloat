@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.78", VERSION == "1.0.78", VERSION)
-check("更新内容是 1.0.78", CHANGELOG[0]["version"] == "1.0.78")
+check("版本 1.0.79", VERSION == "1.0.79", VERSION)
+check("更新内容是 1.0.79", CHANGELOG[0]["version"] == "1.0.79")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -371,11 +371,12 @@ check("更新内容写了原生菜单", any("原生应用菜单" in x for x in A
 
 # ---------------------------------------------------------------- 1.0.67 新增
 print("\n[1.0.67 新增]")
-check("状态条只挂在右半侧内容区", "cl.addWidget(self._build_statusbar())" in _mw_src
+check("状态条只挂在右半侧内容区", "bar.setParent(self.content)" in _mw_src
       and "root_lay.addWidget(self._build_statusbar())" not in _mw_src)
 check("停止后整条收起恢复布局", "self.status_wrap.setVisible(on)" in _mw_src
       and "bar.setVisible(False)" in _mw_src)
-check("侧栏不被状态条挤压", "cl.addWidget(self.stack, 1)\n        # Mock 状态条只属于右半侧" in _mw_src)
+check("侧栏不被状态条挤压", "def _place_statusbar" in _mw_src
+      and "cl.addWidget(self.stack, 1)" in _mw_src)
 check("macOS 菜单去掉环境变量项", "环境变量…" not in _menu_src
       and "show_envs()" not in _menu_src)
 check("更新内容写了右半侧与恢复", any("右半侧" in x for x in ALL_ITEMS)
@@ -646,7 +647,8 @@ check("分栏可切左右", "def toggle_layout" in _mw5 and "setOrientation(Qt.O
 check("分栏方向记进设置", '"split_layout"' in _mw5)
 check("分栏切换有动画", "animate(self, 0.18, ratio, 280" in _mw5)
 check("分栏按钮图标会转", "rotate_icon(0.0 if horiz else 90.0, 260)" in _mw5)
-check("分栏按钮不挂在 splitter 上", "parent=self.workspace" in _mw5)
+check("分栏按钮不挂在 splitter 上", "parent=self.content" in _mw5
+      and "parent=self.splitter" not in _mw5)
 check("断开按钮变红", 'self.send_btn.set_kind("danger")' in _rp5)
 check("Mock 停止服务也变红", "danger" in (ROOT / "app" / "mock_panel.py").read_text(
       encoding="utf-8"))
@@ -680,6 +682,26 @@ check("SSE 状态点自绘有兜底", "_guard(\"SseStatusDot.paintEvent\"" in
 check("C 层 traceback 抄进 crash.log", "def _tee_stderr" in _main6
       and "os.dup2(write_fd, 2)" in _main6)
 check("更新内容写了闪退修复", any("一闪就没了" in x for x in ALL_ITEMS))
+
+# ---------------------------------------------------------------- 1.0.79 新增
+print("\n[1.0.79 新增]")
+_mw7 = (ROOT / "app" / "main_window.py").read_text(encoding="utf-8")
+_sp7 = (ROOT / "app" / "sse_panel.py").read_text(encoding="utf-8")
+_sb7 = (ROOT / "app" / "sidebar.py").read_text(encoding="utf-8")
+_tp7 = (ROOT / "app" / "tabs.py").read_text(encoding="utf-8")
+_th7 = (ROOT / "app" / "theme.py").read_text(encoding="utf-8")
+
+check("状态条浮在内容区不占布局", "bar.setParent(self.content)" in _mw7
+      and "def _place_statusbar" in _mw7)
+check("分栏按钮挂在 content 与状态条同行", "parent=self.content" in _mw7
+      and 'if getattr(self, "_status_on", False)' in _mw7)
+check("内容区右缘内缩 1px 对齐标题栏", "self.width() - 1, self.height() - 1" in _mw7)
+check("内容区画右下的圆角弧", "path.arcTo" in _mw7 and "radius * 2" in _mw7)
+check("SSE 未连接不重复", 'self.status_label.setText("")' in _sp7)
+check("类型灯共用一颗", "def paint_kind_dot" in _th7
+      and "paint_kind_dot" in _sb7 and "paint_kind_dot" in _tp7)
+check("更新内容写了五项修复", any("顶上去" in x for x in ALL_ITEMS)
+      and any("类型灯" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

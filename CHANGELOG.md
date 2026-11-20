@@ -1,5 +1,19 @@
 # What's Changed
 
+## v1.0.79 — 2026-11-20
+
+**Fixed**
+- Starting the mock server no longer pushes the layout-toggle button onto the line above. The status strip now floats at the bottom of the content area, on the same row as the button, without overlapping it — and the request pane keeps its full height.
+- The title bar's right edge now lines up with the body below it. The content surface used to paint one extra pixel past the window card's antialiased border.
+- The jagged bottom-right corner is gone. The content surface now follows the window's rounded arc instead of filling a rectangle over it, so all four corners are smooth.
+- SSE shows "Not connected" only once: the header pill already says it, so the status line stops repeating it and is reserved for handshake details.
+
+**Added**
+- Request-family type dots: collection tree, history rows and tabs now light up a small dot in the method/protocol colour (HTTP methods, WS, SIO, SSE), making request types easy to tell apart.
+
+**Verified**
+- Smoke suite: 823 checks. Brand suite: 285 checks. Bundled self-test: 8/8.
+
 ## v1.0.78 — 2026-11-20
 
 **Fixed**
