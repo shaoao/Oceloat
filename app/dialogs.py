@@ -3377,6 +3377,8 @@ class CommandPalette(QWidget):
         ("toggle_sidebar", "显示 / 隐藏侧边栏", "layers", "⌘B"),
         ("import_curl", "导入 cURL…", "code", ""),
         ("import_collection", "导入集合…", "download", ""),
+        ("open_file", "打开 .oce 集合文件…", "file", "⌘O"),
+        ("files", "集合文件…（.oce 关联管理）", "file", ""),
         ("export_collection", "导出集合…", "file", ""),
         ("doc", "查看接口文档…", "file", ""),
         ("mock", "Mock 服务…", "grid", ""),
@@ -4156,7 +4158,7 @@ class TransferDialog(GlassDialog):
     def _pick_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, i18n.tr("选择要导入的文件"), "",
-            "集合文件 (*.json *.yaml *.yml *.har);;所有文件 (*)")
+            "集合文件 (*.oce *.json *.yaml *.yml *.har);;所有文件 (*)")
         if path:
             self._load_path(path)
 
@@ -4601,6 +4603,7 @@ def export_folder(store: Store, node: Dict[str, Any], parent=None,
     total = count_requests([node])
     title = i18n.tr("导出集合")
     targets = [
+        ("oce", i18n.tr("导出为 .oce 集合文件"), "file"),
         ("ocelot", i18n.tr("导出为 Ocelot JSON"), "grid"),
         ("postman", i18n.tr("导出为 Postman v2.1"), "send"),
         ("openapi-json", i18n.tr("导出为 OpenAPI 3.1 (JSON)"), "code"),
@@ -4623,14 +4626,21 @@ def export_folder(store: Store, node: Dict[str, Any], parent=None,
     stem = re.sub(r'[\\/:*?"<>|\n\r\t]+', "-", (node.get("name") or "").strip()).strip(" .-")
     default = (stem[:60] or "folder") + EXT.get(key, ".json")
     suffix = "YAML (*.yaml)" if key == "openapi-yaml" else (
-        "HAR (*.har)" if key == "har" else "JSON (*.json)")
+        "HAR (*.har)" if key == "har" else (
+            "Ocelot 集合 (*.oce)" if key == "oce" else "JSON (*.json)"))
     path, _ = QFileDialog.getSaveFileName(parent, title, default, suffix)
     if not path:
         return ""
     if key == "openapi-yaml" and not path.lower().endswith((".yaml", ".yml")):
         path += ".yaml"
+    if key == "oce" and not path.lower().endswith(".oce"):
+        path += ".oce"
     try:
-        if key == "ocelot":
+        if key == "oce":
+            from . import oce as oce_mod
+
+            text = oce_mod.dump(node)
+        elif key == "ocelot":
             text = json.dumps(to_ocelot(store, stem or "folder", nodes=[node]),
                               ensure_ascii=False, indent=2)
         elif key == "postman":

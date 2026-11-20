@@ -3850,9 +3850,203 @@ def main() -> int:
         import shutil as _sh
         _sh.rmtree(folder, ignore_errors=True)
 
+    def step38():
+        """集合落盘 .oce：格式可读、双向同步、外部改动能读回来、界面有状态。"""
+        import json as _json
+        import tempfile as _tf
+        from pathlib import Path as _P
+
+        from app import oce as _oce
+        from app.store import Store as _Store
+
+        # 1) 格式：稳定、精简、不写 UI 状态
+        folder = _P(_tf.mkdtemp(prefix="ocelot-oce-"))
+        sample = w.store.collections[0]
+        text = _oce.dump(sample)
+        back, err = _oce.parse(text)
+        check(".oce 能解析回来", back is not None, err)
+        check(".oce 再导出完全一致（diff 友好）", _oce.dump(back) == text)
+        check(".oce 里没有内部 id", '"id"' not in text)
+        check(".oce 里不写 GET", '\n            "method": "GET"' not in text and
+              '"method": "GET"' not in text)
+        check(".oce 里不写展开状态", '"open"' not in text)
+        check(".oce 空字段不落盘", '"params": []' not in text and '"cookies": []' not in text)
+        check(".oce 带版本号", _json.loads(text).get("oce") == 1)
+        check(".oce 顶层就是集合名", _json.loads(text).get("name") == sample.get("name"))
+
+        # 2) 坏输入给出能看懂的原因
+        _bad, why = _oce.parse("{ 不是 JSON")
+        check("坏 JSON 有提示", "JSON" in why, why)
+        _other, why2 = _oce.parse('{"a": 1}')
+        check("不是 .oce 的文件会被拒绝", _other is None and "oce" in why2, why2)
+        _future, why3 = _oce.parse('{"oce": 99, "tree": {"name": "x"}}')
+        check("未来版本会提示升级", _future is None and "升级" in why3, why3)
+
+        # 3) 关联 → 自动写回 → 状态跟着变
+        state = folder / "state.json"
+        st = _Store.load(state)
+        cid = st.collections[0]["id"]
+        target = folder / "Examples.oce"
+        ok, err = st.link_collection(cid, target)
+        check("能关联到 .oce 文件", ok and target.exists(), err)
+        check("关联后状态是已同步", st.file_status(cid) == "synced", st.file_status(cid))
+        req = next(n for n, _ in st.walk() if n.get("type") == "request")
+        req["url"] = "https://edited.example/v1"
+        check("改了内容状态变成待写回", st.file_status(cid) == "pending", st.file_status(cid))
+        st.save()
+        check("保存时自动写回文件", "https://edited.example/v1" in target.read_text("utf-8"))
+        check("写回后状态回到已同步", st.file_status(cid) == "synced", st.file_status(cid))
+
+        # 4) 外部改动 → 重新读取；结构没变时 id 保持不变（标签不会「消失」）
+        before_ids = [n.get("id") for n, _ in st.walk()]
+        data = _json.loads(target.read_text("utf-8"))
+        data["tree"]["children"][1]["children"][0]["name"] = "外部改的名字"
+        target.write_text(_json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+        check("外部改动后能读回来", "外部改的名字" in target.read_text("utf-8"))
+        ok, err = st.reload_linked(cid)
+        check("能从文件重新读取", ok, err)
+        check("读回来保留了新名字",
+              any(n.get("name") == "外部改的名字" for n, _ in st.walk()))
+        after_ids = [n.get("id") for n, _ in st.walk()]
+        check("重新读取后 id 全复用（打开的标签不会断）",
+              set(before_ids) == set(after_ids),
+              f"{len(before_ids)} -> {len(set(before_ids) & set(after_ids))}")
+
+        # 5) 打开一个 .oce = 新增集合并绑定；同一个文件不会重复加
+        other = folder / "另一个.oce"
+        other.write_text(_oce.dump(st.collections[0]), "utf-8")
+        n_before = len(st.collections)
+        node, err = st.adopt_file(other)
+        check("能打开 .oce 作为新集合", node is not None and len(st.collections) == n_before + 1, err)
+        again, _err2 = st.adopt_file(other)
+        check("同一个文件不会重复打开", len(st.collections) == n_before + 1
+              and again.get("id") == node.get("id"))
+        check("新集合状态是已同步", st.file_status(node["id"]) == "synced")
+
+        # 6) 取消关联不删文件
+        st.unlink_collection(cid)
+        check("取消关联后不再算关联", st.file_status(cid) == "")
+        check("取消关联不会删掉文件", target.exists())
+
+        # 7) 导入流程也认得 .oce
+        from app.transfer import parse_text as _parse
+
+        nodes, fmt, perr = _parse(target.read_text("utf-8"), "Examples")
+        check("导入能识别 .oce", fmt == "oce" and bool(nodes), f"{fmt} {perr}")
+
+        # 8) 侧栏与窗口：标记、监听、管理窗口
+        live = w.store.collections[0]["id"]
+        live_file = folder / "live.oce"
+        w.store.link_collection(live, live_file)
+        w.sidebar.refresh()
+        check("侧栏标出了关联文件的集合", live in w.sidebar.tree.linked_ids,
+              str(w.sidebar.tree.linked_ids))
+        check("主窗口监听关联文件",
+              str(live_file) in w._file_watch.files(), str(w._file_watch.files()))
+
+        # 外部改动 → 选「用文件版本」→ 打开着的标签跟着换（含改名）
+        first_req = next(n for n, _ in w.store.walk()
+                         if n.get("type") == "request"
+                         and w.store.parent_id(n["id"]) is not None)
+        # 找它所属的顶层集合，确保改的是同一个文件里的节点
+        owner = first_req["id"]
+        while w.store.parent_id(owner) is not None:
+            owner = w.store.parent_id(owner)
+        w.store.link_collection(owner, live_file)
+        w.sidebar.openRequest.emit(first_req)
+        app.processEvents()
+        mine = next(t for t in w.tabs_data if t.get("node_id") == first_req["id"])
+
+        def find_in_tree(tree, name):
+            if tree.get("children") is None and tree.get("name") == name:
+                return tree
+            for kid in tree.get("children") or []:
+                hit = find_in_tree(kid, name)
+                if hit is not None:
+                    return hit
+            return None
+
+        live_data = _json.loads(live_file.read_text("utf-8"))
+        target_json = find_in_tree(live_data["tree"], first_req.get("name"))
+        check("能在文件里定位到那条请求", target_json is not None)
+        if target_json is not None:
+            target_json["url"] = "https://from-disk.example/z"
+            target_json["name"] = "磁盘上的名字"
+            live_file.write_text(_json.dumps(live_data, ensure_ascii=False, indent=2), "utf-8")
+            from app.dialogs import ConfirmDialog as _Confirm
+
+            _orig_ask = _Confirm.ask
+            _Confirm.ask = classmethod(lambda cls, *a, **k: True)
+            try:
+                w._handle_file_change(str(live_file))
+            finally:
+                _Confirm.ask = _orig_ask
+            app.processEvents()
+            mine = next((t for t in w.tabs_data if t.get("node_id") == first_req["id"]), mine)
+            check("文件改了，标签里的地址跟着变",
+                  mine["request"].get("url") == "https://from-disk.example/z",
+                  str(mine["request"].get("url")))
+            check("文件改了，标签标题跟着变",
+                  mine["title"] == "磁盘上的名字", str(mine["title"]))
+
+        from app.files_ui import FilesDialog
+
+        dlg = FilesDialog(w.store, w)
+        app.processEvents()
+        check("集合文件窗口能打开", dlg.width() > 0)
+        check("窗口标题是「集合文件」", dlg.windowTitle() == "集合文件", dlg.windowTitle())
+        check("列表里列出了关联的集合", len(dlg._rows) >= 1, str(len(dlg._rows)))
+        dlg.hide()
+        w.store.unlink_collection(live)
+        w.sidebar.refresh()
+        check("取消关联后侧栏标记消失", live not in w.sidebar.tree.linked_ids)
+
+        import shutil as _sh
+        _sh.rmtree(folder, ignore_errors=True)
+
+    def step39():
+        """命令行跑集合：CI 里能跑、退出码有意义、不 import Qt。"""
+        import tempfile as _tf
+        from pathlib import Path as _P
+
+        from app import cli as _cli
+        from app import oce as _oce
+        from app.store import new_folder, new_request
+
+        folder = _P(_tf.mkdtemp(prefix="ocelot-cli-"))
+        get = new_request("list", "GET", "{{base_url}}/items")
+        get["params"] = [{"key": "page", "value": "2", "enabled": True}]
+        get["auth"] = {"type": "bearer", "token": "{{token}}", "add_to": "header"}
+        post = new_request("create", "POST", "{{base_url}}/items")
+        post["body"] = {"mode": "json", "raw": '{"a": 1}', "form": [], "file": ""}
+        coll = new_folder("CLI 测试")
+        coll["children"] = [post, get]      # GET 放最后：ECHO 记的是最后一条
+        target = folder / "cli.oce"
+        target.write_text(_oce.dump(coll), "utf-8")
+
+        base = f"http://127.0.0.1:{PORT}"
+        rc = _cli.main(["run", str(target), "--var", f"base_url={base}",
+                        "--var", "token=abc123"])
+        check("CLI 跑通了集合（退出码 0）", rc == 0, str(rc))
+        check("CLI 把变量替换进了地址", "page=2" in str(ECHO["data"].get("path")),
+              str(ECHO["data"].get("path")))
+        check("CLI 带上了 Bearer 认证",
+              ECHO["data"]["headers"].get("authorization") == "Bearer abc123",
+              str(ECHO["data"]["headers"].get("authorization")))
+
+        rc_fail = _cli.main(["run", str(target), "--var", "base_url=http://127.0.0.1:1"])
+        check("CLI 失败时退出码是 1", rc_fail == 1, str(rc_fail))
+        rc_missing = _cli.main(["run", str(folder / "nope.oce")])
+        check("CLI 文件不存在时退出码是 2", rc_missing == 2, str(rc_missing))
+        rc_list = _cli.main(["list", str(target)])
+        check("CLI 列表模式不真发请求", rc_list == 0, str(rc_list))
+
+        import shutil as _sh
+        _sh.rmtree(folder, ignore_errors=True)
+
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

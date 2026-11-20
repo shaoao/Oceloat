@@ -17,7 +17,7 @@ python3 main.py
 
 Python 3.10+，PyQt6 6.5+。macOS 上也可以双击 `启动 Ocelot.command`。第一次打开自带几条示例请求，点一下就能发。
 
-不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.71.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
+不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.73.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
 
 ## 发请求
 
@@ -30,6 +30,45 @@ GET / POST / PUT / PATCH / DELETE / HEAD / OPTIONS 都有。参数、请求头�
 WebSocket 和 Socket.IO 是独立的请求类型，有整页界面：文本 / JSON / 二进制收发、子协议、心跳与往返延迟、断线重连、帧日志。
 
 前后置脚本是 JavaScript，能改请求、读响应、写环境变量、写断言，输出进响应面板的控制台。
+
+## 集合存在文件里
+
+集合可以落成一个 `.oce` 文件。右键集合 →「保存为 .oce 文件…」，之后改什么都自动写回，文件就躺在你自己的项目目录里，跟代码一起提交进 Git。
+
+一个文件一个集合，格式也照能读的样子写：只有真正有内容的字段才落盘，默认值不写，键的顺序固定。所以一条 GET 就是名字、方法、地址三行：
+
+```json
+{
+  "oce": 1,
+  "name": "Payments",
+  "tree": {
+    "name": "Payments",
+    "children": [
+      {"name": "Auth", "children": [
+        {"name": "login", "method": "POST", "url": "{{base_url}}/login",
+         "body": {"mode": "json", "raw": "{\"user\": \"{{user}}\"}"}}
+      ]},
+      {"name": "list", "url": "{{base_url}}/orders", "params": [{"key": "page", "value": "1"}]}
+    ]
+  }
+}
+```
+
+改一个地址，diff 里就只动那一行。展开 / 折叠、内部 id 这些界面状态不会跑进文件。
+
+文件被外部改过（`git pull`、拿编辑器改完保存），程序会发现并问你用哪一版；选自己这版时，外部那版另存成 `.bak`。重新读回来会尽量沿用原来的 id，开着标签的请求不会突然找不到。侧栏里有关联的集合名字右边有个小文件标，悬停能看到路径；右键还有「立即写回」「从文件重新读取」「在 Finder 中显示」「取消文件关联」—— 取消关联只是断开关联，文件不动。
+
+`.oce` 或者 Postman / OpenAPI 文件直接拖进窗口就能打开。
+
+## 命令行跑集合
+
+```bash
+python3 -m app.cli run api/payments.oce --var base_url=$BASE_URL
+python3 -m app.cli run api/payments.oce --json --fail-fast   # 给流水线读
+python3 -m app.cli list api/payments.oce                      # 只列不发
+```
+
+不依赖界面、不 import Qt，标准库就够。全部通过退出码 0，有请求失败 1，文件有问题 2。变量优先级：`--var` > `--env 名字` 那套环境变量 > 当前激活的环境。
 
 ## Mock 是真的在跑服务
 
@@ -67,7 +106,7 @@ WebSocket 和 Socket.IO 是独立的请求类型，有整页界面：文本 / JS
 ## 其他
 
 - 命令面板 ⌘K：搜请求、切环境、跑命令
-- 导入导出：Ocelot JSON / Postman / Apifox / Hoppscotch / Insomnia / OpenAPI / HAR，Ocelot JSON 就是 Postman v2.1 加了层元数据，别的工具能直接读
+- 导入导出：`.oce` / Ocelot JSON / Postman / Apifox / Hoppscotch / Insomnia / OpenAPI / HAR，Ocelot JSON 就是 Postman v2.1 加了层元数据，别的工具能直接读
 - 十种语言的代码片段，一键复制；粘贴 cURL 也能反过来导入
 - 云同步（可选）：换台电脑把快照拉回来
 - 亮色 / 暗色两套主题
@@ -84,6 +123,7 @@ WebSocket 和 Socket.IO 是独立的请求类型，有整页界面：文本 / JS
 | ⌘K | 命令面板 |
 | ⌘F | 在响应里找 |
 | ⌘B | 收 / 展侧栏 |
+| ⌘O | 打开 .oce 集合文件 |
 | ⌘⇧R | 跑完当前集合 |
 | ⌘, | 设置 |
 
@@ -104,7 +144,7 @@ WebSocket 和 Socket.IO 是独立的请求类型，有整页界面：文本 / JS
 代码在 `app/` 下，一个功能一个文件，界面全部用 QPainter 画，不引图片资源。
 
 ```bash
-python3 tools/smoke.py        # 709 项自测，会真起 HTTP / WebSocket 服务
+python3 tools/smoke.py        # 747 项自测，会真起 HTTP / WebSocket 服务
 python3 tools/check_brand.py  # 标识、版本与打包配方检查
 python3 tools/readme_shots.py # 重新生成上文截图
 python3 tools/build_app.py    # 打包成 Ocelot.app + dmg（约 62MB / 27MB）

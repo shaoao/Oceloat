@@ -19,9 +19,34 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.72"
+VERSION = "1.0.73"
 
 CHANGELOG = [
+    {
+        "version": "1.0.73",
+        "date": "2026-11-20",
+        "items": [
+            "集合可以存成一个 .oce 文件了：右键集合「保存为 .oce 文件…」，之后改什么都自动写回，"
+            "文件就在你的项目目录里，能读、能改、能提交进 Git。一个文件一个集合，"
+            "只有真正有内容的字段才会被写进去 —— 一条 GET 就是名字、方法、地址三行，"
+            "改了一个地址 diff 里就只动那一行",
+            "文件被外部改过（git pull、编辑器保存）会自动发现并问你：用文件里的版本，"
+            "还是用你手上的版本覆盖它。选后者时，外部那一版会另存成 .bak 备份，不会丢东西；"
+            "重新读回来时尽量沿用原来的 id，打开着的标签不会突然「找不到请求」",
+            "侧栏里关联了文件的集合名字右边会多一枚小文件图标，鼠标停上去能看到文件路径；"
+            "右键还能「立即写回」「从文件重新读取」「在 Finder 中显示」「取消文件关联」——"
+            "取消关联只断开关联，文件本身不会被动",
+            "新增「集合文件」窗口（标题栏菜单 / 命令面板）：一眼看出每个集合存在哪、"
+            "跟磁盘上的文件是否一致，可以单个写回、批量写回、取消关联",
+            "把 .oce 或 Postman / OpenAPI 文件直接拖进窗口就能打开；"
+            "导入对话框和「导出集合」也都认 .oce 了",
+            "新增命令行：python3 -m app.cli run api/payments.oce --var base_url=$BASE，"
+            "不依赖界面、不 import Qt，CI 里一行就能跑；全部通过退出码 0，有失败返回 1，"
+            "文件有问题返回 2。--json 输出给流水线读，--list 只列不发",
+            "自测补到 747 项：格式往返一致、外部改动能读回来、id 复用、"
+            "取消关联不删文件、CLI 真发请求并校验认证头与查询参数",
+        ],
+    },
     {
         "version": "1.0.72",
         "date": "2026-11-20",
@@ -1399,6 +1424,9 @@ def _sample_state() -> Dict[str, Any]:
              "children": [folder_demo, folder_demo2]},
         ],
         "history": [],
+        # 集合文件关联：集合 id → {path, hash, at}。集合可以存成 .oce 文件，
+        # 编辑时自动写回，文件被外部改动时问你要用哪一版（见 app/oce.py）。
+        "files": {},
         # 回收站：删除的集合 / 文件夹 / 请求先存在这里，可恢复、可彻底删除。
         # 每条记录保存完整节点快照与原位置，恢复时放回原处。
         "trash": [],
@@ -1482,6 +1510,8 @@ class Store:
         self._last_backup = 0.0
         # 启动时如果走过「存档损坏 → 从备份恢复」，这里留一句话给界面提示
         self.load_note: Optional[str] = None
+        # 写回 .oce 之后的回调（主窗口拿它重挂文件监听）
+        self.file_listener = None
 
     @classmethod
     def active(cls) -> Optional["Store"]:
@@ -1650,12 +1680,214 @@ class Store:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             # 覆盖磁盘上前先留一份（限频 10 分钟、最多 5 份），写坏了还能退回去
             self._backup_if_due()
+            # 关联了 .oce 文件的集合先写文件：断网 / 崩溃也不至于让工作副本
+            # 比磁盘上的文件还新（那份文件往往才是要提交进 Git 的）
+            self.sync_files()
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), "utf-8")
             os.replace(tmp, self.path)
             self._dirty = False
         except Exception as exc:  # 持久化失败不应阻断使用
             print(f"[Ocelot] 保存失败: {exc}")
+
+    # ------------------------------------------------------------ 集合文件
+    # 集合可以「关联」到一个 .oce 文件：编辑时自动写回，文件被外部改动时
+    # 会问你要用哪一版。关联关系存 state.json，.oce 里只有集合本身。
+    def file_map(self) -> Dict[str, Dict[str, Any]]:
+        table = self.data.get("files")
+        if not isinstance(table, dict):
+            table = {}
+            self.data["files"] = table
+        return table
+
+    def link_path(self, collection_id: str) -> Optional[Path]:
+        meta = self.file_map().get(collection_id) or {}
+        raw = meta.get("path")
+        return Path(raw) if raw else None
+
+    def is_linked(self, collection_id: str) -> bool:
+        return collection_id in self.file_map()
+
+    def collection_for_path(self, path: Path | str) -> Optional[Dict[str, Any]]:
+        """这个 .oce 文件已经属于哪个集合（用于「重复打开同一个文件」）。"""
+        try:
+            target = Path(path).expanduser().resolve()
+        except OSError:
+            target = Path(path)
+        for cid in list(self.file_map()):
+            cur = self.link_path(cid)
+            if cur is None:
+                continue
+            try:
+                if cur.resolve() == target:
+                    return self.find(cid)
+            except OSError:
+                if str(cur) == str(target):
+                    return self.find(cid)
+        return None
+
+    def _notify_file_listener(self, paths: Optional[List[str]] = None) -> None:
+        """关联关系变了就通知界面重挂监听（新增 / 取消 / 换路径都会走到）。"""
+        fn = getattr(self, "file_listener", None)
+        if not callable(fn):
+            return
+        try:
+            fn(paths if paths is not None else [str(p) for p in self.linked_paths()])
+        except Exception:                   # noqa: BLE001 — 监听失败不影响数据
+            pass
+
+    def linked_paths(self) -> List[Path]:
+        out: List[Path] = []
+        for cid in list(self.file_map()):
+            path = self.link_path(cid)
+            if path is not None and path.exists():
+                out.append(path)
+        return out
+
+    def file_status(self, collection_id: str) -> str:
+        """synced / pending / missing —— 界面上的那颗状态点在读它。"""
+        from . import oce
+
+        meta = self.file_map().get(collection_id)
+        if not meta:
+            return ""
+        node = self.find(collection_id)
+        if node is None:
+            return "missing"
+        path = self.link_path(collection_id)
+        if path is None or not path.exists():
+            return "missing"
+        if meta.get("hash") != oce.content_hash(node):
+            return "pending"
+        return "synced"
+
+    def link_collection(self, collection_id: str, path: Path | str,
+                        write: bool = True) -> tuple[bool, str]:
+        """把集合关联到某个 .oce 文件；默认立刻写一份出去。"""
+        from . import oce
+
+        node = self.find(collection_id)
+        if node is None:
+            return False, "集合不存在"
+        target = Path(path).expanduser()
+        if target.suffix.lower() != oce.EXT:
+            target = target.with_name(target.name + oce.EXT) if not target.suffix \
+                else target.with_suffix(oce.EXT)
+        if write:
+            ok, err = oce.write_file(target, node)
+            if not ok:
+                return False, err
+        self.file_map()[collection_id] = {
+            "path": str(target), "at": time.time(),
+            "hash": oce.file_hash(target) if write else oce.content_hash(node),
+        }
+        self.save()
+        self._notify_file_listener()
+        return True, ""
+
+    def unlink_collection(self, collection_id: str) -> None:
+        """只断开关联，不动磁盘上的文件 —— 那是用户的东西。"""
+        if self.file_map().pop(collection_id, None) is not None:
+            self.save()
+            self._notify_file_listener()
+
+    def sync_files(self, force: bool = False) -> List[str]:
+        """把有改动的关联集合写回文件，返回真正写过的路径。"""
+        from . import oce
+
+        written: List[str] = []
+        table = self.file_map()
+        for cid in list(table):
+            node = self.find(cid)
+            meta = table.get(cid) or {}
+            if node is None:
+                table.pop(cid, None)        # 集合被删了：留下文件，只断开关联
+                continue
+            path = self.link_path(cid)
+            if path is None:
+                continue
+            digest = oce.content_hash(node)
+            if not force and digest == meta.get("hash"):
+                continue
+            ok, err = oce.write_file(path, node)
+            if ok:
+                meta["hash"] = digest
+                meta["at"] = time.time()
+                meta.pop("error", None)
+                written.append(str(path))
+            else:
+                meta["error"] = err
+        if written and callable(getattr(self, "file_listener", None)):
+            try:
+                self.file_listener(written)
+            except Exception:               # noqa: BLE001 — 监听失败不影响落盘
+                pass
+        return written
+
+    def reload_linked(self, collection_id: str) -> tuple[bool, str]:
+        """从磁盘重新读一遍这个集合（外部编辑器 / git 改过之后用）。"""
+        from . import oce
+
+        path = self.link_path(collection_id)
+        if path is None:
+            return False, "这个集合还没有关联文件"
+        fresh, err = oce.read_file(path)
+        if fresh is None:
+            return False, err
+        cur, siblings = self.find_with_parent(collection_id)
+        if cur is None or siblings is None:
+            return False, "集合不在树里"
+        oce.reconcile_ids(fresh, cur)
+        fresh["id"] = collection_id
+        for i, item in enumerate(siblings):
+            if item is cur:
+                siblings[i] = fresh
+                break
+        self.file_map()[collection_id] = {
+            "path": str(path), "at": time.time(),
+            "hash": oce.file_hash(path),
+        }
+        self.save()
+        self._notify_file_listener()
+        return True, ""
+
+    def adopt_file(self, path: Path | str) -> tuple[Optional[Dict[str, Any]], str]:
+        """打开一个 .oce 文件，作为新集合加入并建立关联。"""
+        from . import oce
+
+        path = Path(path).expanduser()
+        first, err = oce.read_file(path)
+        if first is None:
+            return None, err
+        exists = self.collection_for_path(path)
+        if exists is not None:
+            return exists, ""               # 已经打开过：直接定位过去
+        self.collections.append(first)
+        self.file_map()[first["id"]] = {
+            "path": str(path), "at": time.time(), "hash": oce.file_hash(path),
+        }
+        self.save()
+        self._notify_file_listener()
+        return first, ""
+
+    def write_back(self, collection_id: str) -> tuple[bool, str]:
+        """手动「立即写回」：不管指纹，直接以内存这份为准覆盖文件。"""
+        from . import oce
+
+        node = self.find(collection_id)
+        path = self.link_path(collection_id)
+        if node is None or path is None:
+            return False, "这个集合还没有关联文件"
+        ok, err = oce.write_file(path, node)
+        if not ok:
+            return False, err
+        meta = self.file_map().setdefault(collection_id, {})
+        meta["path"] = str(path)
+        meta["hash"] = oce.file_hash(path)
+        meta["at"] = time.time()
+        meta.pop("error", None)
+        self.save()
+        return True, ""
 
     # ------------------------------------------------------------ 快捷属性
     @property

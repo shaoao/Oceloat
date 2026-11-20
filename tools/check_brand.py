@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.72", VERSION == "1.0.72", VERSION)
-check("更新内容是 1.0.72", CHANGELOG[0]["version"] == "1.0.72")
+check("版本 1.0.73", VERSION == "1.0.73", VERSION)
+check("更新内容是 1.0.73", CHANGELOG[0]["version"] == "1.0.73")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -500,6 +500,40 @@ check("更新内容写了打包图标修复", any("Postman / Apifox" in x for x 
 check("更新内容写了独立 Mock 窗口", any("Mock 中心改成独立窗口" in x for x in ALL_ITEMS))
 check("更新内容写了存档备份", any("存档自动备份" in x for x in ALL_ITEMS))
 check("更新内容写了窗口标题", any("⌘` 切换" in x for x in ALL_ITEMS))
+
+# ---------------------------------------------------------------- 1.0.73 新增
+print("\n[1.0.73 新增]")
+_oce_src = (ROOT / "app" / "oce.py").read_text(encoding="utf-8")
+_cli_src = (ROOT / "app" / "cli.py").read_text(encoding="utf-8")
+_store_src = (ROOT / "app" / "store.py").read_text(encoding="utf-8")
+_files_src = (ROOT / "app" / "files_ui.py").read_text(encoding="utf-8")
+_sb_src = (ROOT / "app" / "sidebar.py").read_text(encoding="utf-8")
+check("集合文件后缀是 .oce", 'EXT = ".oce"' in _oce_src)
+check("格式带版本号", 'FORMAT_KEY = "oce"' in _oce_src and "FORMAT_VERSION" in _oce_src)
+check("写盘是原子替换", "os.replace(tmp, path)" in _oce_src)
+check("重新读回来会复用 id", "def reconcile_ids" in _oce_src)
+check("存储层能关联集合文件", "def link_collection" in _store_src
+      and "def sync_files" in _store_src and "def reload_linked" in _store_src)
+check("落盘时会写回集合文件", "self.sync_files()" in _store_src)
+check("取消关联不删文件", "只断开关联，不动磁盘上的文件" in _store_src)
+check("侧栏给关联集合画标记", "linked_ids" in (ROOT / "app" / "sidebar.py").read_text(encoding="utf-8"))
+check("右键能存为 .oce", "保存为 .oce 文件…" in _sb_src
+      and "另存为 .oce 文件…" in _sb_src)
+check("有集合文件管理窗口", "class FilesDialog" in _files_src)
+check("主窗口监听文件变化", "QFileSystemWatcher" in _mw2.split("def _init_file_watch")[1][:400])
+check("外部改动会先问再用", "用文件版本" in _mw2)
+check("能拖文件进来打开", "def dropEvent" in _mw2 and "def _open_dropped" in _mw2)
+check("CLI 不 import Qt", "PyQt6" not in _cli_src)
+check("CLI 退出码有区分", "return 1 if failed else 0" in _cli_src)
+check("导入认 .oce", '"oce": "Ocelot .oce 集合文件"' in
+      (ROOT / "app" / "transfer.py").read_text(encoding="utf-8"))
+check("i18n 登记了集合文件文案",
+      "Collection Files" in (ROOT / "app" / "i18n.py").read_text(encoding="utf-8"))
+check("README 写了 .oce 与命令行", ".oce" in
+      (ROOT / "README.md").read_text(encoding="utf-8")
+      and "python3 -m app.cli run" in (ROOT / "README.md").read_text(encoding="utf-8"))
+check("更新内容写了集合落盘", any("集合可以存成一个 .oce 文件" in x for x in ALL_ITEMS))
+check("更新内容写了命令行", any("python3 -m app.cli run" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

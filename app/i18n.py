@@ -1920,3 +1920,62 @@ _EN.update({
     "继续恢复": "Restore anyway",
     "已取消恢复": "Restore cancelled",
 })
+
+# v1.0.73：集合落盘为 .oce（可读、可进 Git）+ 命令行跑集合
+_EN.update({
+    "集合文件": "Collection Files",
+    "集合文件…": "Collection Files…",
+    "集合文件…（.oce 关联管理）": "Collection Files… (.oce links)",
+    "保存为集合文件": "Save as Collection File",
+    "打开集合文件": "Open Collection File",
+    "打开 .oce 文件…": "Open .oce File…",
+    "打开 .oce 集合文件…": "Open .oce Collection File…",
+    "所有文件": "All Files",
+    "集合可以存成一个 .oce 文件：能读、能改、能进 Git。"
+    "在这里改过的内容会自动写回文件，文件被外部改过时会问你用哪一版。":
+        "A collection can live in a single .oce file: readable, editable, Git-friendly. "
+        "Edits are written back automatically, and when the file changes on disk you "
+        "choose which version wins.",
+    "还没有关联文件的集合。右键任意集合选「保存为 .oce 文件」，或者直接把 .oce 拖进来。":
+        "No collections are linked to a file yet. Right-click a collection and choose "
+        "“Save as .oce”, or drop a .oce file onto this window.",
+    "全部写回": "Write all back",
+    "完成": "Done",
+    "在 Finder 中显示": "Show in Finder",
+    "立即写回文件": "Write to file now",
+    "取消关联": "Unlink",
+    "取消文件关联": "Unlink file",
+    "从文件重新读取": "Reload from file",
+    "保存为 .oce 文件…": "Save as .oce file…",
+    "另存为 .oce 文件…": "Save as another .oce file…",
+    "删除": "Delete",
+    "已同步": "In sync",
+    "已同步 · {when}": "In sync · {when}",
+    "有改动未写回": "Unsaved changes",
+    "文件不在了": "File is gone",
+    "未关联": "Not linked",
+    "还没有关联文件": "No file linked yet",
+    "集合文件：{path}": "Collection file: {path}",
+    "已取消文件关联（文件还在原处）": "File unlinked (the file itself is untouched)",
+    "已保存为 {name}": "Saved as {name}",
+    "已写回文件": "Written to file",
+    "已按文件内容刷新": "Reloaded from file",
+    "已打开 {name}": "Opened {name}",
+    "已导入 {n} 个集合": "Imported {n} collections",
+    "这个文件里没有集合": "This file has no collection in it",
+    "读不了这个文件：{err}": "Could not read this file: {err}",
+    "集合文件被改动了": "Collection file changed",
+    "「{name}」在磁盘上的文件变过了：\n{path}\n\n"
+    "用文件里的内容替换当前集合？\n"
+    "选「取消」则保留当前内容并覆盖文件，外部那一版会另存一份备份。":
+        "The file for “{name}” changed on disk:\n{path}\n\n"
+        "Replace the current collection with the file’s contents?\n"
+        "Choosing Cancel keeps what you have and overwrites the file — the other "
+        "version is saved as a backup first.",
+    "用文件版本": "Use the file",
+    "「{name}」的集合文件被移走了": "The collection file for “{name}” moved away",
+    "已用当前内容覆盖文件{extra}": "Overwrote the file with the current contents{extra}",
+    "，外部版本存为 {name}": " (the other version is kept as {name})",
+    "导出为 .oce 集合文件": "Export as .oce collection",
+    "集合文件 (*.oce *.json)": "Collection files (*.oce *.json)",
+})

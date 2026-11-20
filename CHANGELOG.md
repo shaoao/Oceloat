@@ -1,5 +1,19 @@
 # What's Changed
 
+## v1.0.73 — 2026-11-20
+
+**Added**
+- Collections can live in a `.oce` file: right-click a collection → "Save as .oce file…" and every later edit is written back to disk. One collection per file, in your own project folder, ready for Git.
+- The format is meant to be read: only fields that carry content are written, key order is fixed, and defaults are implied — a plain GET is a name, a method and a URL on three lines, so changing a URL shows up as one changed line in a diff. Internal state (ids, expanded folders, scroll position) never leaks into the file.
+- When the file changes underneath you — `git pull`, an editor save — the app notices and asks which version wins. Choosing your own keeps the other version as a `.bak` next to it. Reloading reuses ids, so open tabs do not lose their request.
+- Linked collections carry a small file glyph in the sidebar (hover for the path) and a context menu with write-now, reload-from-file, show in Finder and unlink. Unlinking only drops the link; the file is never deleted.
+- A "Collection Files" window (title bar menu / command palette) lists every linked collection with its path and sync state, and can write one or all of them back.
+- Drop a `.oce`, Postman or OpenAPI file onto the window to open it. The import dialog and "Export collection" understand `.oce` too.
+- `python3 -m app.cli run api/payments.oce --var base_url=$BASE` runs a collection from the terminal without importing Qt. Exit code 0 when everything passes, 1 when a request fails, 2 when the file is unusable; `--json` for pipelines, `--list` to preview.
+
+**Verified**
+- Smoke suite: 747 checks, including format round-trip stability, external edits, id reuse, unlink leaving the file alone, and the CLI hitting a real server with auth and query params.
+
 ## v1.0.72 — 2026-11-20
 
 **Fixed**

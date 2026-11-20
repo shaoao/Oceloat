@@ -31,6 +31,7 @@ ACTIONS: List[Tuple[str, str, str, str]] = [
     ("mock", "Mock 服务", "工具", "Meta+Shift+M"),
     ("env", "环境变量", "工具", "Meta+E"),
     ("run_collection", "运行整个集合", "工具", "Meta+Shift+R"),
+    ("open_file", "打开集合文件", "工具", "Meta+O"),
     ("settings", "打开设置", "应用", "Meta+,"),
 ]
 
