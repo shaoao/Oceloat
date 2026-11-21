@@ -3323,6 +3323,7 @@ class CommandPalette(QWidget):
         ("send", "发送当前请求", "send", "⌘↵"),
         ("save", "保存到集合", "download", "⌘S"),
         ("env", "变量…", "globe", ""),
+        ("var_inspector", "变量侦探…", "search", ""),
         ("trash", "打开回收站", "trash", ""),
         ("trash_settings", "回收站自动清理设置…", "trash", ""),
         ("settings", "设置…", "sliders", "⌘,"),

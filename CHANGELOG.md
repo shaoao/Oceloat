@@ -1,5 +1,21 @@
 # What's Changed
 
+## v1.0.84 — 2026-11-21
+
+**Fixed**
+- Long values in the parameter / header / cookie tables no longer push the neighbouring columns out. Unfocused cells elide to the column width; editing still shows the full original text, so no data is lost.
+- Fixed frameless-window resizing from the bottom-right corner: edge hits are now handled by one application-level event filter, the corner hot zones are wider, and the rounded mask lives on the content root. Dragging both width and height at once is smooth and reliable.
+
+**Added**
+- OAuth 2.0 and AWS SigV4 authentication. OAuth covers authorization code + PKCE, client credentials, password and manual tokens, with automatic token caching and refreshing. AWS SigV4 re-signs every request from the final method, URL, headers and body, and supports STS session tokens.
+- New authentication works for HTTP, WebSocket, Socket.IO and SSE handshakes, and Postman import/export keeps the OAuth and AWS fields. Both modules use only the standard library, so the app size does not grow.
+- A Contract tab in the response panel: save a response shape as a baseline schema, then check later responses for missing, new or type-changed fields. Observability clearly separates measured TTFB and download time from estimated DNS / TCP / TLS.
+- Mock scenario switching: Normal, Auth failure, Slow response, Service unavailable and Empty data. Responses carry `X-Ocelot-Scenario`, and conditional rules still take priority over the active scenario.
+- Variable inspector: see a variable's current value, where it is defined (global, environment, runtime or built-in dynamic), and which requests reference it. Open it from the command palette.
+
+**Changed**
+- Added English translations for all new screens and messages, and removed a duplicated translation block.
+
 ## v1.0.83 — 2026-11-21
 
 **Added**

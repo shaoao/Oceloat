@@ -1295,6 +1295,74 @@ class NewInstanceDialog(GlassDialog):
         self.accept()
 
 
+class ScenarioDialog(GlassDialog):
+    """场景管理：预置四种常用故障态，也支持按路由自定义覆盖。"""
+
+    PRESETS = [
+        ("normal", "正常", "所有路由按原样返回"),
+        ("unauth", "鉴权失败", "全部路由返回 401，body 为统一错误"),
+        ("slow", "慢接口", "每条路由额外延迟 2000ms"),
+        ("down", "服务不可用", "全部路由返回 503"),
+        ("empty", "空数据", "响应体统一变成空数组"),
+    ]
+
+    def __init__(self, scenarios: List[Dict[str, Any]], active: str, parent=None):
+        super().__init__(parent, 560, 420, "Mock 场景")
+        self.result_item = None
+        self._scenarios = [dict(s) for s in (scenarios or []) if isinstance(s, dict)]
+        self._active = active or ""
+        t = theme()
+        lay = QVBoxLayout(self.body)
+        lay.setContentsMargins(18, 12, 18, 16)
+        lay.setSpacing(8)
+        lay.addWidget(Label("选择场景，切换后服务里的路由会立刻按新规则返回。",
+                            11, t.text_faint))
+        self.preset_tabs = SegmentedTabs(
+            [(k, label) for k, label, _desc in self.PRESETS],
+            style="pill", height=27, font_size=11.2, pad_h=10)
+        self.preset_tabs.set_current("normal", emit=False)
+        lay.addWidget(self.preset_tabs)
+        self.name_edit = QLineEdit()
+        self.name_edit.setObjectName("Field")
+        self.name_edit.setFixedHeight(30)
+        i18n.placeholder(self.name_edit, "场景名称（可改）")
+        lay.addWidget(self.name_edit)
+        self.desc = Label("", 10.6, t.text_faint)
+        self.desc.setWordWrap(True)
+        lay.addWidget(self.desc)
+        self.apply_btn = Button("应用并保存", "check", kind="primary", height=28,
+                                padding=14, font_size=12)
+        self.apply_btn.clicked.connect(self._apply)
+        self.preset_tabs.changed.connect(self._on_preset)
+        self._on_preset("normal")
+        lay.addWidget(HBox(1, self.apply_btn, spacing=6))
+
+    def _on_preset(self, key: str) -> None:
+        preset = next((p for p in self.PRESETS if p[0] == key), None)
+        self.desc.setText(i18n.tr(preset[2]) if preset else "")
+        found = next((s for s in self._scenarios if s.get("id") == key), None)
+        self.name_edit.setText(i18n.tr(found.get("name")) if found else
+                               i18n.tr(preset[1]) if preset else "")
+
+    def _apply(self) -> None:
+        key = self.preset_tabs.current()
+        name = (self.name_edit.text() or "").strip() or i18n.tr("未命名场景")
+        overrides: Dict[str, Any] = {}
+        if key == "unauth":
+            overrides = {"*": {"status": 401, "body": '{"error":"unauthorized"}'}}
+        elif key == "slow":
+            overrides = {"*": {"delay": 2000}}
+        elif key == "down":
+            overrides = {"*": {"status": 503, "body": '{"error":"service unavailable"}'}}
+        elif key == "empty":
+            overrides = {"*": {"status": 200, "body": "[]"}}
+        self.result_item = {
+            "id": key, "name": name, "overrides": overrides,
+            "builtin": True,
+        }
+        self.accept()
+
+
 class LanQrDialog(GlassDialog):
     """局域网调试：把当前实例的地址画成二维码，手机扫一下就能连。"""
 
@@ -1763,6 +1831,11 @@ class MockDialog(GlassDialog):
             b.clicked.connect(slot)
             tool_l.addWidget(b)
         tool_l.addStretch(1)
+        self.scenario_btn = Button("场景：正常", "layers", kind="ghost", height=26,
+                                   padding=10, font_size=11.2,
+                                   tooltip="一键切换 Mock 场景：正常 / 鉴权失败 / 慢接口 / 服务不可用")
+        self.scenario_btn.clicked.connect(self._on_scenario)
+        tool_l.addWidget(self.scenario_btn)
         self.fallback_switch = Switch(bool(self._cfg().get("fallback_echo", False)))
         self.fallback_switch.toggled.connect(self._on_fallback)
         tool_l.addWidget(Label("无匹配时回显", 10.6, t.text_faint))
@@ -1808,6 +1881,7 @@ class MockDialog(GlassDialog):
         self.port_edit.setText(str(inst.get("port") or DEFAULT_PORT))
         self.lan_switch.setChecked(bool(inst.get("lan")))
         self.qr_btn.setVisible(bool(inst.get("lan")))
+        self._sync_scenario_label()
         self._sync_local(rebuild=True)
 
     def _instance_menu(self) -> None:
@@ -1885,9 +1959,15 @@ class MockDialog(GlassDialog):
             port = int(self.port_edit.text() or DEFAULT_PORT)
         except ValueError:
             port = DEFAULT_PORT
-        ok, msg = srv.start(inst.get("routes") or [], port,
+        from .mock_server import apply_scenario
+
+        active = str(inst.get("active_scenario") or "")
+        routes = apply_scenario(inst.get("routes") or [], self._cfg(), inst)
+        for item in routes:
+            item["_scenario"] = active or ""
+        ok, msg = srv.start(routes, port,
                             bool(self._cfg().get("fallback_echo")),
-                            bool(inst.get("lan")))
+                            bool(inst.get("lan")), scenario=active)
         if ok:
             inst["port"] = srv.port
             self.store.save()
@@ -1935,6 +2015,8 @@ class MockDialog(GlassDialog):
     def _sync_local(self, rebuild: bool = False) -> None:
         t = theme()
         srv, inst = self._srv(), self._current()
+        if hasattr(self, "scenario_btn"):
+            self._sync_scenario_label()
         running = srv.running
         self.status_pill.set_text(i18n.tr("运行中") if running else i18n.tr("未启动"))
         self.status_pill.set_color(t.success if running else t.text_faint)
@@ -2177,6 +2259,29 @@ class MockDialog(GlassDialog):
         self._cfg()["fallback_echo"] = bool(on)
         self.store.save()
         self._restart_if_running()
+
+    def _on_scenario(self) -> None:
+        cfg, inst = self._cfg(), self._current()
+        dlg = ScenarioDialog(cfg.get("scenarios") or [],
+                             str(inst.get("active_scenario") or ""), self)
+        if dlg.exec() != dlg.DialogCode.Accepted or not dlg.result_item:
+            return
+        item = dlg.result_item
+        scenarios = {s.get("id"): s for s in cfg.get("scenarios") or []
+                     if isinstance(s, dict)}
+        scenarios[item["id"]] = item
+        cfg["scenarios"] = list(scenarios.values())
+        inst["active_scenario"] = item["id"]
+        self.store.save()
+        self._sync_scenario_label()
+        self._restart_if_running()
+
+    def _sync_scenario_label(self) -> None:
+        active = str(self._current().get("active_scenario") or "")
+        scenario = next((s for s in self._cfg().get("scenarios") or []
+                         if isinstance(s, dict) and s.get("id") == active), None)
+        name = (scenario or {}).get("name") or i18n.tr("正常")
+        self.scenario_btn.setText(i18n.trf("场景：{name}", name=name))
 
     def _restart_if_running(self) -> None:
         if self._srv().running:

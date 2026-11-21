@@ -2295,11 +2295,15 @@ def main() -> int:
         from app.store import VERSION as _V
         from app.store import new_request
 
-        # 1) 窗口本身必须被裁成圆角：卡片铺满整窗，圆角只能由遮罩给出
-        check("窗口有圆角遮罩", not w.mask().isEmpty(),
+        # 1) 根控件必须被裁成圆角：卡片铺满整窗，圆角只能由遮罩给出。
+        # 遮罩放在 root 而不是顶层窗口：顶层一旦 setMask，圆角弧线外的像素
+        # 系统就不派发鼠标事件，右下角的缩放热区会被裁掉。
+        check("窗口有圆角遮罩", not w.root.mask().isEmpty(),
+              str(w.root.mask().boundingRect()))
+        check("遮罩尺寸跟窗口一致", w.root.mask().boundingRect().size() == w.size(),
+              f"{w.root.mask().boundingRect().size()} vs {w.size()}")
+        check("顶层窗口不设遮罩以保留边缘命中", w.mask().isEmpty(),
               str(w.mask().boundingRect()))
-        check("遮罩尺寸跟窗口一致", w.mask().boundingRect().size() == w.size(),
-              f"{w.mask().boundingRect().size()} vs {w.size()}")
         # 卡片不再留透明留白：macOS 从最大化退回后会把它变成一圈白底方框
         check("卡片不留投影留白", w.card_margin() == 0 and w.card_rect() == w.rect(),
               f"{w.card_margin()} / {w.card_rect()}")
@@ -4406,9 +4410,61 @@ def main() -> int:
         dlg.deleteLater()
         return 0
 
+    def step40() -> int:
+        # v1.0.84：OAuth 2.0 / AWS SigV4 / 契约 / 场景 / 变量侦探
+        from app import contract, i18n as _i18n, oauth2_auth
+        from app.awsv4_auth import sign as aws_sign
+        from app.mock_server import apply_scenario
+        from app.request_panel import AUTH_TYPES, AuthPage
+        from app.var_inspector import collect as var_collect
+
+        kinds = [k for k, _l in AUTH_TYPES]
+        check("认证支持 OAuth 2.0", "oauth2" in kinds, str(kinds))
+        check("认证支持 AWS SigV4", "awsv4" in kinds, str(kinds))
+        page = AuthPage(store)
+        page.load({"type": "oauth2", "oauth_grant": "authorization_code",
+                   "oauth_client_id": "cid", "oauth_token_url": "https://x/token"})
+        d = page.dump()
+        check("OAuth 字段能读回", d["oauth_grant"] == "authorization_code"
+              and d["oauth_client_id"] == "cid", str(d.get("oauth_grant")))
+        page.load({"type": "awsv4", "aws_access_key_id": "AK",
+                   "aws_secret_access_key": "SK", "aws_region": "eu-west-1"})
+        check("AWS 字段能读回", page.dump()["aws_region"] == "eu-west-1")
+        hdrs, err = aws_sign("GET", "https://execute-api.eu-west-1.amazonaws.com/prod/x?b=2&a=1",
+                             [("Accept", "*/*")], b"",
+                             {"aws_access_key_id": "AK", "aws_secret_access_key": "SK"}, {})
+        check("SigV4 产出签名头", not err and any(
+              k.lower() == "authorization" and "AWS4-HMAC-SHA256" in v for k, v in hdrs),
+              err or str(hdrs)[:80])
+        verifier, challenge = oauth2_auth.pkce("a" * 48)
+        check("PKCE 用 S256 派生", len(verifier) >= 43 and len(challenge) > 40,
+              f"{len(verifier)}/{len(challenge)}")
+        schema = contract.infer({"code": 0, "data": {"items": [{"id": 1}]}})
+        check("契约断言识别字段消失", any("字段消失" in x for x in contract.drift(
+              schema, {"code": 1, "data": {}})))
+        check("契约断言放过一致响应", not contract.drift(
+              schema, {"code": 1, "data": {"items": [{"id": 2}]}}))
+        cfg = {"scenarios": [{"id": "down", "name": "down",
+                              "overrides": {"*": {"status": 503}}}]}
+        inst = {"active_scenario": "down"}
+        routed = apply_scenario([{"id": "r1", "status": 200}], cfg, inst)
+        check("Mock 场景覆盖路由状态", routed[0]["status"] == 503)
+        inst["active_scenario"] = ""
+        check("关掉场景恢复原路由",
+              apply_scenario([{"id": "r1", "status": 200}], cfg, inst)[0]["status"] == 200)
+        check("变量侦探列出变量", len(var_collect(store)) > 0)
+        old = _i18n.current()
+        _i18n.set_language("en")
+        check("新功能有英文", _i18n.tr("变量侦探") == "Variable inspector"
+              and _i18n.tr("检查漂移") == "Check drift"
+              and _i18n.tr("获取 Token") == "Get token")
+        _i18n.set_language(old)
+        page.deleteLater()
+        return 0
+
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39, step40]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

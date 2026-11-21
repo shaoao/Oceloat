@@ -425,7 +425,8 @@ class ResponsePanel(QWidget):
             [("pretty", "美化"), ("tree", "树形"), ("raw", "原始"),
              ("headers", "响应头"), ("cookies", "Cookies"), ("console", "控制台"),
              ("preview", "预览"),
-             ("diff", "对比"), ("extract", "提取"), ("timeline", "时间线")],
+             ("diff", "对比"), ("extract", "提取"), ("timeline", "时间线"),
+             ("contract", "契约")],
             style="underline", height=30, pad_h=9, font_size=12)
         self.tabs.changed.connect(self._on_tab)
         self.tree_tools = HBox(1)
@@ -528,6 +529,9 @@ class ResponsePanel(QWidget):
         from .timeline import TimelineView
 
         self.timeline = TimelineView()
+        from .contract_view import ContractView
+
+        self.contract = ContractView()
         self.body_stack = FadeStack()
         self.body_stack.add("pretty", self._scrollable(self.pretty))
         self.body_stack.add("tree", self.tree_host)
@@ -539,6 +543,7 @@ class ResponsePanel(QWidget):
         self.body_stack.add("diff", diff_host)
         self.body_stack.add("extract", ext_host)
         self.body_stack.add("timeline", self.timeline)
+        self.body_stack.add("contract", self.contract)
 
         self.content = QWidget()
         cl = QVBoxLayout(self.content)
@@ -715,7 +720,7 @@ class ResponsePanel(QWidget):
         self.enc_btn.set_checked(self._enc != "utf8")
         key = state.get("tab")
         if key in {"pretty", "tree", "raw", "headers", "cookies", "console",
-                   "preview", "diff", "extract", "timeline"}:
+                   "preview", "diff", "extract", "timeline", "contract"}:
             self.tabs.set_current(key, emit=False)
             if key == "raw" and getattr(self, "_raw_pending", False):
                 self._flush_raw()
@@ -1278,6 +1283,14 @@ class ResponsePanel(QWidget):
 
         body = self._decode_current()
         self._body_text = body
+        try:
+            from . import contract as _contract
+
+            self.contract.set_data(
+                _contract.key_for(str(getattr(resp, "request_method", "") or ""), resp.url),
+                resp.body, resp.content_type, resp.timing or {})
+        except Exception:       # noqa: BLE001
+            pass
         if resp.kind in BINARY_KINDS:
             # 二进制直接 utf-8 解码会变成一排问号，别再往代码区里塞了
             self.pretty.setPlainText(

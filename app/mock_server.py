@@ -386,6 +386,8 @@ def mock_config(data: Dict[str, Any]) -> Dict[str, Any]:
     cfg = data.setdefault("mock", {})
     cfg.setdefault("fallback_echo", False)
     cfg.setdefault("auto_start", False)
+    # 场景：一份覆盖规则可一键切换整组路由的行为（正常 / 鉴权失败 / 慢接口 / 全挂）
+    cfg.setdefault("scenarios", [])
     if not cfg.get("instances"):
         legacy = cfg.get("routes") or default_routes()
         for r in legacy:
@@ -411,6 +413,7 @@ def mock_config(data: Dict[str, Any]) -> Dict[str, Any]:
         inst.setdefault("lan", False)
         inst.setdefault("auto_start", cfg.get("auto_start", False))
         inst.setdefault("routes", [])
+        inst.setdefault("active_scenario", "")
         for r in inst["routes"]:
             if not r.get("id"):
                 r["id"] = "m" + _uuid.uuid4().hex[:8]
@@ -420,6 +423,39 @@ def mock_config(data: Dict[str, Any]) -> Dict[str, Any]:
     cfg["port"] = cfg["instances"][0].get("port", DEFAULT_PORT)
     cfg["routes"] = cfg["instances"][0].get("routes", [])
     return cfg
+
+
+def apply_scenario(routes: List[Dict[str, Any]], cfg: Dict[str, Any],
+                   instance: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """把当前实例的激活场景覆盖到路由上；不改原始数据，返回新的列表。
+
+    规则仍优先于场景：场景只改「路由默认响应」，条件命中时照旧覆盖。
+    """
+    active = str(instance.get("active_scenario") or "")
+    if not active:
+        return routes
+    chosen = next((s for s in (cfg.get("scenarios") or [])
+                   if isinstance(s, dict) and s.get("id") == active), None)
+    if not chosen:
+        return routes
+    overrides = chosen.get("overrides") or {}
+    if not isinstance(overrides, dict):
+        return routes
+    out: List[Dict[str, Any]] = []
+    for route in routes or []:
+        item = dict(route)
+        keys = [str(route.get("id") or ""),
+                f"{str(route.get('method') or 'ANY').upper()} {route.get('path') or ''}",
+                "*"]
+        for k in keys:
+            patch = overrides.get(k)
+            if isinstance(patch, dict):
+                item.update({a: b for a, b in patch.items() if a in (
+                    "status", "delay", "body", "content_type", "echo", "enabled")})
+                item["_scenario"] = chosen.get("name") or active
+                break
+        out.append(item)
+    return out
 
 
 def _match(table: Dict[Tuple[str, str], Dict[str, Any]], method: str,
@@ -666,9 +702,13 @@ class _Handler(BaseHTTPRequestHandler):
             text = item.get("body") or ""
         text = render_placeholders(text, query)
         ctype = item.get("content_type") or "application/json; charset=utf-8"
-        self._send(status, text.encode("utf-8"), ctype,
-                   {"X-Ocelot-Route": item.get("name") or "",
-                    "X-Ocelot-Rule": (hit_rule or {}).get("name") or ""})
+        extra_headers = dict(item.get("headers") or {})
+        extra_headers.update({
+            "X-Ocelot-Route": item.get("name") or "",
+            "X-Ocelot-Rule": (hit_rule or {}).get("name") or "",
+            "X-Ocelot-Scenario": str(item.get("_scenario") or ""),
+        })
+        self._send(status, text.encode("utf-8"), ctype, extra_headers)
         if mock is not None:
             mock.log(self.command, self.path, status, started, item.get("name") or "路由",
                      (hit_rule or {}).get("name") or "",
@@ -805,10 +845,11 @@ class MockServer:
 
     # -------------------------------------------------- 启停
     def start(self, routes: List[Dict[str, Any]], port: int = DEFAULT_PORT,
-              fallback_echo: bool = False, lan: bool = False) -> Tuple[bool, str]:
+              fallback_echo: bool = False, lan: bool = False,
+              scenario: str = "") -> Tuple[bool, str]:
         self.stop()
         self.host = "0.0.0.0" if lan else "127.0.0.1"
-        self.routes = []
+        self.scenario_name = str(scenario or "")
         for r in routes or []:
             item = dict(r)
             body = item.get("body")

@@ -136,6 +136,22 @@ def _postman_auth(auth: Dict[str, Any], carry: Dict[str, Any]) -> Optional[Dict[
             {"key": "key", "value": auth.get("key", ""), "type": "string"},
             {"key": "value", "value": auth.get("value", ""), "type": "string"},
             {"key": "in", "value": auth.get("add_to") or "header", "type": "string"}]}
+    if kind == "oauth2":
+        fields = []
+        for key in ("client_id", "client_secret", "access_token", "refresh_token",
+                    "token_url", "auth_url", "scope", "username", "password"):
+            val = auth.get("oauth_" + key) or ""
+            if val:
+                fields.append({"key": key, "value": str(val), "type": "string"})
+        return {"type": "oauth2", "oauth2": fields}
+    if kind == "awsv4":
+        return {"type": "awsv4", "awsv4": [
+            {"key": "accessKey", "value": auth.get("aws_access_key_id", ""), "type": "string"},
+            {"key": "secretKey", "value": auth.get("aws_secret_access_key", ""), "type": "string"},
+            {"key": "sessionToken", "value": auth.get("aws_session_token", ""), "type": "string"},
+            {"key": "region", "value": auth.get("aws_region", ""), "type": "string"},
+            {"key": "service", "value": auth.get("aws_service", ""), "type": "string"},
+        ]}
     if kind in ("jwt", "inherit"):
         # Postman 没有这两种，放进 x-ocelot 里由我们自己还原
         carry["auth"] = dict(auth)
@@ -610,6 +626,27 @@ def _import_postman_auth(auth: Dict[str, Any]) -> Dict[str, Any]:
                    add_to=pick("apikey", "in") or "header")
     elif kind == "jwt":
         out.update(type="jwt", jwt_mode="manual", jwt_token=pick("jwt", "token"))
+    elif kind == "oauth2":
+        mapping = {
+            "client_id": "oauth_client_id", "client_secret": "oauth_client_secret",
+            "access_token": "oauth_access_token", "refresh_token": "oauth_refresh_token",
+            "token_url": "oauth_token_url", "auth_url": "oauth_auth_url",
+            "scope": "oauth_scope", "username": "oauth_username",
+            "password": "oauth_password",
+        }
+        out["type"] = "oauth2"
+        for src, dst in mapping.items():
+            out[dst] = pick("oauth2", src)
+        if not out.get("oauth_grant"):
+            out["oauth_grant"] = ("implicit" if out["oauth_access_token"]
+                                  else "client_credentials")
+    elif kind == "awsv4":
+        out.update(type="awsv4",
+                   aws_access_key_id=pick("awsv4", "accessKey"),
+                   aws_secret_access_key=pick("awsv4", "secretKey"),
+                   aws_session_token=pick("awsv4", "sessionToken"),
+                   aws_region=pick("awsv4", "region") or "us-east-1",
+                   aws_service=pick("awsv4", "service") or "execute-api")
     return out
 
 

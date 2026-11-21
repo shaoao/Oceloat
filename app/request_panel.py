@@ -6,8 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import (QPoint, QPointF, QRectF, QSize, Qt, QTimer,
                           QUrl, QUrlQuery, pyqtSignal)
-from PyQt6.QtGui import (QColor, QFont, QFontMetricsF, QGuiApplication, QPainter,
-                         QPen, QPixmap)
+from PyQt6.QtGui import (QColor, QDesktopServices, QFont, QFontMetricsF, QGuiApplication,
+                         QPainter, QPen, QPixmap)
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -29,6 +29,7 @@ from .widgets import (
     Button,
     Card,
     Divider,
+    ElideLabel,
     FadeStack,
     HBox,
     Label,
@@ -84,7 +85,8 @@ RAW_LANGS = [("json", "JSON"), ("xml", "XML"), ("html", "HTML"), ("text", "Text"
 
 # 认证类型英文名与主流客户端对齐；Inherit 是专有名词，中英文界面都只显示英文。
 AUTH_TYPES = [("none", "无"), ("inherit", "Inherit"), ("bearer", "Bearer"),
-              ("basic", "Basic"), ("apikey", "API Key"), ("jwt", "JWT")]
+              ("basic", "Basic"), ("apikey", "API Key"), ("jwt", "JWT"),
+              ("oauth2", "OAuth 2.0"), ("awsv4", "AWS SigV4")]
 
 
 # ---------------------------------------------------------------- 方法菜单
@@ -935,6 +937,93 @@ class AuthPage(QWidget):
             "填写 Payload 与密钥后自动生成签名令牌，发送时作为 Authorization: Bearer <token> 携带。",
             jwt_inner)
 
+        # OAuth 2.0：四种 grant + PKCE + token 缓存状态
+        from .oauth2_auth import GRANTS, GRANT_LABELS
+
+        self.oauth_grant = SegmentedTabs(
+            [(g, GRANT_LABELS[g]) for g in GRANTS], style="pill", height=26,
+            font_size=11, pad_h=9)
+        self.oauth_grant.set_current("client_credentials", emit=False)
+        self.oauth_grant.changed.connect(self._on_oauth_grant)
+        self.oauth_auth_url = self._field("授权地址", "https://example.com/oauth/authorize")
+        self.oauth_token_url = self._field("Token 地址", "https://example.com/oauth/token")
+        self.oauth_client_id = self._field("Client ID", "client id")
+        self.oauth_client_secret = self._field("Client Secret", "client secret", password=True)
+        self.oauth_scope = self._field("Scope", "read write")
+        self.oauth_username = self._field("用户名", "username")
+        self.oauth_password = self._field("密码", "password", password=True)
+        self.oauth_code = self._field("授权码", "从浏览器回调里复制 code")
+        self.oauth_redirect_uri = self._field("回调地址", "http://localhost:8080/callback")
+        self.oauth_code_verifier = self._field("PKCE Verifier", "点右边按钮生成")
+        self.oauth_access_token = self._field("Access Token", "手动 Token 模式下粘贴")
+        self.oauth_refresh_token = self._field("Refresh Token", "自动保存，一般不用手填")
+        self.oauth_token_key = self._field("Token 参数名", "access_token")
+        self.oauth_placement = SegmentedTabs(
+            [("header", "请求头"), ("query", "查询参数")],
+            style="pill", height=26, font_size=11.5, pad_h=11)
+        self.oauth_placement.set_current("header", emit=False)
+        self.oauth_status = Label("", 10.8, theme().text_faint, mono_font=True)
+        self.oauth_status.setWordWrap(True)
+        self.oauth_open_btn = Button("打开授权页", "external", kind="ghost", height=26,
+                                     padding=9, font_size=11.5,
+                                     tooltip="在浏览器打开授权地址，登录后把 code 粘回来")
+        self.oauth_pkce_btn = Button("生成 Verifier", "refresh", kind="ghost", height=26,
+                                     padding=9, font_size=11.5,
+                                     tooltip="生成新的 PKCE code_verifier")
+        self.oauth_fetch_btn = Button("获取 Token", "refresh", kind="ghost", height=26,
+                                      padding=9, font_size=11.5,
+                                      tooltip="立即调用 Token 地址换取 access_token")
+        self.oauth_open_btn.clicked.connect(self._on_oauth_open)
+        self.oauth_pkce_btn.clicked.connect(self._on_oauth_pkce)
+        self.oauth_fetch_btn.clicked.connect(self._on_oauth_fetch)
+        oauth_inner = QWidget()
+        ol = QVBoxLayout(oauth_inner)
+        ol.setContentsMargins(0, 0, 0, 0)
+        ol.setSpacing(9)
+        ol.addWidget(Label("授权方式", 11.3, theme().text_dim, weight=QFont.Weight.DemiBold))
+        ol.addWidget(self.oauth_grant)
+        ol.addWidget(self.oauth_auth_url)
+        ol.addWidget(self.oauth_token_url)
+        ol.addWidget(self.oauth_client_id)
+        ol.addWidget(self.oauth_client_secret)
+        ol.addWidget(self.oauth_scope)
+        ol.addWidget(self.oauth_username)
+        ol.addWidget(self.oauth_password)
+        ol.addWidget(self.oauth_code)
+        ol.addWidget(self.oauth_redirect_uri)
+        ol.addWidget(self.oauth_code_verifier)
+        ol.addWidget(HBox(self.oauth_pkce_btn, self.oauth_open_btn,
+                          self.oauth_fetch_btn, spacing=6))
+        ol.addWidget(self.oauth_access_token)
+        ol.addWidget(self.oauth_refresh_token)
+        ol.addWidget(Label("Token 放在哪里", 11.3, theme().text_dim,
+                           weight=QFont.Weight.DemiBold))
+        ol.addWidget(self.oauth_placement)
+        ol.addWidget(self.oauth_token_key)
+        ol.addWidget(self.oauth_status)
+        self.oauth_box = self._group(
+            "OAuth 2.0", "支持授权码 + PKCE / 客户端凭证 / 密码 / 手动 Token，token 自动缓存与刷新。",
+            oauth_inner)
+
+        # AWS SigV4：每次发送前基于最终请求重新签名
+        self.aws_access = self._field("Access Key ID", "AKIA...")
+        self.aws_secret = self._field("Secret Access Key", "secret", password=True)
+        self.aws_session = self._field("Session Token", "可选，STS 临时凭证")
+        self.aws_region = self._field("Region", "us-east-1")
+        self.aws_service = self._field("Service", "execute-api")
+        self.aws_sign_body = SegmentedTabs(
+            [("yes", "签名 Body"), ("no", "不签名 Body")],
+            style="pill", height=26, font_size=11.5, pad_h=11)
+        self.aws_sign_body.set_current("yes", emit=False)
+        self.aws_status = Label("签名基于最终 method / URL / 请求头 / 请求体，每次发送自动重签。",
+                                10.8, theme().text_faint)
+        self.aws_status.setWordWrap(True)
+        self.aws_box = self._group(
+            "AWS SigV4",
+            "为 AWS API Gateway / S3 / EC2 等接口生成 AWS4-HMAC-SHA256 签名。",
+            self.aws_access, self.aws_secret, self.aws_session,
+            self.aws_region, self.aws_service, self.aws_sign_body, self.aws_status)
+
         self.stack = FadeStack()
         self.stack.add("none", self.none_box)
         self.stack.add("inherit", self.inherit_box)
@@ -942,6 +1031,8 @@ class AuthPage(QWidget):
         self.stack.add("basic", self.basic_box)
         self.stack.add("apikey", self.api_box)
         self.stack.add("jwt", self.jwt_box)
+        self.stack.add("oauth2", self.oauth_box)
+        self.stack.add("awsv4", self.aws_box)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 12)
@@ -1035,11 +1126,82 @@ class AuthPage(QWidget):
             self.inherit_source.setText(i18n.tr("当前集合未设置认证，请求将不带凭据。"))
             self.inherit_detail.setText(i18n.tr("从所属集合继承认证配置。集合未设置认证时不带任何凭据。"))
 
+    def refresh_theme(self) -> None:
+        """语言切换后重译状态行；SegmentedTabs 自带重译，字段占位符由 i18n 处理。"""
+        self._refresh_oauth_status()
+        self.aws_status.setText(i18n.tr(
+            "签名基于最终 method / URL / 请求头 / 请求体，每次发送自动重签。"))
+
+    def _on_oauth_grant(self, _key: str = "") -> None:
+        grant = self.oauth_grant.current()
+        manual = grant == "implicit"
+        for widget in (self.oauth_code, self.oauth_redirect_uri,
+                       self.oauth_code_verifier, self.oauth_pkce_btn,
+                       self.oauth_open_btn):
+            widget.setVisible(grant == "authorization_code")
+        self.oauth_access_token.setVisible(manual)
+        self.oauth_refresh_token.setVisible(not manual)
+        self._refresh_oauth_status()
+        if not self._loading:
+            self.changed.emit()
+
+    def _refresh_oauth_status(self) -> None:
+        from .oauth2_auth import cached_token
+
+        auth = self.dump()
+        entry = cached_token(auth, self.store, self.store.env_vars() if self.store else {})
+        if entry:
+            self.oauth_status.setText(i18n.tr("已缓存 Token · 发送时自动使用并在过期前刷新"))
+            self.oauth_status.setStyleSheet(f"color: {theme().success}; background: transparent;")
+        else:
+            self.oauth_status.setText(i18n.tr("尚未获取 Token · 首次发送时自动换取"))
+            self.oauth_status.setStyleSheet("")
+
+    def _on_oauth_pkce(self) -> None:
+        from .oauth2_auth import pkce
+
+        verifier, _challenge = pkce()
+        self.oauth_code_verifier.setText(verifier)
+        self.toast_message(i18n.tr("已生成新的 PKCE Verifier"))
+
+    def _on_oauth_open(self) -> None:
+        from .oauth2_auth import authorize_url
+
+        url = authorize_url(self.dump(), self.store.env_vars() if self.store else {})
+        if not url:
+            self.toast_message(i18n.tr("请先填写授权地址"), warn=True)
+            return
+        QGuiApplication.clipboard().setText(url)
+        QDesktopServices.openUrl(QUrl(url))
+        self.toast_message(i18n.tr("已打开浏览器，授权地址也已复制到剪贴板"))
+
+    def _on_oauth_fetch(self) -> None:
+        from .oauth2_auth import fetch_token, save_token
+
+        auth = self.dump()
+        env = self.store.env_vars() if self.store else {}
+        token, err = fetch_token(auth, env, 15)
+        if err:
+            self.oauth_status.setText("✕ " + err)
+            self.oauth_status.setStyleSheet(f"color: {theme().danger}; background: transparent;")
+            return
+        save_token(auth, self.store, env, token)
+        self._refresh_oauth_status()
+        self.toast_message(i18n.tr("Token 获取成功"))
+
+    def toast_message(self, text: str, warn: bool = False) -> None:
+        """轻量提示：不依赖主窗口的 toast，状态行就地显示即可。"""
+        self.oauth_status.setText(("✕ " if warn else "✓ ") + text)
+        self.oauth_status.setStyleSheet(
+            f"color: {theme().danger if warn else theme().success}; background: transparent;")
+
     def _on_change(self) -> None:
         if self._loading:
             return
         if self._type == "jwt":
             self._refresh_jwt()
+        elif self._type == "oauth2":
+            self._refresh_oauth_status()
         self.changed.emit()
 
     def load(self, auth: Dict[str, Any], request_id: str = "") -> None:
@@ -1062,6 +1224,28 @@ class AuthPage(QWidget):
         self.jwt_payload.setText(auth.get("jwt_payload", ""))
         self.jwt_secret.setText(auth.get("jwt_secret", ""))
         self.jwt_token.setText(auth.get("jwt_token", ""))
+        self.oauth_grant.set_current(auth.get("oauth_grant", "client_credentials"), emit=False)
+        for attr, key in (
+            ("oauth_auth_url", "oauth_auth_url"), ("oauth_token_url", "oauth_token_url"),
+            ("oauth_client_id", "oauth_client_id"),
+            ("oauth_client_secret", "oauth_client_secret"), ("oauth_scope", "oauth_scope"),
+            ("oauth_username", "oauth_username"), ("oauth_password", "oauth_password"),
+            ("oauth_code", "oauth_code"), ("oauth_redirect_uri", "oauth_redirect_uri"),
+            ("oauth_code_verifier", "oauth_code_verifier"),
+            ("oauth_access_token", "oauth_access_token"),
+            ("oauth_refresh_token", "oauth_refresh_token"),
+            ("oauth_token_key", "oauth_token_key"),
+        ):
+            getattr(self, attr).setText(auth.get(key, ""))
+        self.oauth_placement.set_current(auth.get("oauth_token_placement", "header"), emit=False)
+        self.aws_access.setText(auth.get("aws_access_key_id", ""))
+        self.aws_secret.setText(auth.get("aws_secret_access_key", ""))
+        self.aws_session.setText(auth.get("aws_session_token", ""))
+        self.aws_region.setText(auth.get("aws_region", "us-east-1"))
+        self.aws_service.setText(auth.get("aws_service", "execute-api"))
+        self.aws_sign_body.set_current("yes" if auth.get("aws_sign_body", True) else "no",
+                                        emit=False)
+        self._on_oauth_grant()
         self._loading = False
         if self._type == "inherit":
             self._refresh_inherit()
@@ -1082,6 +1266,28 @@ class AuthPage(QWidget):
             "jwt_payload": self.jwt_payload.text(),
             "jwt_secret": self.jwt_secret.text(),
             "jwt_token": self.jwt_token.text(),
+            "oauth_grant": self.oauth_grant.current(),
+            "oauth_auth_url": self.oauth_auth_url.text(),
+            "oauth_token_url": self.oauth_token_url.text(),
+            "oauth_client_id": self.oauth_client_id.text(),
+            "oauth_client_secret": self.oauth_client_secret.text(),
+            "oauth_scope": self.oauth_scope.text(),
+            "oauth_username": self.oauth_username.text(),
+            "oauth_password": self.oauth_password.text(),
+            "oauth_code": self.oauth_code.text(),
+            "oauth_redirect_uri": self.oauth_redirect_uri.text(),
+            "oauth_code_verifier": self.oauth_code_verifier.text(),
+            "oauth_access_token": self.oauth_access_token.text(),
+            "oauth_refresh_token": self.oauth_refresh_token.text(),
+            "oauth_token_placement": self.oauth_placement.current(),
+            "oauth_token_key": self.oauth_token_key.text() or "access_token",
+            "oauth_use_refresh": True,
+            "aws_access_key_id": self.aws_access.text(),
+            "aws_secret_access_key": self.aws_secret.text(),
+            "aws_session_token": self.aws_session.text(),
+            "aws_region": self.aws_region.text(),
+            "aws_service": self.aws_service.text(),
+            "aws_sign_body": self.aws_sign_body.current() == "yes",
         }
 
 
@@ -1452,8 +1658,8 @@ class RequestEditor(QWidget):
                                       tooltip="以 key: value 文本一次编辑全部参数")
         self.params_bulk_btn.clicked.connect(self._toggle_params_bulk)
         self.params_tools = HBox(1, self.paste_btn, self.params_bulk_btn, spacing=4)
-        self.params_preview = Label("", 10.5, theme().text_faint, mono_font=True)
-        self.params_preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.params_preview = ElideLabel("", 10.5, theme().text_faint, mono_font=True,
+                                         mode=Qt.TextElideMode.ElideMiddle)
         self.params_preview.setToolTip("最终发送的完整地址")
 
         self.headers = KVEditor("Header", "值", suggestions=COMMON_HEADERS, empty_hint="添加请求头")

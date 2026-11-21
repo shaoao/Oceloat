@@ -797,6 +797,9 @@ class MainWindow(QWidget):
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
+        # 边缘缩放：子控件铺满整窗，会把鼠标事件吃掉。装应用级过滤器统一接管
+        # 四边四角的按下，保证右下角这类位置永远能命中、拖拽由系统原生接管。
+        QApplication.instance().installEventFilter(self)
         self.setMinimumSize(1020, 660)
         self.resize(1320, 840)
 
@@ -940,6 +943,7 @@ class MainWindow(QWidget):
         self.editor.notify.connect(lambda msg: self.toast.show_message(msg, "info"))
         self.editor.aiSettingsRequested.connect(lambda: self.show_settings("ai"))
         self.response = ResponsePanel()
+        self.response.contract.set_store(self.store)
         self.response.ws_view.replay.connect(self._ws_replay)
         self.response.sio_view.eventReplay.connect(self._sio_replay)
         self.response.wsActionRequested.connect(self._on_ws_action)
@@ -1151,8 +1155,9 @@ class MainWindow(QWidget):
 
     # -------------------------------------------------- 窗口绘制 / 交互
     CARD_RADIUS = 12
-    # 边缘拖拽热区。卡片铺满整窗后没有透明留白了，热区按视觉边距给。
-    EDGE_HIT = 5
+    # 边缘拖拽热区。必须不小于圆角半径：热区小于半径时，右下角弧线内可点击的
+    # 有效宽度只剩 1~2px，手感就是「拖不动」。给到 14 覆盖整条弧线。
+    EDGE_HIT = 14
 
     def card_margin(self) -> int:
         """卡片四周的留白，固定为 0。
@@ -1195,8 +1200,11 @@ class MainWindow(QWidget):
         if getattr(self, "_mask_size", None) == (w, h):
             return
         self._mask_size = (w, h)
-        self.setMask(_rounded_region(w, h, self.CARD_RADIUS))
-        self.root.clearMask()
+        # 遮罩放子控件 root，不放顶层窗口：顶层一旦 setMask，圆角弧线外的像素
+        # 系统直接不派发鼠标事件，右下角的缩放热区就被裁掉了。root 的遮罩只裁
+        # 绘制、不影响顶层命中，圆角照样干净。
+        self.clearMask()
+        self.root.setMask(_rounded_region(w, h, self.CARD_RADIUS))
 
     def paintEvent(self, _e):
         t = theme()
@@ -1232,6 +1240,68 @@ class MainWindow(QWidget):
         if pos.y() >= self.height() - m:
             edges |= Qt.Edge.BottomEdge
         return edges
+
+    def eventFilter(self, obj, e):
+        """统一接管本窗口的边缘命中。
+
+        事件先到应用过滤器再到目标控件，所以即使 root / 内容区 / 输入框铺满
+        整个窗口，边缘的按下也不会被它们吞掉。只对「本窗口及其子控件」生效，
+        弹窗、菜单和其它窗口完全不受影响。
+        """
+        try:
+            from PyQt6.QtWidgets import QWidget as _QWidget
+            if not isinstance(obj, _QWidget):
+                return super().eventFilter(obj, e)
+            if obj is not self and not self.isAncestorOf(obj):
+                return super().eventFilter(obj, e)
+            kind = e.type()
+            if kind not in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress):
+                return super().eventFilter(obj, e)
+            if self.isMaximized() or self.isFullScreen():
+                return super().eventFilter(obj, e)
+            # 用「相对事件的接收控件」的坐标换算，而不是 e.globalPosition()：
+            # 合成事件（测试 / 部分平台）没有可靠的全局坐标，直接用会把标题栏
+            # 里的点击误判成窗口边缘，吞掉标签切换、还会给历史视口乱设光标。
+            pos = self.mapFromGlobal(obj.mapToGlobal(e.position().toPoint()))
+            edges = self._edge(pos)
+            if kind == QEvent.Type.MouseButtonPress:
+                if (e.button() == Qt.MouseButton.LeftButton and edges):
+                    handle = self.windowHandle()
+                    if handle is not None:
+                        handle.startSystemResize(edges)
+                        return True
+            else:
+                if edges:
+                    cur = self._resize_cursor(edges)
+                    if not hasattr(self, "_edge_cursors"):
+                        self._edge_cursors: Dict[int, Any] = {}
+                    key = id(obj)
+                    if key not in self._edge_cursors:
+                        self._edge_cursors[key] = (obj, obj.cursor())
+                    obj.setCursor(cur)
+                else:
+                    saved = getattr(self, "_edge_cursors", {}).pop(id(obj), None)
+                    if saved is not None:
+                        widget, cursor = saved
+                        try:
+                            widget.setCursor(cursor)
+                        except RuntimeError:
+                            pass
+            return super().eventFilter(obj, e)
+        except Exception:       # noqa: BLE001 - 过滤器绝不许拖垮整个应用
+            return super().eventFilter(obj, e)
+
+    @staticmethod
+    def _resize_cursor(edges: Qt.Edge) -> Qt.CursorShape:
+        if (edges & Qt.Edge.LeftEdge and edges & Qt.Edge.TopEdge
+                or edges & Qt.Edge.RightEdge and edges & Qt.Edge.BottomEdge):
+            return Qt.CursorShape.SizeFDiagCursor
+        if (edges & Qt.Edge.RightEdge and edges & Qt.Edge.TopEdge
+                or edges & Qt.Edge.LeftEdge and edges & Qt.Edge.BottomEdge):
+            return Qt.CursorShape.SizeBDiagCursor
+        if edges & (Qt.Edge.LeftEdge | Qt.Edge.RightEdge):
+            return Qt.CursorShape.SizeHorCursor
+        return Qt.CursorShape.SizeVerCursor
 
     def mouseMoveEvent(self, e):
         if self.isMaximized():
@@ -2144,6 +2214,18 @@ class MainWindow(QWidget):
             value = resolve_vars(str(auth.get("value") or ""), env)
             if (auth.get("add_to") or "header") == "header":
                 out.append((name, value))
+        elif kind == "awsv4":
+            try:
+                from .awsv4_auth import sign as aws_sign
+
+                target = resolve_vars(str(req.get("url") or ""), env)
+                extra, aws_err = aws_sign(
+                    "GET", target, out, b"",
+                    (req.get("auth") or {}), env)
+                if not aws_err:
+                    out.extend(extra)
+            except Exception:  # noqa: BLE001
+                pass
         if "user-agent" not in seen:
             out.append(("User-Agent", self.store.settings.get("user_agent") or "Ocelot/1.0"))
         return out
@@ -2841,6 +2923,15 @@ class MainWindow(QWidget):
             self.env_pill.update()
             self.toast.show_message("环境变量已更新", "success")
 
+    def show_var_inspector(self) -> None:
+        from .var_inspector import VarInspectorDialog
+
+        if getattr(self, "_var_inspector", None) is None:
+            self._var_inspector = VarInspectorDialog(self.store, self)
+        self._var_inspector.show()
+        self._var_inspector.raise_()
+        self._var_inspector.activateWindow()
+
     def import_curl(self) -> None:
         dlg = ImportCurlDialog(self)
         if dlg.exec() and dlg.request is not None:
@@ -3006,6 +3097,9 @@ class MainWindow(QWidget):
             self.toast.show_message("已切换环境", "success")
             return
         key = payload
+        if key == "var_inspector":
+            self.show_var_inspector()
+            return
         if key == "new_request":
             self.new_request()
         elif key == "new_ws":

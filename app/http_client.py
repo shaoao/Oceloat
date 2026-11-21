@@ -10,7 +10,10 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QByteArray, QElapsedTimer, QObject, QTimer, QUrl, QUrlQuery, pyqtSignal
+from PyQt6.QtCore import (
+    QByteArray, QElapsedTimer, QEventLoop, QObject, QThread, QTimer, QUrl,
+    QUrlQuery, pyqtSignal,
+)
 from PyQt6.QtNetwork import (
     QHttpMultiPart,
     QHttpPart,
@@ -97,6 +100,7 @@ class Response:
     header_size: int = 0        # 响应头字节数（含状态行与结尾空行）
     request_size: int = 0       # 请求体字节数
     request_header_size: int = 0  # 请求头字节数（含请求行）
+    request_method: str = ""      # 契约索引用：方法 + path 才是同一个接口
 
     def charset(self) -> str:
         return self.declared_charset() or "utf-8"
@@ -199,6 +203,25 @@ class NoCookieJar(QNetworkCookieJar):
         return False
 
 
+class _OAuthWorker(QObject):
+    """一次性 token 换取任务，跑在 QThread 里，结束发 done 信号。"""
+
+    done = pyqtSignal(object, str)
+
+    def __init__(self, auth: Dict[str, Any], env: Dict[str, str], timeout: int, store):
+        super().__init__()
+        self._auth, self._env, self._timeout, self._store = auth, env, timeout, store
+
+    def fetch(self) -> None:
+        from .oauth2_auth import fetch_token
+
+        try:
+            token, err = fetch_token(self._auth, self._env, self._timeout)
+            self.done.emit(token, err)
+        except Exception as exc:       # noqa: BLE001
+            self.done.emit({}, str(exc))
+
+
 class ApiClient(QObject):
     started = pyqtSignal()
     finished = pyqtSignal(object)  # Response
@@ -228,8 +251,37 @@ class ApiClient(QObject):
         self._store = store
 
     # ------------------------------------------------------------ 请求脚本
+    @staticmethod
+    def _fetch_oauth(auth: Dict[str, Any], env: Dict[str, str], timeout: int,
+                     store) -> Tuple[Dict[str, Any], str]:
+        """在后台线程换 token：OAuth 是同步 HTTP，不能卡住 UI 事件循环。"""
+        from . import oauth2_auth
+
+        box: Dict[str, Any] = {}
+        thread = QThread()
+        worker = _OAuthWorker(dict(auth), dict(env or {}), int(timeout or 10), store)
+        worker.moveToThread(thread)
+
+        def run() -> None:
+            worker.fetch()
+
+        def done(token: Dict[str, Any], err: str) -> None:
+            box["token"], box["error"] = token, err
+            loop.quit()
+
+        loop = QEventLoop()
+        thread.started.connect(run)
+        worker.done.connect(done)
+        thread.start()
+        loop.exec()
+        thread.quit()
+        thread.wait(2000)
+        worker.deleteLater()
+        thread.deleteLater()
+        return box.get("token") or {}, box.get("error") or "获取 Token 失败"
+
     def _effective_auth(self, req: Dict[str, Any], env_vars: Dict[str, str]) -> Dict[str, Any]:
-        """把 Inherit / JWT 归一化成标准的 bearer / basic / apikey 结构。
+        """把 Inherit / JWT / OAuth2 / AWS 归一化成统一结构。
 
         两条发送路径（直连与中继）共用，认证逻辑只写一份。
         """
@@ -257,6 +309,24 @@ class ApiClient(QObject):
                     auth.get("jwt_alg", "HS256"), env_vars,
                     error_hint=i18n.tr("Payload 不是合法 JSON"))
             return {"type": "bearer", "token": token} if token else {"type": "none"}
+
+        if kind == "oauth2":
+            from . import oauth2_auth
+
+            entry = oauth2_auth.cached_token(auth, self._store, env_vars)
+            if entry is None:
+                token, err = self._fetch_oauth(
+                    auth, env_vars, int((getattr(self, "_active_settings", {}) or {})
+                                        .get("timeout", 10) or 10), self._store)
+                if err or not token.get("access_token"):
+                    self.console.append({"level": "error", "phase": "auth",
+                                         "text": i18n.trf("OAuth 获取 Token 失败：{err}",
+                                                          err=err or "无 access_token")})
+                    return {"type": "none"}
+                oauth2_auth.save_token(auth, self._store, env_vars, token)
+                entry = token
+            return oauth2_auth.apply_token(auth, env_vars,
+                                           str(entry.get("access_token") or ""))
 
         return auth
 
@@ -451,6 +521,19 @@ class ApiClient(QObject):
         elif mode in ("form", "binary"):
             raise ValueError("在线节点不支持文件上传 / multipart，请切回本地直连或自建代理")
 
+        # AWS SigV4：按最终 method / url / headers / body 每次重新签名
+        if (auth.get("type") or "") == "awsv4":
+            from .awsv4_auth import sign as aws_sign
+
+            pairs = [(str(h.get("name") or ""), str(h.get("value") or ""))
+                     for h in headers]
+            extra, err = aws_sign(
+                (req.get("method") or "GET").upper(), url.toString(), pairs,
+                json_raw.encode("utf-8") if json_raw else b"", auth, env_vars)
+            if err:
+                raise ValueError(err)
+            headers.extend({"name": k, "value": v} for k, v in extra)
+
         return {
             "node": settings["relay_node"].get("unid", ""),
             "ip_version": 6 if settings["relay_node"].get("v6") else 4,
@@ -467,6 +550,7 @@ class ApiClient(QObject):
              env_vars: Optional[Dict[str, str]] = None) -> None:
         settings = settings or {}
         env_vars = env_vars or {}
+        self._active_settings = settings
         self.abort()
         self._timed_out = False
         self._cancelled = False
@@ -662,6 +746,20 @@ class ApiClient(QObject):
 
         self._configure_proxy(settings, url.host())
         method = (req.get("method") or "GET").upper()
+        if (auth.get("type") or "") == "awsv4":
+            from .awsv4_auth import sign as aws_sign
+
+            pairs = [(bytes(n).decode("utf-8", "replace"),
+                      bytes(nreq.rawHeader(n)).decode("utf-8", "replace"))
+                     for n in nreq.rawHeaderList()]
+            extra, err = aws_sign(
+                method, url.toString(), pairs, bytes(payload) if multipart is None else b"",
+                auth, env_vars)
+            if err:
+                self.finished.emit(Response(error=err))
+                return
+            for key, value in extra:
+                nreq.setRawHeader(key.encode("utf-8"), value.encode("utf-8"))
         # 请求体积：用真正发出去的 QNetworkRequest 原始头 + 请求行来算，
         # 不再拿界面上的字符串猜（那样漏掉默认注入的 UA / Accept / Cookie）。
         req_header_bytes = len(method.encode("utf-8")) + 1 + len(
@@ -797,6 +895,7 @@ class ApiClient(QObject):
             error=error, cookies=cookies, timing=timing, header_size=header_size,
             request_size=getattr(self, "_request_size", 0),
             request_header_size=getattr(self, "_request_header_size", 0),
+            request_method=str((self._active_req or {}).get("method") or "").upper(),
         )
         # 后置脚本可改写响应（status / body / headers）或写环境变量
         try:

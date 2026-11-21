@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.83", VERSION == "1.0.83", VERSION)
-check("更新内容是 1.0.83", CHANGELOG[0]["version"] == "1.0.83")
+check("版本 1.0.84", VERSION == "1.0.84", VERSION)
+check("更新内容是 1.0.84", CHANGELOG[0]["version"] == "1.0.84")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -400,8 +400,8 @@ check("更新内容写了 README 装修", any("README 重新排版" in x for x i
 print("\n[1.0.69 新增]")
 check("卡片铺满窗口，不留投影留白", "卡片铺满整个窗口" in _mw_src
       and "CARD_RADIUS = 12" in _mw_src)
-check("圆角改由窗口遮罩裁", "self.setMask(_rounded_region" in _mw_src
-      and "self.root.clearMask()" in _mw_src)
+check("圆角改由内容根遮罩裁", "self.root.setMask(_rounded_region" in _mw_src
+      and "self.clearMask()" in _mw_src)
 check("圆角逐行解析算弧", "_rounded_region" in _mw_src
       and "math.sqrt" in _mw_src and "toFillPolygon" not in _mw_src)
 check("最大化时清掉窗口遮罩", "if not self.mask().isEmpty():" in _mw_src
@@ -776,6 +776,31 @@ check("请求真正按语言取源码", "script_parts(scripts" in _hc_83)
 check("导入导出保留 Python 脚本", 'extra["scripts"]' in _tr_83)
 check("更新内容写了 Python 脚本", any("JavaScript / Python" in x for x in ALL_ITEMS)
       and any("双保险" in x for x in ALL_ITEMS))
+
+print("\n[1.0.84 新增]")
+_i18_84 = (ROOT / "app" / "i18n.py").read_text(encoding="utf-8")
+_kv_84 = (ROOT / "app" / "kv_editor.py").read_text(encoding="utf-8")
+_mw_84 = (ROOT / "app" / "main_window.py").read_text(encoding="utf-8")
+_rp_84 = (ROOT / "app" / "response_panel.py").read_text(encoding="utf-8")
+_mp_84 = (ROOT / "app" / "mock_panel.py").read_text(encoding="utf-8")
+check("新功能模块都在", all((ROOT / "app" / name).exists() for name in (
+      "oauth2_auth.py", "awsv4_auth.py", "contract.py", "contract_view.py",
+      "var_inspector.py")))
+check("英文词条没有重复块",
+      _i18_84.count("v1.0.84：认证 / 契约 / 场景 / 变量侦探") == 1)
+check("KV 长文本按列省略", "class ElideLineEdit" in _kv_84 and "elidedText" in _kv_84)
+check("窗口边缘统一接管", "installEventFilter(self)" in _mw_84
+      and "startSystemResize" in _mw_84)
+check("契约页接进响应面板", '"contract"' in _rp_84 and "ContractView" in _rp_84)
+check("Mock 场景可切换", "class ScenarioDialog" in _mp_84
+      and "apply_scenario" in _mp_84)
+check("新功能英文齐全", all(k in _i18_84 for k in (
+      '"变量侦探"', '"检查漂移"', '"获取 Token"', '"场景：正常"',
+      '"  [{n} 处引用]"')))
+check("更新内容写了这轮改动",
+      any("OAuth 2.0" in x for x in ALL_ITEMS)
+      and any("右下角" in x for x in ALL_ITEMS)
+      and any("变量侦探" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

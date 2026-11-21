@@ -26,9 +26,30 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.83"
+VERSION = "1.0.84"
 
 CHANGELOG = [
+    {
+        "version": "1.0.84",
+        "date": "2026-11-21",
+        "items": [
+            "修复参数 / 请求头 / Cookie 表格里的长 VALUE 把旁边内容撑出去："
+            "未聚焦时按当前列宽就地省略，点进去编辑仍是完整原文，数据一个字都不丢",
+            "修复无边框窗口右下角同时调整宽高时拖不动、偶尔没反应的问题："
+            "边缘命中改由应用级事件过滤器统一接管，四角热点扩大，圆角遮罩移到内容根控件，拖动更跟手",
+            "认证新增 OAuth 2.0 与 AWS SigV4：OAuth 支持授权码 + PKCE / 客户端凭证 / 密码 / 手动 Token，"
+            "Token 自动缓存并在发送前换取与刷新；AWS 按最终 method / URL / 请求头 / 请求体每次重签，支持 STS 临时凭证",
+            "HTTP 与 WebSocket / Socket.IO / SSE 的握手都能用新认证，Postman 导入导出会保留 OAuth / AWS 配置；"
+            "新模块只用标准库，不增加体积",
+            "响应面板新增「契约」页：把当前 JSON 响应结构存成基准 Schema，之后每次响应都能检查字段消失 / 新增 / 类型变化；"
+            "观测区明确区分实测的 TTFB、下载耗时与估算的 DNS / TCP / TLS",
+            "Mock 支持深度场景切换：正常 / 鉴权失败 / 慢接口 / 服务不可用 / 空数据一键切换，"
+            "响应头带 X-Ocelot-Scenario，条件规则仍然优先于场景",
+            "新增「变量侦探」：一个变量当前是什么值、来自全局还是环境、被哪些请求引用，一窗看清；"
+            "命令面板可直接打开",
+            "补齐以上功能的英文词条并清理重复文案，英文界面不再夹带中文",
+        ],
+    },
     {
         "version": "1.0.83",
         "date": "2026-11-21",
@@ -1536,8 +1557,22 @@ def new_request(name: str = "Untitled Request", method: str = "GET", url: str = 
         "headers": [],
         "cookies": [],
         "body": {"mode": "none", "raw": "", "form": [], "file": ""},
-        "auth": {"type": "none", "token": "", "username": "", "password": "",
-                 "key": "", "value": "", "add_to": "header"},
+        "auth": {
+            "type": "none", "token": "", "username": "", "password": "",
+            "key": "", "value": "", "add_to": "header",
+            "jwt_mode": "auto", "jwt_alg": "HS256", "jwt_payload": "",
+            "jwt_secret": "", "jwt_token": "",
+            "oauth_grant": "client_credentials", "oauth_auth_url": "",
+            "oauth_token_url": "", "oauth_client_id": "", "oauth_client_secret": "",
+            "oauth_scope": "", "oauth_username": "", "oauth_password": "",
+            "oauth_code": "", "oauth_redirect_uri": "", "oauth_code_verifier": "",
+            "oauth_access_token": "", "oauth_refresh_token": "",
+            "oauth_token_placement": "header", "oauth_token_key": "access_token",
+            "oauth_use_refresh": True,
+            "aws_access_key_id": "", "aws_secret_access_key": "",
+            "aws_session_token": "", "aws_region": "us-east-1",
+            "aws_service": "execute-api", "aws_sign_body": True,
+        },
         "scripts": {"pre": "", "post": ""},
         "note": "",
     }
@@ -1602,6 +1637,9 @@ def _sample_state() -> Dict[str, Any]:
         # 全局变量：不跟环境走，任何环境、任何请求里都能用 {{名字}} 引用。
         # 优先级最低：环境变量里同名会覆盖它。
         "global_vars": [],
+        # OAuth token 缓存：按 token_url/client_id/scope/grant 隔离，不写进请求，
+        # 避免导出 / 分享 / 云同步把凭据带出去。
+        "oauth_tokens": {},
         "settings": {
             "timeout": 30,
             "follow_redirects": True,

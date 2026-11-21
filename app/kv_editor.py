@@ -30,7 +30,38 @@ from PyQt6.QtWidgets import (
 from . import i18n, icons
 from .anim import running as _anim_running, stop as _anim_stop
 from .theme import C, S, font, method_color, mono, theme
-from .widgets import Label, Menu
+from .widgets import ElideLabel, Label, Menu
+
+
+class ElideLineEdit(QLineEdit):
+    """单行输入框：未聚焦时把过长内容就地省略，聚焦编辑时回到原生滚动显示。
+
+    KV 行的 VALUE 经常是很长的 URL / 编码串。原生 QLineEdit 会在窄列里横向
+    滚动，把右侧列的文字盖住，看上去就是「把旁边撑出去」。这里在不改数据的
+    前提下，只在绘制时省略；列宽仍由 QHBoxLayout 的 stretch 决定，互不挤压。
+    """
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        # 不参与最小宽度竞争：stretch 分配多少就画多少，超出部分省略。
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(0)
+
+    def paintEvent(self, _e):  # noqa: N802
+        if self.hasFocus() or not self.text():
+            super().paintEvent(_e)
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        p.setFont(self.font())
+        pal = self.palette()
+        p.setPen(pal.color(self.foregroundRole()))
+        fm = QFontMetricsF(self.font())
+        shown = fm.elidedText(self.text(), Qt.TextElideMode.ElideRight,
+                              max(self.width() - 4, 10))
+        y = (self.height() + fm.ascent() - fm.descent()) / 2
+        p.drawText(QPointF(2, y), shown)
+        p.end()
 
 COMMON_HEADERS = [
     "Accept", "Accept-Charset", "Accept-Encoding", "Accept-Language", "Authorization",
@@ -437,6 +468,8 @@ class FileCell(QWidget):
             name = os.path.basename(self._path) or self._path
             p.setFont(font(11.5))
             p.setPen(C(t.text))
+            fm = QFontMetricsF(p.font())
+            name = fm.elidedText(name, Qt.TextElideMode.ElideRight, max(self.width() - 32, 10))
             p.drawText(QRectF(24, 0, self.width() - 32, self.height()),
                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), name)
         else:
@@ -477,17 +510,17 @@ class KVRow(QWidget):
         self.with_desc = with_desc
         self.check = MiniCheck(enabled)
 
-        self.key_edit = QLineEdit(key)
+        self.key_edit = ElideLineEdit(key)
         self.key_edit.setObjectName("Bare")
         i18n.placeholder(self.key_edit, key_ph)
         self.key_edit.setFont(mono(11.8))
-        self.val_edit = QLineEdit(value)
+        self.val_edit = ElideLineEdit(value)
         self.val_edit.setObjectName("Bare")
         i18n.placeholder(self.val_edit, value_ph)
         self.val_edit.setFont(mono(11.8))
         self.desc_edit = None
         if with_desc:
-            self.desc_edit = QLineEdit(desc)
+            self.desc_edit = ElideLineEdit(desc)
             self.desc_edit.setObjectName("Bare")
             i18n.placeholder(self.desc_edit, "描述（可选，不发送）")
             self.desc_edit.setFont(font(11))
@@ -733,8 +766,10 @@ class KVEditor(QWidget):
         check_gap = QWidget()
         check_gap.setFixedWidth(15)
         hl.addWidget(check_gap)
-        k = Label("KEY", 9, theme().text_faint, weight=QFont.Weight.DemiBold, spacing=0.9)
-        v = Label("VALUE", 9, theme().text_faint, weight=QFont.Weight.DemiBold, spacing=0.9)
+        k = ElideLabel("KEY", 9, theme().text_faint,
+                       weight=QFont.Weight.DemiBold, mode=Qt.TextElideMode.ElideRight)
+        v = ElideLabel("VALUE", 9, theme().text_faint,
+                       weight=QFont.Weight.DemiBold, mode=Qt.TextElideMode.ElideRight)
         hl.addWidget(k, 3)
         if with_types:
             ty = Label("类型", 9, theme().text_faint, weight=QFont.Weight.DemiBold, spacing=0.9)
@@ -744,8 +779,8 @@ class KVEditor(QWidget):
             hl.addWidget(ty)
         hl.addWidget(v, 4)
         if self._with_desc:
-            dsc = Label("描述（可选）", 9, theme().text_faint,
-                        weight=QFont.Weight.DemiBold, spacing=0.9)
+            dsc = ElideLabel("描述（可选）", 9, theme().text_faint,
+                             weight=QFont.Weight.DemiBold, mode=Qt.TextElideMode.ElideRight)
             hl.addWidget(dsc, 3)
         tail = QWidget()
         tail.setFixedWidth(20)
