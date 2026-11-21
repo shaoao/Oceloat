@@ -1119,6 +1119,11 @@ class ResponsePanel(QWidget):
         if has and base + need_size > avail:
             self.size_label.hide()
             self.dot1.hide()
+        # 再窄就先让出查找按钮的位置（⌘F 仍然可用），保证状态码与耗时完整
+        if has and base > avail:
+            self.find_btn.hide()
+        elif has:
+            self.find_btn.show()
         self.dot3.setVisible(self.type_label.isVisible() and bool(self.node_label.text()))
 
     def resizeEvent(self, e):  # noqa: N802
