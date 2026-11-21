@@ -10,9 +10,10 @@ import json
 from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QGuiApplication, QPainter
+from PyQt6.QtGui import QFontMetrics, QGuiApplication, QPainter
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QSplitter, QSplitterHandle, QTextBrowser, QVBoxLayout, QWidget,
+    QHBoxLayout, QSizePolicy, QSplitter, QSplitterHandle, QTextBrowser,
+    QVBoxLayout, QWidget,
 )
 
 from . import contract, i18n
@@ -52,7 +53,8 @@ class _Metric(QWidget):
         self.caption = Label(caption, 10.2, theme().text_faint)
         self.value = ElideLabel(
             value, 11.8, theme().accent if accent else theme().text,
-            weight=font(11.8).weight(), mono_font=True)
+            weight=font(11.8).weight(), mono_font=True,
+            mode=Qt.TextElideMode.ElideRight)
         self.value.setObjectName("metric_value")
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -72,7 +74,7 @@ class _Bar(QWidget):
         self._measured = measured
         self._ratio = 0.0
         self.setFixedHeight(5)
-        self.setMinimumWidth(30)
+        self.setMinimumWidth(24)
 
     def set_ratio(self, ratio: float) -> None:
         self._ratio = max(0.0, min(1.0, float(ratio or 0)))
@@ -91,18 +93,37 @@ class _Bar(QWidget):
         p.drawRoundedRect(0, 0, width, self.height(), 2, 2)
 
 
+def _obs_widths() -> tuple[int, int]:
+    """按当前字号算「Download」标签和「0000 ms」数值要多宽。
+
+    界面缩放（设置里的字号倍率）会整体放大字体，写死 52 / 70 这种像素值在
+    放大后必然把数字裁掉半个字，所以宽度必须跟着字体度量走。
+    """
+    cap = QFontMetrics(mono(10.6)).horizontalAdvance("Download") + 2
+    val = QFontMetrics(mono(10.8)).horizontalAdvance("0000 ms") + 4
+    return cap, val
+
+
 class _TimingRow(QWidget):
     def __init__(self, label: str, measured: bool, parent=None):
         super().__init__(parent)
+        cap_w, val_w = _obs_widths()
         self.bar = _Bar(measured)
         self.value = Label("—", 10.8, theme().accent if measured else theme().text_dim,
                            mono_font=True)
-        self.value.setFixedWidth(62)
+        self.value.setFixedWidth(val_w)
         self.value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        # 标签用 ElideLabel：观测栏被拖窄时显示「Downl…」而不是把半个字切掉
+        self.caption = ElideLabel(label, 10.6, theme().text_faint, mono_font=True,
+                                  mode=Qt.TextElideMode.ElideRight)
+        self.caption.setFixedWidth(cap_w)
+        # ElideLabel 自带 Ignored 策略，在布局里会被压成 0 宽（条形直接压到文字上）；
+        # 这里要固定宽度，必须把策略改回 Fixed。
+        self.caption.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(7)
-        lay.addWidget(Label(label, 10.6, theme().text_faint, mono_font=True), 0)
+        lay.addWidget(self.caption, 0)
         lay.addWidget(self.bar, 1)
         lay.addWidget(self.value, 0)
 
@@ -121,6 +142,9 @@ class ContractView(QWidget):
         self._meta: Dict[str, Any] = {}
         self._issues: List[str] = []
         self._restoring = False
+        # 观测栏的最小宽度：再窄「状态 / 耗时 / Content-Type」的数值就被裁掉
+        # 半个字了。宽度按字体度量算，缩放调大后自动跟着变宽。
+        self._min_obs = self._compute_min_obs()
 
         # ---- 顶部动作行：状态可省略，按钮等高等距排右侧
         self.status = ElideLabel("", 11.2, theme().text_dim, mode=Qt.TextElideMode.ElideRight)
@@ -237,7 +261,7 @@ class ContractView(QWidget):
         right = right
         right.setMinimumWidth(1)
         right_scroll = SmoothScrollArea()
-        right_scroll.setMinimumWidth(150)
+        right_scroll.setMinimumWidth(self._min_obs)
         right_scroll.setWidget(right)
         self.obs_scroll = right_scroll
 
@@ -258,6 +282,12 @@ class ContractView(QWidget):
         lay.setSpacing(0)
         lay.addWidget(self.split, 1)
 
+    def _compute_min_obs(self) -> int:
+        cap_w, val_w = _obs_widths()
+        cap_metric = QFontMetrics(font(10.2)).horizontalAdvance("Content-Type")
+        need = max(cap_metric + 46, cap_w + val_w + 24 + 14)
+        return max(196, need + 18)
+
     @staticmethod
     def _metric(caption: str, value: str = "—", accent: bool = False) -> _Metric:
         return _Metric(caption, value, accent)
@@ -275,7 +305,9 @@ class ContractView(QWidget):
         """
         if self._restoring:
             return
-        narrow = self.width() < 470
+        # 横向至少要给左栏（Schema）240px + 观测栏最小宽度，否则改上下排。
+        # 阈值留 10px 余量，避免在临界宽度上来回切换方向。
+        narrow = self.width() < 240 + self._min_obs + 10
         want = Qt.Orientation.Vertical if narrow else Qt.Orientation.Horizontal
         if self.split.orientation() != want:
             self.split.setOrientation(want)
@@ -284,21 +316,36 @@ class ContractView(QWidget):
                 top = int(height * 0.64)
                 self.split.setSizes([top, max(90, height - top)])
             else:
-                width = max(400, self.split.width() or 600)
-                left_w = self._saved_ratio(width)
-                self.split.setSizes([left_w, width - left_w])
+                self.split.setSizes(self._hz_sizes(max(400, self.split.width() or 600)))
+        elif want == Qt.Orientation.Horizontal:
+            # 已经横向但比例被拖过头（观测栏被压成一窄条、数值全被裁掉）：
+            # 重新按最小宽度夹一遍，观测栏永远留得下「说明 + 数值」。
+            sizes = self.split.sizes()
+            total = sum(sizes)
+            if total and sizes[1] < self._min_obs:
+                self.split.setSizes(self._hz_sizes(total))
         sizes = self.split.sizes()
         col_w = self.width() if want == Qt.Orientation.Vertical else (sizes[0] if sizes else 0)
-        # 三档：完整文案 / 短文案 / 只留图标
+        # 三档：完整文案 / 短文案 / 只留图标。短文案档必须把图标摘掉，
+        # 否则「图标 + 两个字」塞不进按钮，图标会压在文字上。
         level = 0 if col_w >= 500 else (1 if col_w >= 330 else 2)
-        for btn, labels in (
-                (self.save_btn, ("保存为契约", "保存", "")),
-                (self.check_btn, ("检查漂移", "检查", "")),
-                (self.clear_btn, ("删除契约", "删除", "")),
-                (self.copy_btn, ("复制 Schema", "复制", ""))):
+        for btn, icon_name, labels in (
+                (self.save_btn, "plus", ("保存为契约", "保存", "")),
+                (self.check_btn, "refresh", ("检查漂移", "检查", "")),
+                (self.clear_btn, "trash", ("删除契约", "删除", "")),
+                (self.copy_btn, "copy", ("复制 Schema", "复制", ""))):
             label = labels[level]
             if btn.text() != label:
                 btn.setText(label)
+            want_icon = None if level == 1 else icon_name
+            if getattr(btn, "_icon_name", None) != want_icon:
+                btn.set_icon(want_icon)
+
+    def _hz_sizes(self, width: int) -> List[int]:
+        """横向分栏尺寸：左栏吃掉剩余宽度，观测栏至少留 _MIN_OBS。"""
+        width = max(width, self._min_obs + 240)
+        left_w = min(max(240, self._saved_ratio(width)), width - self._min_obs)
+        return [left_w, width - left_w]
 
     def _saved_ratio(self, width: int) -> int:
         saved = self._settings().get("contract_split")
@@ -323,11 +370,12 @@ class ContractView(QWidget):
         self._restoring = True
         if isinstance(saved, list) and len(saved) == 2 \
                 and all(isinstance(x, int) and x > 0 for x in saved):
-            self.split.setSizes(saved)
+            width = sum(saved)
+            left_w = min(max(240, saved[0]), width - self._min_obs)
+            self.split.setSizes([left_w, width - left_w])
         else:
             # 左栏（契约 Schema）优先：代码比观测更需要宽度
-            width = max(400, self.split.width())
-            self.split.setSizes([int(width * 0.58), width - int(width * 0.58)])
+            self.split.setSizes(self._hz_sizes(max(400, self.split.width())))
         self._restoring = False
         self._sync_layout()
 

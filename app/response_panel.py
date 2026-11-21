@@ -109,6 +109,7 @@ class HeaderRows(QTextBrowser):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rows: List[Tuple[str, str, bool, str]] = []
+        self._kw = 198
         self.setObjectName("Bare")
         self.setOpenExternalLinks(False)
         self.setFrameShape(QTextBrowser.Shape.NoFrame)
@@ -116,6 +117,24 @@ class HeaderRows(QTextBrowser):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.document().setDocumentMargin(12)
         self._build()
+
+    # 键列宽度：常规是固定的 198px（就是老版 QLabel 排版的宽度，键值紧挨着，
+    # 不会像按百分比分栏那样把值推到面板中间）。只有面板被拖窄、198px 会
+    # 挤掉值的空间时才降一档 —— 也就是「拥挤了才适配」。
+    def _key_width(self) -> int:
+        w = self.viewport().width() or self.width()
+        if w >= 520:
+            return 198
+        if w >= 400:
+            return 148
+        return 104
+
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        kw = self._key_width()
+        if kw != self._kw:
+            self._kw = kw
+            self._build()
 
     def clear(self) -> None:
         self._rows = []
@@ -137,13 +156,14 @@ class HeaderRows(QTextBrowser):
             self.setHtml("")
             return
         parts = ['<table width="100%" cellspacing="0" cellpadding="0">']
+        kw = self._kw
         for key, value, highlight, meta in self._rows:
             vcolor = t.success if highlight else t.text
             parts.append(
-                f'<tr><td width="32%" valign="top" style="{base}color:{t.text_dim};'
-                f'padding:5px 10px 5px 0;word-wrap:break-word">{html.escape(key)}</td>'
-                f'<td valign="top" style="{base}color:{vcolor};padding:5px 0">'
-                f'{html.escape(value)}</td></tr>')
+                f'<tr><td width="{kw}" valign="top" style="{base}color:{t.text_dim};'
+                f'padding:4px 12px 4px 0;word-wrap:break-word">{html.escape(key)}</td>'
+                f'<td valign="top" style="{base}color:{vcolor};padding:4px 0;'
+                f'word-wrap:break-word">{html.escape(value)}</td></tr>')
             if meta:
                 parts.append(
                     f'<tr><td></td><td style="{base}font-size:10pt;color:{t.text_faint};'
@@ -1321,13 +1341,9 @@ class ResponsePanel(QWidget):
             return
         self.center.setCurrentWidget(self.content)
         self.tabs_row.show()
-        # content 里可能挂着原生视频视图（QVideoWidget）；给它套
-        # QGraphicsOpacityEffect 会在 macOS 上触发 Qt 渲染层 SIGBUS。
-        # 图片/文本用淡入，音视频响应直接跳过特效保证稳定。
-        if resp.kind not in ("audio", "video"):
-            from .widgets import fade_in as _fade
-
-            _fade(self.content, 170)
+        # 这里不再做淡入：给 content 套 QGraphicsOpacityEffect 会让整块响应区
+        # 先变透明再浮回来（切标签时尤其明显），大文档还要走一遍离屏合成，很卡。
+        # 原生音视频视图更不能套特效（macOS 上会触发渲染层 SIGBUS）。
         self._set_actions_enabled(True)
         self._set_head_visible(True)
         self.meta.show()

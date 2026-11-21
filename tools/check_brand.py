@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.88", VERSION == "1.0.88", VERSION)
-check("更新内容是 1.0.88", CHANGELOG[0]["version"] == "1.0.88")
+check("版本 1.0.89", VERSION == "1.0.89", VERSION)
+check("更新内容是 1.0.89", CHANGELOG[0]["version"] == "1.0.89")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -882,12 +882,12 @@ check("契约页窄了压短按钮文案", "def _sync_layout" in _cv_88 and "保
 check("响应头任意位置断行", "class HeaderRows(QTextBrowser)" in _rp_88
       and "ScrollBarAlwaysOff" in _rp_88)
 check("响应头改用文档表格", "class HeaderRows(QTextBrowser)" in _rp_88)
-check("滚动条细且圆润",
-      "border-radius: 3px" in _th_88 and "width: 10px" in _th_88)
+check("1.0.88 记录了滚动条改动",
+      any("滚动条" in x for e in CHANGELOG if e["version"] == "1.0.88" for x in e["items"]))
 check("One Dark Pro 精确色值",
       _ce_88.count("#C678DD") >= 2 and "#98C379" in _ce_88
       and "#D19A66" in _ce_88 and "#5C6370" in _ce_88 and "#E06C75" in _ce_88)
-check("代码底色走主题", 'code_bg="#282C34"' in _th_88 and "def _apply_colors" in _ce_88)
+check("代码底色走主题", "code_bg=base" in _th_88 and "def _apply_colors" in _ce_88)
 check("徽标用主题色", "p.setPen(C(t.accent))" in _wg_88)
 check("AI 认识契约页", '"contract": "关注点：接口契约与字段漂移' in _ai_88
       and 'ctx["contract"] = self.contract.ai_snapshot()' in _rp_88)
@@ -897,6 +897,24 @@ check("更新内容写了这轮改动",
       any("字段漂移" in x for x in ALL_ITEMS)
       and any("One Dark Pro" in x for x in ALL_ITEMS)
       and any("滚动条" in x for x in ALL_ITEMS))
+
+print("\n[1.0.89 新增]")
+_cv_89 = (ROOT / "app" / "contract_view.py").read_text(encoding="utf-8")
+_wg_89 = (ROOT / "app" / "widgets.py").read_text(encoding="utf-8")
+_th_89 = (ROOT / "app" / "theme.py").read_text(encoding="utf-8")
+_rp_89 = (ROOT / "app" / "response_panel.py").read_text(encoding="utf-8")
+check("滚动条再细一档", "width: 8px" in _th_89 and "border-radius: 2px" in _th_89)
+check("代码区底色就是页面底色", "code_bg=base" in _th_89
+      and 'code_bg="#282C34"' not in _th_89)
+check("切页不再淡入", "animate: bool = False" in _wg_89)
+check("响应内容不再整块淡入", "_fade(self.content" not in _rp_89)
+check("响应头键列恢复固定宽度", "def _key_width" in _rp_89 and "width=\"{kw}\"" in _rp_89)
+check("契约页观测栏按字体算宽度", "def _compute_min_obs" in _cv_89
+      and "def _obs_widths" in _cv_89)
+check("更新内容写了这轮改动",
+      any("遮罩" in x for x in ALL_ITEMS)
+      and any("闪一下透明" in x for x in ALL_ITEMS)
+      and any("198px" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

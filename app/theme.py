@@ -126,9 +126,9 @@ def _dark_scheme(key: str, label: str, base: str) -> Theme:
         danger="#E48178",
         info="#89AECE",
         selection=(255, 255, 255, 48),
-        # 代码区统一 One Dark Pro 底色：所有 JSON / XML / 脚本 / 响应正文都在
-        # 这一块 #282C34 上按 One Dark Pro 的 token 上色，和常见编辑器一致。
-        code_bg="#282C34",
+        # 代码区不另铺底色：底色就是页面默认底色，只保留 One Dark Pro 的
+        # token 颜色。以前铺一块 #282C34，在深色页面上像盖了张半透明遮罩。
+        code_bg=base,
         detail_bg=_shift(base, -10),
         scroll=(255, 255, 255, 28),
         scroll_hover=(255, 255, 255, 60),
@@ -163,8 +163,8 @@ def _light_scheme(key: str, label: str, base: str) -> Theme:
         danger="#C8433A",
         info="#2C6BAD",
         selection=(0, 0, 0, 38),
-        # 浅色下用 One Light 的底色与正文色，和深色主题的 One Dark Pro 一一对应
-        code_bg="#FAFAFA",
+        # 浅色下同样不另铺底色，只保留 One Light 的 token 颜色
+        code_bg=base,
         detail_bg=_shift(base, -4),
         scroll=(0, 0, 0, 28),
         scroll_hover=(0, 0, 0, 64),
@@ -437,20 +437,20 @@ _QSS = Template(
     /* 滚动条：细条 + 全圆头，不再是一根长方形色块。轨道留 3px 内缩，
        手柄因此只有 4px 宽，圆角等于半宽，放大到任何倍率都是胶囊形。 */
     QScrollBar:vertical {
-        background: transparent; width: 10px; margin: 0px; border: none;
+        background: transparent; width: 8px; margin: 0px; border: none;
     }
     QScrollBar::handle:vertical {
-        background: $scroll; border-radius: 3px; min-height: 40px;
-        margin: 4px 2px 4px 2px;
+        background: $scroll; border-radius: 2px; min-height: 36px;
+        margin: 2px 2px 2px 2px;
     }
     QScrollBar::handle:vertical:hover { background: $scroll_hover; }
     QScrollBar::handle:vertical:pressed { background: $scroll_hover; }
     QScrollBar:horizontal {
-        background: transparent; height: 10px; margin: 0px; border: none;
+        background: transparent; height: 8px; margin: 0px; border: none;
     }
     QScrollBar::handle:horizontal {
-        background: $scroll; border-radius: 3px; min-width: 40px;
-        margin: 2px 4px 2px 4px;
+        background: $scroll; border-radius: 2px; min-width: 36px;
+        margin: 2px 2px 2px 2px;
     }
     QScrollBar::handle:horizontal:hover { background: $scroll_hover; }
     QScrollBar::handle:horizontal:pressed { background: $scroll_hover; }

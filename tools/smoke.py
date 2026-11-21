@@ -4723,13 +4723,86 @@ def main() -> int:
         check("One Dark Pro 数字橙", _TOKENS_DARK["number"] == "#D19A66")
         check("One Dark Pro 关键字紫", _TOKENS_DARK["keyword"] == "#C678DD")
         check("One Dark Pro 注释灰", _TOKENS_DARK["comment"] == "#5C6370")
-        check("代码底色 One Dark Pro", _theme().code_bg == "#282C34"
+        check("代码区用页面默认底色", _theme().code_bg == _theme().panel
               and _theme().code_text == "#ABB2BF")
+        return 0
+
+
+    def step45() -> int:
+        # v1.0.89：滚动条更细 / 代码区默认底色 / 切页不淡入 / 响应头紧凑键列 /
+        # 契约页观测栏按字体算宽度
+        from app.contract_view import ContractView
+        from app.response_panel import HeaderRows
+        from app.theme import theme as _theme
+        from app.widgets import FadeStack, Label
+
+        root = Path(__file__).resolve().parents[1]
+
+        # --- 切页不再套透明度特效（「卡透明一下」的根因）
+        fs = FadeStack()
+        a, b = Label("a"), Label("b")
+        fs.add("a", a)
+        fs.add("b", b)
+        fs.resize(400, 300)
+        fs.show()
+        fs.set_current("a")
+        app.processEvents()
+        fs.set_current("b")
+        app.processEvents()
+        check("切页不淡入（无透明度特效）", b.graphicsEffect() is None)
+        check("切页立即显示新页", b.isVisible() and not a.isVisible())
+        fs.deleteLater()
+        rp_src = (root / "app" / "response_panel.py").read_text(encoding="utf-8")
+        check("响应内容不再整块淡入", "_fade(self.content" not in rp_src)
+
+        # --- 滚动条更细：8px 轨道、4px 手柄、2px 圆角
+        th_src = (root / "app" / "theme.py").read_text(encoding="utf-8")
+        check("滚动条轨道 8px", "width: 8px" in th_src and "height: 8px" in th_src)
+        check("滚动条手柄 4px 圆头",
+              "border-radius: 2px" in th_src and "margin: 2px 2px 2px 2px" in th_src)
+
+        # --- 代码区底色＝页面底色
+        check("代码区不再铺独立底色", _theme().code_bg == _theme().panel)
+
+        # --- 响应头 / Cookies 恢复紧凑键列
+        hr = HeaderRows()
+        hr.resize(1000, 300)
+        hr.show()
+        hr.add("content-type", "application/json; charset=utf-8", True)
+        app.processEvents()
+        check("响应头键列固定 198px", hr._kw == 198)
+        hr.resize(430, 300)
+        app.processEvents()
+        check("响应头窄了才收窄键列", hr._kw < 198)
+        check("响应头窄了也不横向溢出",
+              hr.document().size().width() <= hr.viewport().width() + 1)
+        hr.deleteLater()
+
+        # --- 契约页观测栏：数值宽度按字体度量，不被裁
+        cv = ContractView()
+        cv.set_store(store)
+        cv.resize(700, 520)
+        cv.show()
+        app.processEvents()
+        row = cv.rows["ttfb"]
+        need = row.value.fontMetrics().horizontalAdvance("355 ms")
+        check("观测数值宽度够放 355 ms", row.value.width() >= need)
+        check("观测标签不压条形",
+              row.caption.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Fixed)
+        check("观测栏有最小宽度", cv._min_obs >= 196)
+        cv.resize(430, 520)
+        app.processEvents()
+        cv.resize(430, 520)
+        app.processEvents()
+        check("契约页窄了改上下排",
+              cv.split.orientation() == Qt.Orientation.Vertical)
+        check("短文案档按钮隐藏图标", cv.save_btn._icon_name is None)
+        cv.deleteLater()
         return 0
 
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39, step40, step41, step42, step43, step44]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39, step40, step41, step42, step43, step44, step45]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

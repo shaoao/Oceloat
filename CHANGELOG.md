@@ -1,5 +1,19 @@
 # What's Changed
 
+## v1.0.89 — 2026-11-21
+
+**Changed**
+- Scrollbars are one step thinner: 8px track with a 4px rounded handle, so they read as a hairline against the edge instead of a bar.
+- Code areas no longer paint the One Dark Pro `#282C34` background. They use the page background and keep only the token colours, so the slab that looked like a translucent overlay is gone from the response body, contract Schema, code samples and script editors.
+- Response headers and Cookies are back to the original compact layout: a fixed 198px key column, the value right next to it and the extra flags underneath. The key column only shrinks when the panel is genuinely dragged narrow.
+
+**Fixed**
+- Switching response tabs or request tabs no longer fades in. The full-page opacity effect that made the panel flash transparent for a frame — and stuttered on large responses — is removed.
+- On the contract page the observability column computes its minimum width from the actual font metrics, so the status / latency / size / Content-Type values and the DNS…Download numbers are no longer clipped by half a glyph. Below that width the panes stack vertically, and the compact button tier drops the icon so it cannot overlap its label.
+
+**Tests**
+- Smoke test group 45 plus brand checks for the thinner scrollbars, the shared code background, the instant page switch, the fixed header key column and the measured observability column.
+
 ## v1.0.88 — 2026-11-21
 
 **Changed**

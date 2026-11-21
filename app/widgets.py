@@ -1304,8 +1304,13 @@ class FadeStack(QWidget):
     def current(self) -> Optional[str]:
         return self._current
 
-    def set_current(self, key: str, animate: bool = True) -> None:
-        """切换页面；同一控件被多个 key 复用时，切到别名页也只更新内部状态。"""
+    def set_current(self, key: str, animate: bool = False) -> None:
+        """切换页面。
+
+        animate 默认关：给整页套 QGraphicsOpacityEffect 从 0 淡入，切页那一瞬间
+        整块会「卡透明一下」，页面越复杂（大 JSON、代码高亮）越卡。切页要的是
+        立刻看到内容，淡入只在少量明确需要的地方单独调用。
+        """
         widget = self._pages.get(key)
         if widget is None:
             return
@@ -1318,7 +1323,7 @@ class FadeStack(QWidget):
                 old.hide()
             widget.show()
             if animate:
-                fade_in(widget, 150)
+                fade_in(widget, 120, start=0.75)
 
 
 # ---------------------------------------------------------------- 其它原子控件
