@@ -4462,9 +4462,64 @@ def main() -> int:
         page.deleteLater()
         return 0
 
+    def step41() -> int:
+        # v1.0.85：Digest / OAuth 增强 / AWS 推断预签 / 契约分栏 / 变量侦探 UI
+        from app import contract, digest_auth, i18n as _i18n, oauth2_auth
+        from app.awsv4_auth import infer_service_region, presign
+        from app.request_panel import AUTH_TYPES, AuthPage
+        from app.var_inspector import collect as var_collect
+
+        kinds = [k for k, _l in AUTH_TYPES]
+        check("认证支持 Digest", "digest" in kinds, str(kinds))
+        page = AuthPage(store)
+        page.load({"type": "digest", "digest_username": "u", "digest_password": "p",
+                   "digest_algorithm": "SHA-256", "digest_qop": "auth-int"})
+        d = page.dump()
+        check("Digest 字段能读回", d["type"] == "digest"
+              and d["digest_algorithm"] == "SHA-256" and d["digest_qop"] == "auth-int",
+              str(d.get("digest_algorithm")))
+        challenge = digest_auth.parse_challenge(
+            'Digest realm="api@example", nonce="abc,123", qop="auth,auth-int", '
+            'algorithm=SHA-256, opaque="xyz"')
+        header, err = digest_auth.build_authorization(
+            "u", "p", "POST", "/x?a=1", challenge, b"{}", "auth-int")
+        check("Digest 挑战解析与摘要", not err and 'qop="auth-int"' in header
+              and 'opaque="xyz"' in header and "response=" in header,
+              err or header[:80])
+        url, verifier, state = oauth2_auth.authorize_url_with_state(
+            {"oauth_auth_url": "https://id.example/auth", "oauth_client_id": "cid"}, {})
+        check("OAuth 授权页生成 PKCE 与 state",
+              "code_challenge_method=S256" in url and "code_challenge=" in url
+              and len(verifier) >= 43 and len(state) >= 12)
+        check("AWS 区域服务可推断",
+              infer_service_region("https://s3.us-west-2.amazonaws.com/bucket") ==
+              ("s3", "us-west-2"))
+        signed, err = presign(
+            "GET", "https://execute-api.us-east-1.amazonaws.com/prod/x?a=1", 3600,
+            {"aws_access_key_id": "AK", "aws_secret_access_key": "SK"}, {})
+        check("AWS 预签名 URL", not err and "X-Amz-Signature=" in signed,
+              err or signed[:80])
+        schema = contract.infer({"a": 1, "b": {"c": 2}})
+        summary = contract.summarize(schema)
+        check("契约摘要统计字段与深度",
+              summary["fields"] >= 3 and summary["depth"] >= 1, str(summary))
+        check("漂移可忽略新增字段", not contract.drift(
+              schema, {"a": 1, "b": {"c": 2}, "d": 3}, ignore_new=True))
+        rows = var_collect(store)
+        check("变量侦探带来源与状态", bool(rows) and all(
+              isinstance(r.get("sources"), list) and "primary" in r for r in rows))
+        old = _i18n.current()
+        _i18n.set_language("en")
+        check("新界面英文齐全", _i18n.tr("Digest") == "Digest"
+              and _i18n.tr("待处理") == "Issues"
+              and _i18n.tr("复制 Schema") == "Copy schema")
+        _i18n.set_language(old)
+        page.deleteLater()
+        return 0
+
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39, step40]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39, step40, step41]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

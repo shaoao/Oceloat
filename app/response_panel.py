@@ -1288,7 +1288,15 @@ class ResponsePanel(QWidget):
 
             self.contract.set_data(
                 _contract.key_for(str(getattr(resp, "request_method", "") or ""), resp.url),
-                resp.body, resp.content_type, resp.timing or {})
+                resp.body, resp.content_type, resp.timing or {}, {
+                    "status": getattr(resp, "status", 0),
+                    "elapsed": getattr(resp, "elapsed", 0),
+                    "size": getattr(resp, "size", 0),
+                    "header_size": getattr(resp, "header_size", 0),
+                    "request_size": getattr(resp, "request_size", 0),
+                    "request_header_size": getattr(resp, "request_header_size", 0),
+                    "content_type": resp.content_type,
+                })
         except Exception:       # noqa: BLE001
             pass
         if resp.kind in BINARY_KINDS:

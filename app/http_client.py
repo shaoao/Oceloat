@@ -208,15 +208,18 @@ class _OAuthWorker(QObject):
 
     done = pyqtSignal(object, str)
 
-    def __init__(self, auth: Dict[str, Any], env: Dict[str, str], timeout: int, store):
+    def __init__(self, auth: Dict[str, Any], env: Dict[str, str], timeout: int, store,
+                 refresh: bool = False):
         super().__init__()
         self._auth, self._env, self._timeout, self._store = auth, env, timeout, store
+        self._refresh = refresh
 
     def fetch(self) -> None:
         from .oauth2_auth import fetch_token
 
         try:
-            token, err = fetch_token(self._auth, self._env, self._timeout)
+            token, err = fetch_token(self._auth, self._env, self._timeout,
+                                     refresh=self._refresh)
             self.done.emit(token, err)
         except Exception as exc:       # noqa: BLE001
             self.done.emit({}, str(exc))
@@ -245,6 +248,10 @@ class ApiClient(QObject):
         self._active_scripts: Dict[str, Any] = {}
         self._active_env_vars: Dict[str, str] = {}
         self._active_req: Dict[str, Any] = {}
+        # Digest 401 挑战重试状态：只保留一发请求，避免递归 send 重跑前置脚本
+        self._digest_retried = False
+        self._digest_first: Dict[str, Any] = {}
+        self._digest_auth: Dict[str, Any] = {}
 
     def set_store(self, store) -> None:
         """注入 Store：前置 / 后置脚本要读写环境变量。"""
@@ -253,13 +260,14 @@ class ApiClient(QObject):
     # ------------------------------------------------------------ 请求脚本
     @staticmethod
     def _fetch_oauth(auth: Dict[str, Any], env: Dict[str, str], timeout: int,
-                     store) -> Tuple[Dict[str, Any], str]:
+                     store, refresh: bool = False) -> Tuple[Dict[str, Any], str]:
         """在后台线程换 token：OAuth 是同步 HTTP，不能卡住 UI 事件循环。"""
         from . import oauth2_auth
 
         box: Dict[str, Any] = {}
         thread = QThread()
-        worker = _OAuthWorker(dict(auth), dict(env or {}), int(timeout or 10), store)
+        worker = _OAuthWorker(dict(auth), dict(env or {}), int(timeout or 10), store,
+                              refresh=refresh)
         worker.moveToThread(thread)
 
         def run() -> None:
@@ -315,15 +323,28 @@ class ApiClient(QObject):
 
             entry = oauth2_auth.cached_token(auth, self._store, env_vars)
             if entry is None:
-                token, err = self._fetch_oauth(
-                    auth, env_vars, int((getattr(self, "_active_settings", {}) or {})
-                                        .get("timeout", 10) or 10), self._store)
+                cfg = dict(auth)
+                stale = oauth2_auth.cached_entry(auth, self._store, env_vars) or {}
+                refresh_token = str(cfg.get("oauth_refresh_token") or
+                                    stale.get("refresh_token") or "")
+                if refresh_token:
+                    cfg["oauth_refresh_token"] = refresh_token
+                use_refresh = bool(refresh_token) and str(
+                    cfg.get("oauth_use_refresh", True)) not in ("0", "false", "False")
+                timeout = int((getattr(self, "_active_settings", {}) or {})
+                              .get("timeout", 10) or 10)
+                token, err = self._fetch_oauth(cfg, env_vars, timeout, self._store,
+                                               refresh=use_refresh)
+                if err and use_refresh:
+                    # refresh token 失效时退回完整授权，授权码模式可能已用过，
+                    # 失败信息照常交给调用方，绝不静默发无认证请求。
+                    token, err = self._fetch_oauth(cfg, env_vars, timeout, self._store)
                 if err or not token.get("access_token"):
                     self.console.append({"level": "error", "phase": "auth",
                                          "text": i18n.trf("OAuth 获取 Token 失败：{err}",
                                                           err=err or "无 access_token")})
                     return {"type": "none"}
-                oauth2_auth.save_token(auth, self._store, env_vars, token)
+                oauth2_auth.save_token(cfg, self._store, env_vars, token)
                 entry = token
             return oauth2_auth.apply_token(auth, env_vars,
                                            str(entry.get("access_token") or ""))
@@ -558,6 +579,9 @@ class ApiClient(QObject):
         self.scriptLogs = []
         self.console = []
         self._active_req = req
+        self._digest_retried = False
+        self._digest_first = {}
+        self._digest_auth = {}
 
         # 前置脚本：在中继分支之前执行，覆盖所有发送路径
         self._active_scripts = req.get("scripts") or {}
@@ -572,6 +596,19 @@ class ApiClient(QObject):
                                 "text": f"→ {str(req.get('method') or 'GET').upper()} {url_text}"})
 
         if settings.get("relay_node"):
+            effective_kind = str(((req.get("auth") or {}).get("type") or "")).lower()
+            if effective_kind == "inherit":
+                inherited = None
+                if self._store is not None:
+                    try:
+                        inherited = self._store.inherited_auth(req.get("id", ""))
+                    except Exception:  # noqa: BLE001
+                        inherited = None
+                effective_kind = str((inherited or {}).get("type") or "").lower()
+            if effective_kind == "digest":
+                self.finished.emit(Response(
+                    error=i18n.tr("Digest 认证需要直接读取 401 挑战，请切回本地直连")))
+                return
             try:
                 payload = self._relay_payload(req, settings, env_vars)
             except ValueError as exc:
@@ -642,6 +679,37 @@ class ApiClient(QObject):
         elif auth.get("type") == "apikey" and auth.get("add_to") == "header" and auth.get("key"):
             nreq.setRawHeader(auth["key"].encode("utf-8"),
                               resolve_vars(auth.get("value", ""), env_vars).encode("utf-8"))
+        elif auth.get("type") == "digest":
+            from . import digest_auth
+
+            digest_uri = url.path(QUrl.ComponentFormattingOption.FullyEncoded) or "/"
+            if url.query():
+                digest_uri += "?" + url.query(QUrl.ComponentFormattingOption.FullyEncoded)
+            self._digest_auth = {
+                "username": resolve_vars(auth.get("digest_username", ""), env_vars),
+                "password": resolve_vars(auth.get("digest_password", ""), env_vars),
+                "uri": digest_uri,
+                "algorithm": resolve_vars(auth.get("digest_algorithm", "MD5"), env_vars),
+                "qop": resolve_vars(auth.get("digest_qop", "auto"), env_vars),
+                "challenge": {},
+            }
+            # 用户手填了 nonce 就直接预认证；否则等 401 挑战
+            manual_nonce = resolve_vars(auth.get("digest_nonce", ""), env_vars)
+            if manual_nonce:
+                challenge = {
+                    "realm": resolve_vars(auth.get("digest_realm", ""), env_vars),
+                    "nonce": manual_nonce,
+                    "opaque": resolve_vars(auth.get("digest_opaque", ""), env_vars),
+                    "algorithm": self._digest_auth["algorithm"],
+                    "qop": "auth",
+                }
+                header, derr = digest_auth.build_authorization(
+                    self._digest_auth["username"], self._digest_auth["password"],
+                    str(req.get("method") or "GET").upper(),
+                    digest_uri, challenge, b"", self._digest_auth["qop"])
+                if not derr:
+                    nreq.setRawHeader(b"Authorization", header.encode("utf-8"))
+                    self._digest_auth["challenge"] = challenge
 
         # Cookie 表：与手写的 Cookie 头合并（表在前、原头在后），两边都保留
         cookie_pairs = [f"{resolve_vars(str(row['key']), env_vars)}="
@@ -747,19 +815,25 @@ class ApiClient(QObject):
         self._configure_proxy(settings, url.host())
         method = (req.get("method") or "GET").upper()
         if (auth.get("type") or "") == "awsv4":
-            from .awsv4_auth import sign as aws_sign
+            from .awsv4_auth import sign_with_detail as aws_sign
 
             pairs = [(bytes(n).decode("utf-8", "replace"),
                       bytes(nreq.rawHeader(n)).decode("utf-8", "replace"))
                      for n in nreq.rawHeaderList()]
-            extra, err = aws_sign(
+            extra, err, detail = aws_sign(
                 method, url.toString(), pairs, bytes(payload) if multipart is None else b"",
-                auth, env_vars)
+                auth, env_vars, unsigned_payload=multipart is not None)
             if err:
                 self.finished.emit(Response(error=err))
                 return
             for key, value in extra:
                 nreq.setRawHeader(key.encode("utf-8"), value.encode("utf-8"))
+            if detail:
+                self.console.append({
+                    "level": "info", "phase": "auth",
+                    "text": (f"AWS SigV4 · {detail['region']}/{detail['service']} · "
+                             f"payload={detail['payload_hash']}"),
+                })
         # 请求体积：用真正发出去的 QNetworkRequest 原始头 + 请求行来算，
         # 不再拿界面上的字符串猜（那样漏掉默认注入的 UA / Accept / Cookie）。
         req_header_bytes = len(method.encode("utf-8")) + 1 + len(
@@ -768,6 +842,15 @@ class ApiClient(QObject):
             req_header_bytes += len(bytes(name)) + len(bytes(nreq.rawHeader(name))) + 4
         self._request_size = int(payload.size()) if not isinstance(payload, type(None)) else 0
         self._request_header_size = req_header_bytes
+
+        if auth.get("type") == "digest":
+            if multipart is not None:
+                self.finished.emit(Response(
+                    error=i18n.tr("Digest 认证暂不支持 multipart 上传，请改用 raw / urlencoded")))
+                return
+            self._digest_first = {
+                "request": nreq, "payload": QByteArray(payload), "method": method,
+            }
 
         self._clock.start()
         try:
@@ -802,6 +885,65 @@ class ApiClient(QObject):
             self._timed_out = True
             self._reply.abort()
 
+    def _retry_digest(self, headers: List[Tuple[str, str]], body: bytes) -> bool:
+        """收到 401 挑战后带凭据重发一次；返回 True 表示已接管这次响应。"""
+        from . import digest_auth
+
+        first = getattr(self, "_digest_first", None) or {}
+        cfg = getattr(self, "_digest_auth", None) or {}
+        if not first or not cfg or self._digest_retried:
+            return False
+        challenge = digest_auth.challenge_from_headers(headers)
+        if not challenge:
+            return False
+        if str(challenge.get("stale") or "").lower() == "true":
+            digest_auth.reset(cfg.get("uri", ""))
+        manual = dict(cfg.get("challenge") or {})
+        if manual.get("realm"):
+            challenge["realm"] = manual["realm"]
+        if manual.get("opaque"):
+            challenge["opaque"] = manual["opaque"]
+        algorithm = cfg.get("algorithm") or ""
+        if algorithm and algorithm != "MD5":
+            challenge["algorithm"] = algorithm
+
+        qop_pref = cfg.get("qop") or ""
+        header, err = digest_auth.build_authorization(
+            cfg.get("username", ""), cfg.get("password", ""),
+            str(first.get("method") or "GET"), cfg.get("uri", ""),
+            challenge, body, qop_pref if qop_pref != "auto" else "")
+        if err:
+            self.console.append({"level": "error", "phase": "auth", "text": err})
+            return False
+
+        nreq = first.get("request")
+        payload = first.get("payload")
+        if nreq is None or payload is None:
+            return False
+        nreq.setRawHeader(b"Authorization", header.encode("utf-8"))
+        self._digest_retried = True
+        self._timed_out = False
+        self._ttfb = 0
+        self._clock.restart()
+        try:
+            reply = self.nam.sendCustomRequest(
+                nreq, str(first.get("method") or "GET").encode(), payload)
+        except Exception as exc:  # noqa: BLE001
+            self.console.append({"level": "error", "phase": "auth",
+                                 "text": f"Digest 重发失败：{exc}"})
+            return False
+        self._reply = reply
+        reply.metaDataChanged.connect(self._on_meta)
+        reply.finished.connect(self._on_finished)
+        if self._timeout > 0:
+            self._timer = QTimer(self)
+            self._timer.setSingleShot(True)
+            self._timer.timeout.connect(self._on_timeout)
+            self._timer.start(self._timeout * 1000)
+        self.console.append({"level": "info", "phase": "auth",
+                             "text": "← 401 Digest 挑战 · 已带凭据自动重发"})
+        return True
+
     def _on_finished(self) -> None:
         reply = self.sender()
         if reply is None or reply is not self._reply:
@@ -833,6 +975,13 @@ class ApiClient(QObject):
             for k in reply.rawHeaderList():
                 headers.append((bytes(k).decode("latin-1"),
                                 bytes(reply.rawHeader(k)).decode("latin-1")))
+
+        # Digest：第一次 401 不落盘、不跑后置脚本，解析挑战后带凭据重发一次
+        if status == 401 and getattr(self, "_digest_first", None) \
+                and not self._digest_retried:
+            reply.deleteLater()
+            if self._retry_digest(headers, body):
+                return
 
         ct = ""
         for k, v in headers:

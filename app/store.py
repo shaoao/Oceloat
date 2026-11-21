@@ -26,9 +26,27 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.84"
+VERSION = "1.0.85"
 
 CHANGELOG = [
+    {
+        "version": "1.0.85",
+        "date": "2026-11-21",
+        "items": [
+            "认证新增 Digest：收到 401 挑战后自动带凭据重发，支持 MD5 / SHA-256 / SHA-512-256、"
+            "qop=auth / auth-int、userhash、opaque 与 stale，nonce / nc 自动管理，Postman 导入导出兼容",
+            "修复 OAuth 的两处真实问题：refresh_token 之前只是摆设、授权码 + PKCE 的 verifier 可能对不上；"
+            "现在 refresh 会真正执行并轮换回填，打开授权页自动生成并写入 PKCE Verifier 与 State，"
+            "密码模式的缓存按用户名隔离",
+            "OAuth 增加 OIDC 自动发现、client_secret_basic、state 回调校验、expires_at / exp 兼容与 Token 缓存清除；"
+            "AWS SigV4 修复 multipart 签名与手写 Host 不一致问题，新增区域 / 服务推断、签名明细与预签名 URL",
+            "契约页重做为左右各半、可拖动的比例布局，比例只存界面设置不碰契约数据；"
+            "新增契约摘要、漂移分类过滤与实测 / 估算耗时条，响应状态和体积都补进观测区",
+            "变量侦探按新 UI 重做：纯黑卡片 + 主题色徽标 + 左右详情面板，去掉旧表格红框和大块空白；"
+            "新增刷新、来源筛选、密钥遮蔽、冲突 / 未定义 / 未引用提示、复制、解析链与 JSON 导出",
+            "补齐所有新功能英文词条；新增 smoke 第 41 组覆盖 Digest / OAuth / AWS / 契约 / 变量侦探",
+        ],
+    },
     {
         "version": "1.0.84",
         "date": "2026-11-21",
@@ -1562,16 +1580,20 @@ def new_request(name: str = "Untitled Request", method: str = "GET", url: str = 
             "key": "", "value": "", "add_to": "header",
             "jwt_mode": "auto", "jwt_alg": "HS256", "jwt_payload": "",
             "jwt_secret": "", "jwt_token": "",
-            "oauth_grant": "client_credentials", "oauth_auth_url": "",
-            "oauth_token_url": "", "oauth_client_id": "", "oauth_client_secret": "",
-            "oauth_scope": "", "oauth_username": "", "oauth_password": "",
-            "oauth_code": "", "oauth_redirect_uri": "", "oauth_code_verifier": "",
+            "oauth_grant": "client_credentials", "oauth_issuer": "",
+            "oauth_auth_url": "", "oauth_token_url": "", "oauth_client_id": "",
+            "oauth_client_secret": "", "oauth_scope": "", "oauth_username": "",
+            "oauth_password": "", "oauth_code": "", "oauth_redirect_uri": "",
+            "oauth_code_verifier": "", "oauth_state": "", "oauth_state_returned": "",
             "oauth_access_token": "", "oauth_refresh_token": "",
             "oauth_token_placement": "header", "oauth_token_key": "access_token",
-            "oauth_use_refresh": True,
+            "oauth_token_auth_method": "client_secret_post", "oauth_use_refresh": True,
             "aws_access_key_id": "", "aws_secret_access_key": "",
             "aws_session_token": "", "aws_region": "us-east-1",
             "aws_service": "execute-api", "aws_sign_body": True,
+            "digest_username": "", "digest_password": "", "digest_algorithm": "MD5",
+            "digest_qop": "auto", "digest_realm": "", "digest_nonce": "",
+            "digest_opaque": "",
         },
         "scripts": {"pre": "", "post": ""},
         "note": "",

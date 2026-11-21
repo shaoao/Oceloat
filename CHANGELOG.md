@@ -1,5 +1,22 @@
 # What's Changed
 
+## v1.0.85 — 2026-11-21
+
+**Fixed**
+- OAuth refresh tokens are now actually used: expired tokens are refreshed, rotated refresh tokens are written back, and password-grant caches are keyed by username. Authorization-code + PKCE no longer risks a verifier mismatch because the verifier is saved when the browser is opened.
+- AWS SigV4 uses `UNSIGNED-PAYLOAD` for multipart bodies and signs the same Host header that is actually sent.
+- The variable inspector no longer shows a stale snapshot when reopened; it refreshes on open.
+
+**Added**
+- Digest authentication with automatic 401 challenge-response, MD5 / SHA-256 / SHA-512-256, qop=auth / auth-int, userhash, opaque and stale handling. Nonce count is managed for you, and Postman import/export keeps the fields.
+- OAuth 2.0 gains OIDC discovery, `client_secret_basic`, state validation, `expires_at` / `exp` support and a cache-clear action.
+- AWS SigV4 gains region / service inference, signature detail in the console and presigned URL generation.
+- The Contract tab is now a draggable left/right split view. Added contract summaries, drift-type filters and separate measured/estimated timing bars. The split ratio is stored as a UI preference and never touches contract data.
+- The variable inspector is redesigned as a card-based, theme-coloured detail view with source filters, secret masking, conflict / undefined / unused badges, copy actions, resolution chains and JSON export.
+
+**Changed**
+- Added accurate English translations for all new screens and messages.
+
 ## v1.0.84 — 2026-11-21
 
 **Fixed**

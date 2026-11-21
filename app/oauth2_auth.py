@@ -1,19 +1,17 @@
-"""OAuth 2.0 认证：标准库实现，零额外依赖。
+"""OAuth 2.0 / OIDC 认证：标准库实现，零额外依赖。
 
-支持四种 grant：
-- client_credentials：客户端凭证换 token
-- password：用户名 / 密码换 token
-- authorization_code：授权码 + PKCE 换 token
-- implicit / 手动：直接使用用户粘贴的 token（授权在浏览器完成）
-
-token 缓存在 Store.data["oauth_tokens"]，以 token_url + client_id + scope + grant 为键；
-过期前 60 秒自动刷新。刷新失败返回错误，由调用方显示在控制台，绝不静默发送无认证请求。
+支持：客户端凭证、密码、授权码 + PKCE、手动 Token；自动缓存、过期前刷新、
+OIDC discovery、client_secret_basic、state 校验。
+token 缓存在 Store.data["oauth_tokens"]，以 token_url + client_id + scope + grant +
+用户名（password grant）为键；过期前 60 秒自动刷新。刷新失败返回错误，
+由调用方显示在控制台，绝不静默发送无认证请求。
 """
 from __future__ import annotations
 
 import base64
 import hashlib
 import json
+import re
 import secrets
 import time
 import urllib.error
@@ -28,20 +26,25 @@ GRANT_LABELS = {
     "authorization_code": "授权码（PKCE）",
     "implicit": "手动 Token",
 }
+MANUAL_GRANTS = ("implicit", "manual")
 
 # 缓存条目字段：access_token / refresh_token / expires_at / token_type
 CACHE_KEY = "oauth_tokens"
 
 
-def _cache_key(auth: Dict[str, Any], env: Dict[str, str]) -> str:
-    def resolve(v: str) -> str:
-        text = str(v or "")
-        for name, value in (env or {}).items():
-            text = text.replace("{{" + name + "}}", str(value))
-        return text
+def _resolve(v: Any, env: Dict[str, str]) -> str:
+    text = str(v or "")
+    for name, value in (env or {}).items():
+        text = text.replace("{{" + name + "}}", str(value))
+    return text
 
-    raw = "|".join(resolve(auth.get(k, "")) for k in
-                   ("oauth_token_url", "oauth_client_id", "oauth_scope", "oauth_grant"))
+
+def _cache_key(auth: Dict[str, Any], env: Dict[str, str]) -> str:
+    keys = ("oauth_token_url", "oauth_client_id", "oauth_scope", "oauth_grant")
+    # password grant 必须把用户名算进键，否则换用户会复用上一个用户的 token
+    if str(auth.get("oauth_grant") or "") == "password":
+        keys += ("oauth_username",)
+    raw = "|".join(_resolve(auth.get(k, ""), env) for k in keys)
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
     return f"{digest}:{auth.get('oauth_grant') or 'client_credentials'}"
 
@@ -59,9 +62,15 @@ def _store_cache(store) -> Dict[str, Any]:
     return cache
 
 
-def cached_token(auth: Dict[str, Any], store, env: Dict[str, str]) -> Optional[Dict[str, Any]]:
+def cached_entry(auth: Dict[str, Any], store, env: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """取原始缓存条目（即使已过期）——刷新 token 要靠它。"""
     entry = _store_cache(store).get(_cache_key(auth, env))
-    if not isinstance(entry, dict) or not entry.get("access_token"):
+    return entry if isinstance(entry, dict) else None
+
+
+def cached_token(auth: Dict[str, Any], store, env: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    entry = cached_entry(auth, store, env)
+    if not entry or not entry.get("access_token"):
         return None
     expires = float(entry.get("expires_at") or 0)
     # expires_at=0 表示服务端没给过期时间：用 1 小时兜底，避免每次都重新换 token
@@ -72,18 +81,37 @@ def cached_token(auth: Dict[str, Any], store, env: Dict[str, str]) -> Optional[D
     return entry
 
 
+def _expiry(data: Dict[str, Any]) -> float:
+    """兼容 expires_in / expires_at / exp 三种服务端返回。"""
+    now = time.time()
+    if data.get("expires_in") not in (None, ""):
+        try:
+            return now + float(data["expires_in"])
+        except (TypeError, ValueError):
+            pass
+    for key in ("expires_at", "exp"):
+        if data.get(key) not in (None, ""):
+            try:
+                value = float(data[key])
+                return value + now if value < 1_000_000_000 else value
+            except (TypeError, ValueError):
+                pass
+    return 0.0
+
+
 def save_token(auth: Dict[str, Any], store, env: Dict[str, str],
                data: Dict[str, Any]) -> None:
     if store is None:
         return
     entry = dict(data)
     entry.setdefault("cached_at", time.time())
-    if entry.get("expires_in"):
-        try:
-            entry["expires_at"] = time.time() + float(entry["expires_in"])
-        except (TypeError, ValueError):
-            entry["expires_at"] = 0
+    entry["expires_at"] = _expiry(data)
     _store_cache(store)[_cache_key(auth, env)] = entry
+    # 关键：把服务端轮换出来的 refresh_token 回填到请求配置，否则刷新永远是死代码
+    if data.get("refresh_token"):
+        auth["oauth_refresh_token"] = str(data["refresh_token"])
+    if data.get("access_token"):
+        auth["oauth_access_token"] = str(data["access_token"])
     try:
         store.save()
     except Exception:       # noqa: BLE001 - 缓存写失败不影响本次请求
@@ -95,32 +123,58 @@ def clear_token(auth: Dict[str, Any], store, env: Dict[str, str]) -> None:
 
 
 def pkce(verifier: str = "") -> Tuple[str, str]:
-    """返回 (verifier, challenge)。verifier 为空时生成一个新的。"""
-    import re as _re
-
-    if not verifier or not _re.fullmatch(r"[A-Za-z0-9._~-]{43,128}", verifier):
+    """返回 (verifier, challenge)。verifier 为空或非法时生成一个新的。"""
+    if not verifier or not re.fullmatch(r"[A-Za-z0-9._~-]{43,128}", verifier):
         verifier = secrets.token_urlsafe(48)
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
     return verifier, base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
-def authorize_url(auth: Dict[str, Any], env: Dict[str, str]) -> str:
-    """拼授权地址（授权码 + PKCE）。浏览器打开后把 code 粘回界面即可。"""
-    auth_url = str(auth.get("oauth_auth_url") or "")
+def authorize_url_with_state(auth: Dict[str, Any], env: Dict[str, str]
+                             ) -> Tuple[str, str, str]:
+    """返回 (授权 URL, verifier, state)。调用方必须把后两者写回配置。"""
+    auth_url = _resolve(auth.get("oauth_auth_url"), env)
     if not auth_url:
-        return ""
-    verifier, challenge = pkce(str(auth.get("oauth_code_verifier") or ""))
+        return "", "", ""
+    verifier, challenge = pkce(_resolve(auth.get("oauth_code_verifier"), env))
+    state = _resolve(auth.get("oauth_state"), env) or secrets.token_urlsafe(16)
     params = {
         "response_type": "code",
-        "client_id": str(auth.get("oauth_client_id") or ""),
-        "redirect_uri": str(auth.get("oauth_redirect_uri") or ""),
-        "scope": str(auth.get("oauth_scope") or ""),
+        "client_id": _resolve(auth.get("oauth_client_id"), env),
+        "redirect_uri": _resolve(auth.get("oauth_redirect_uri"), env),
+        "scope": _resolve(auth.get("oauth_scope"), env),
         "code_challenge": challenge,
         "code_challenge_method": "S256",
-        "state": secrets.token_urlsafe(12),
+        "state": state,
     }
     sep = "&" if "?" in auth_url else "?"
-    return auth_url + sep + urllib.parse.urlencode({k: v for k, v in params.items() if v})
+    return (auth_url + sep + urllib.parse.urlencode(
+        {k: v for k, v in params.items() if v})), verifier, state
+
+
+def authorize_url(auth: Dict[str, Any], env: Dict[str, str]) -> str:
+    """兼容旧 API：只返回 URL（不回写 verifier/state，建议用上面的版本）。"""
+    return authorize_url_with_state(auth, env)[0]
+
+
+def discover(issuer: str, timeout: int = 10) -> Tuple[Dict[str, str], str]:
+    """OIDC discovery：从 issuer 拉 authorization/token/jwks 地址。"""
+    issuer = (issuer or "").strip().rstrip("/")
+    if not issuer.startswith(("http://", "https://")):
+        return {}, "Issuer 要以 http(s):// 开头"
+    url = issuer + "/.well-known/openid-configuration"
+    try:
+        with urllib.request.urlopen(url, timeout=max(1, min(int(timeout or 10), 30))) as res:
+            data = json.loads(res.read().decode("utf-8", "replace"))
+    except Exception as exc:  # noqa: BLE001
+        return {}, f"OIDC 发现失败：{exc}"
+    if not isinstance(data, dict):
+        return {}, "OIDC 发现响应不是 JSON 对象"
+    return {
+        "oauth_auth_url": str(data.get("authorization_endpoint") or ""),
+        "oauth_token_url": str(data.get("token_endpoint") or ""),
+        "jwks_uri": str(data.get("jwks_uri") or ""),
+    }, ""
 
 
 def _http_form(url: str, fields: Dict[str, str], timeout: int,
@@ -164,47 +218,57 @@ def _parse_token(body: str) -> Tuple[Dict[str, Any], str]:
 
 def fetch_token(auth: Dict[str, Any], env: Dict[str, str], timeout: int = 10,
                 refresh: bool = False) -> Tuple[Dict[str, Any], str]:
-    """按 grant 换取 token。返回 (token 数据, 错误)。
-
-    所有模板变量在发送前解析，token 只走 HTTPS/HTTP 明确给出的地址。
-    """
-    def resolve(v: Any) -> str:
-        text = str(v or "")
-        for name, value in (env or {}).items():
-            text = text.replace("{{" + name + "}}", str(value))
-        return text
-
-    grant = resolve(auth.get("oauth_grant") or "client_credentials")
-    token_url = resolve(auth.get("oauth_token_url") or "")
+    """按 grant 换取 token。返回 (token 数据, 错误)。"""
+    grant = _resolve(auth.get("oauth_grant") or "client_credentials", env)
+    token_url = _resolve(auth.get("oauth_token_url"), env)
+    client_id = _resolve(auth.get("oauth_client_id"), env)
+    client_secret = _resolve(auth.get("oauth_client_secret"), env)
     fields: Dict[str, str] = {"grant_type": grant}
-    if grant in ("client_credentials", "authorization_code"):
-        fields["client_id"] = resolve(auth.get("oauth_client_id") or "")
-        fields["client_secret"] = resolve(auth.get("oauth_client_secret") or "")
-    elif grant == "password":
-        fields.update(username=resolve(auth.get("oauth_username") or ""),
-                      password=resolve(auth.get("oauth_password") or ""),
-                      client_id=resolve(auth.get("oauth_client_id") or ""),
-                      client_secret=resolve(auth.get("oauth_client_secret") or ""))
-    scope = resolve(auth.get("oauth_scope") or "")
-    if scope:
-        fields["scope"] = scope
-    if grant == "authorization_code":
-        fields["code"] = resolve(auth.get("oauth_code") or "")
-        fields["redirect_uri"] = resolve(auth.get("oauth_redirect_uri") or "")
-        verifier, _ = pkce(resolve(auth.get("oauth_code_verifier") or ""))
-        fields["code_verifier"] = verifier
+    headers: Dict[str, str] = {}
+
     if refresh:
         fields["grant_type"] = "refresh_token"
-        fields["refresh_token"] = resolve(auth.get("oauth_refresh_token") or "")
-        fields.pop("code", None)
-        fields.pop("code_verifier", None)
+        # effective() 会把缓存里的 refresh_token 回填到 auth，这里只认配置值
+        fields["refresh_token"] = _resolve(auth.get("oauth_refresh_token"), env)
+        if not fields["refresh_token"]:
+            return {}, "没有可用的 Refresh Token"
+    elif grant in ("client_credentials", "authorization_code"):
+        fields["client_id"] = client_id
+        fields["client_secret"] = client_secret
+    elif grant == "password":
+        fields.update(username=_resolve(auth.get("oauth_username"), env),
+                      password=_resolve(auth.get("oauth_password"), env),
+                      client_id=client_id, client_secret=client_secret)
+    elif grant in MANUAL_GRANTS:
+        return {}, "手动 Token 模式不请求 Token 地址"
 
-    body, err = _http_form(token_url, fields, timeout)
+    # client_secret_basic：凭证放 Header，不放 form
+    basic = str(auth.get("oauth_token_auth_method") or "client_secret_post")
+    if basic == "client_secret_basic" and client_id:
+        pair = f"{client_id}:{client_secret}".encode("utf-8")
+        headers["Authorization"] = "Basic " + base64.b64encode(pair).decode("ascii")
+        fields.pop("client_id", None)
+        fields.pop("client_secret", None)
+
+    scope = _resolve(auth.get("oauth_scope"), env)
+    if scope:
+        fields["scope"] = scope
+    if grant == "authorization_code" and not refresh:
+        fields["code"] = _resolve(auth.get("oauth_code"), env)
+        fields["redirect_uri"] = _resolve(auth.get("oauth_redirect_uri"), env)
+        verifier, _ = pkce(_resolve(auth.get("oauth_code_verifier"), env))
+        fields["code_verifier"] = verifier
+
+    body, err = _http_form(token_url, fields, timeout, headers)
     if err:
         return {}, err
     data, err = _parse_token(body)
     if err:
         return {}, err
+    expected = _resolve(auth.get("oauth_state"), env)
+    returned = _resolve(auth.get("oauth_state_returned") or data.get("state"), env)
+    if expected and returned and expected != returned:
+        return {}, "OAuth state 不匹配，可能遭受 CSRF"
     if not data.get("access_token"):
         return {}, "Token 响应里没有 access_token"
     return data, ""
@@ -224,21 +288,25 @@ def effective(auth: Dict[str, Any], store, env: Dict[str, str],
               timeout: int = 10) -> Tuple[Dict[str, Any], str]:
     """给 ApiClient._effective_auth 用：拿缓存 / 刷新 / 新取 token。"""
     grant = str(auth.get("oauth_grant") or "client_credentials")
-    # 手动模式：直接用用户粘贴的 token，绝不联网
-    if grant == "implicit":
-        token = str(auth.get("oauth_access_token") or "")
-        for name, value in (env or {}).items():
-            token = token.replace("{{" + name + "}}", str(value))
+    if grant in MANUAL_GRANTS:
+        token = _resolve(auth.get("oauth_access_token"), env)
         if not token:
             return {"type": "none"}, "请先粘贴 Access Token"
         return apply_token(auth, env, token), ""
 
     entry = cached_token(auth, store, env)
     if entry is None:
-        # 有 refresh token 就先刷新；否则重新换
-        refresh = bool(auth.get("oauth_refresh_token")) and bool(entry is None and
-                       auth.get("oauth_use_refresh", True))
-        data, err = fetch_token(auth, env, timeout, refresh=refresh)
+        stale = cached_entry(auth, store, env) or {}
+        refresh_token = _resolve(auth.get("oauth_refresh_token") or
+                                 stale.get("refresh_token"), env)
+        if refresh_token:
+            auth["oauth_refresh_token"] = refresh_token
+        use_refresh = bool(refresh_token) and str(auth.get("oauth_use_refresh", True)) not in (
+            "0", "false", "False")
+        data, err = fetch_token(auth, env, timeout, refresh=use_refresh)
+        if err and use_refresh:
+            # refresh token 失效就退回完整授权（授权码可能已用过，失败由调用方提示）
+            data, err = fetch_token(auth, env, timeout, refresh=False)
         if err:
             return {"type": "none"}, err
         save_token(auth, store, env, data)

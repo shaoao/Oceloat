@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.84", VERSION == "1.0.84", VERSION)
-check("更新内容是 1.0.84", CHANGELOG[0]["version"] == "1.0.84")
+check("版本 1.0.85", VERSION == "1.0.85", VERSION)
+check("更新内容是 1.0.85", CHANGELOG[0]["version"] == "1.0.85")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -801,6 +801,29 @@ check("更新内容写了这轮改动",
       any("OAuth 2.0" in x for x in ALL_ITEMS)
       and any("右下角" in x for x in ALL_ITEMS)
       and any("变量侦探" in x for x in ALL_ITEMS))
+
+print("\n[1.0.85 新增]")
+_i18_85 = (ROOT / "app" / "i18n.py").read_text(encoding="utf-8")
+_rq_85 = (ROOT / "app" / "request_panel.py").read_text(encoding="utf-8")
+_hc_85 = (ROOT / "app" / "http_client.py").read_text(encoding="utf-8")
+_cv_85 = (ROOT / "app" / "contract_view.py").read_text(encoding="utf-8")
+_vi_85 = (ROOT / "app" / "var_inspector.py").read_text(encoding="utf-8")
+check("Digest 模块接入完整", (ROOT / "app" / "digest_auth.py").exists()
+      and '"digest"' in _rq_85 and "_retry_digest" in _hc_85)
+check("OAuth / AWS 增强落地",
+      "authorize_url_with_state" in (ROOT / "app" / "oauth2_auth.py").read_text(encoding="utf-8")
+      and "presign" in (ROOT / "app" / "awsv4_auth.py").read_text(encoding="utf-8"))
+check("契约页左右可拖动", "QSplitter" in _cv_85
+      and "contract_split" in _cv_85 and "字段漂移" in _cv_85)
+check("变量侦探高级 UI", "class _VarCard" in _vi_85
+      and "SegmentedTabs" in _vi_85 and "QTreeWidget" not in _vi_85)
+check("新功能英文齐全", all(k in _i18_85 for k in (
+      '"Digest"', '"OIDC 地址已自动回填"', '"预签名 URL 已生成并复制"',
+      '"字段漂移"', '"变量总数"', '"解析链"')))
+check("更新内容写了这轮改动",
+      any("Digest" in x for x in ALL_ITEMS)
+      and any("OIDC" in x for x in ALL_ITEMS)
+      and any("可拖动" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

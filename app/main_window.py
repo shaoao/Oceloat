@@ -2928,6 +2928,9 @@ class MainWindow(QWidget):
 
         if getattr(self, "_var_inspector", None) is None:
             self._var_inspector = VarInspectorDialog(self.store, self)
+        else:
+            # 非模态窗口会复用，打开前刷新一次，避免看到过期快照
+            self._var_inspector._refresh()
         self._var_inspector.show()
         self._var_inspector.raise_()
         self._var_inspector.activateWindow()

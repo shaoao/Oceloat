@@ -139,7 +139,8 @@ def _postman_auth(auth: Dict[str, Any], carry: Dict[str, Any]) -> Optional[Dict[
     if kind == "oauth2":
         fields = []
         for key in ("client_id", "client_secret", "access_token", "refresh_token",
-                    "token_url", "auth_url", "scope", "username", "password"):
+                    "token_url", "auth_url", "scope", "username", "password",
+                    "issuer", "state", "token_auth_method"):
             val = auth.get("oauth_" + key) or ""
             if val:
                 fields.append({"key": key, "value": str(val), "type": "string"})
@@ -151,6 +152,16 @@ def _postman_auth(auth: Dict[str, Any], carry: Dict[str, Any]) -> Optional[Dict[
             {"key": "sessionToken", "value": auth.get("aws_session_token", ""), "type": "string"},
             {"key": "region", "value": auth.get("aws_region", ""), "type": "string"},
             {"key": "service", "value": auth.get("aws_service", ""), "type": "string"},
+        ]}
+    if kind == "digest":
+        return {"type": "digest", "digest": [
+            {"key": "username", "value": auth.get("digest_username", ""), "type": "string"},
+            {"key": "password", "value": auth.get("digest_password", ""), "type": "string"},
+            {"key": "realm", "value": auth.get("digest_realm", ""), "type": "string"},
+            {"key": "nonce", "value": auth.get("digest_nonce", ""), "type": "string"},
+            {"key": "algorithm", "value": auth.get("digest_algorithm", "MD5"), "type": "string"},
+            {"key": "qop", "value": auth.get("digest_qop", "auto"), "type": "string"},
+            {"key": "opaque", "value": auth.get("digest_opaque", ""), "type": "string"},
         ]}
     if kind in ("jwt", "inherit"):
         # Postman 没有这两种，放进 x-ocelot 里由我们自己还原
@@ -632,7 +643,8 @@ def _import_postman_auth(auth: Dict[str, Any]) -> Dict[str, Any]:
             "access_token": "oauth_access_token", "refresh_token": "oauth_refresh_token",
             "token_url": "oauth_token_url", "auth_url": "oauth_auth_url",
             "scope": "oauth_scope", "username": "oauth_username",
-            "password": "oauth_password",
+            "password": "oauth_password", "issuer": "oauth_issuer",
+            "state": "oauth_state", "token_auth_method": "oauth_token_auth_method",
         }
         out["type"] = "oauth2"
         for src, dst in mapping.items():
@@ -647,6 +659,15 @@ def _import_postman_auth(auth: Dict[str, Any]) -> Dict[str, Any]:
                    aws_session_token=pick("awsv4", "sessionToken"),
                    aws_region=pick("awsv4", "region") or "us-east-1",
                    aws_service=pick("awsv4", "service") or "execute-api")
+    elif kind == "digest":
+        out.update(type="digest",
+                   digest_username=pick("digest", "username"),
+                   digest_password=pick("digest", "password"),
+                   digest_realm=pick("digest", "realm"),
+                   digest_nonce=pick("digest", "nonce"),
+                   digest_algorithm=pick("digest", "algorithm") or "MD5",
+                   digest_qop=pick("digest", "qop") or "auto",
+                   digest_opaque=pick("digest", "opaque"))
     return out
 
 

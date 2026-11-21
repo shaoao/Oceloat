@@ -2420,3 +2420,105 @@ _EN.update({
     "  [{n} 处引用]": "  [{n} references]",
     "\n引用：": "\nReferences: ",
 })
+
+# ---------------------------------------------------------------- v1.0.85：Digest / OAuth / AWS
+_EN.update({
+    # Digest
+    "Digest": "Digest",
+    "Realm": "Realm",
+    "Nonce": "Nonce",
+    "Opaque": "Opaque",
+    "算法": "Algorithm",
+    "质量保护（qop）": "Quality of protection (qop)",
+    "收到 401 Digest 挑战后自动重发，nonce / nc 由 Ocelot 管理。":
+        "Automatically resends after a 401 Digest challenge; Ocelot manages nonce and nc",
+    "支持 MD5 / SHA-256 / SHA-512-256、qop=auth / auth-int、userhash；401 挑战自动处理。":
+        "Supports MD5 / SHA-256 / SHA-512-256, qop=auth / auth-int and userhash, with automatic 401 challenge handling",
+    "Digest 认证需要直接读取 401 挑战，请切回本地直连":
+        "Digest needs to read the 401 challenge directly; switch back to local direct sending",
+    "Digest 认证暂不支持 multipart 上传，请改用 raw / urlencoded":
+        "Digest does not support multipart uploads yet; use raw or urlencoded instead",
+
+    # OAuth 2.0 / OIDC
+    "Issuer": "Issuer",
+    "https://example.com（OIDC 自动发现）": "https://example.com (OIDC discovery)",
+    "点「打开授权页」自动生成": "Generated automatically by Open authorization page",
+    "自动回填，过期时用来刷新": "Filled in automatically; used to refresh after expiry",
+    "Secret 发送位置": "Secret placement",
+    "Secret 在表单": "Secret in form body",
+    "Secret 在 Header": "Secret in header",
+    "State": "State",
+    "回调 State": "Callback state",
+    "从浏览器回调复制，可留空": "Paste from the browser callback, or leave empty",
+    "打开授权页并自动写入 PKCE Verifier 与 State":
+        "Open the authorization page and fill in the PKCE verifier and state automatically",
+    "立即调用 Token 地址换取 access_token": "Call the token endpoint now to obtain an access token",
+    "从 Issuer 的 well-known 配置回填授权与 Token 地址":
+        "Fill in the authorization and token URLs from the Issuer's well-known configuration",
+    "删掉本机缓存的 Token，下次发送重新换取":
+        "Delete the locally cached token; the next send obtains a new one",
+    "支持授权码 + PKCE / 客户端凭证 / 密码 / 手动 Token；自动缓存、过期刷新、OIDC 发现与 State 校验。":
+        "Supports authorization code + PKCE, client credentials, password and manual tokens, with caching, refresh, OIDC discovery and state validation",
+    "已生成 PKCE / State 并打开授权页，地址已复制":
+        "Generated PKCE / state, opened the authorization page and copied the URL",
+    "OIDC 地址已自动回填": "OIDC endpoints filled in automatically",
+    "本机 Token 缓存已清除": "Local token cache cleared",
+    "Token 已过期 · 发送时用 Refresh Token 自动刷新":
+        "Token expired - it will be refreshed with the refresh token on send",
+    "OAuth state 不匹配，可能遭受 CSRF": "OAuth state mismatch; possible CSRF attempt",
+    "没有可用的 Refresh Token": "No refresh token available",
+
+    # AWS SigV4
+    "自动推断区域 / 服务": "Infer region / service",
+    "根据当前请求 URL 推断 AWS region 与 service":
+        "Infer the AWS region and service from the current request URL",
+    "生成预签名 URL": "Generate presigned URL",
+    "用当前 URL 生成 1 小时有效的预签名链接":
+        "Generate a presigned link valid for 1 hour from the current URL",
+    "为 AWS API Gateway / S3 / EC2 等接口生成 AWS4-HMAC-SHA256 签名，可推断区域、预览签名明细、生成预签名 URL。":
+        "Generate AWS4-HMAC-SHA256 signatures for API Gateway, S3, EC2 and more, with region inference, signature details and presigned URLs",
+    "找不到当前请求地址": "No current request URL found",
+    "已推断：region={r} · service={s}": "Inferred: region={r} - service={s}",
+    "AWS 区域与服务已自动推断": "AWS region and service inferred automatically",
+    "预签名 URL（1 小时，已复制）：{url}": "Presigned URL (1 hour, copied): {url}",
+    "预签名 URL 已生成并复制": "Presigned URL generated and copied",
+    "AWS 预签名需要 Access Key ID 与 Secret Access Key":
+        "Presigning requires an access key ID and secret access key",
+
+    # 契约页左右分栏
+    "字段漂移": "Field drift",
+    "全部": "All",
+    "新增字段": "New field",
+    "类型变化": "Type change",
+    "复制 Schema": "Copy schema",
+    "契约 Schema 已复制": "Contract schema copied",
+    "实测": "Measured",
+    "估算": "Estimated",
+    "状态": "Status",
+    "总耗时": "Total time",
+    "响应体": "Response body",
+    "请求头 {h} B · 请求体 {b} B · 响应头 {rh} B · 响应体 {rb} B":
+        "Request headers {h} B - body {b} B - response headers {rh} B - body {rb} B",
+
+    # 变量侦探高级面板
+    "变量总数": "Variables",
+    "引用": "References",
+    "待处理": "Issues",
+    "显示密钥": "Show secrets",
+    "刷新": "Refresh",
+    "导出 JSON": "Export JSON",
+    "冲突": "Conflict",
+    "未引用": "Unused",
+    "敏感": "Sensitive",
+    "没有匹配的变量": "No matching variables",
+    "换个关键词或筛选条件试试": "Try another keyword or filter",
+    "选择一个变量": "Select a variable",
+    "左侧卡片里点一个变量，这里会显示它的来源与引用":
+        "Click a variable on the left to see its sources and references",
+    "未定义：只在请求里被引用": "Undefined: only referenced by requests",
+    "引用它的请求": "Referencing requests",
+    "暂时没有请求引用": "Not referenced by any request yet",
+    "还有 {n} 个…": "{n} more...",
+    "解析链": "Resolution chain",
+    "导出变量快照": "Export variable snapshot",
+})

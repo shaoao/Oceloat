@@ -44,7 +44,31 @@ def infer(data: Any) -> Dict[str, Any]:
     return out
 
 
-def drift(schema: Dict[str, Any], data: Any, path: str = "") -> List[str]:
+def summarize(schema: Dict[str, Any]) -> Dict[str, int]:
+    """给契约页用的摘要：字段数 / 最大深度 / 数组数。"""
+    out = {"fields": 0, "depth": 0, "arrays": 0}
+
+    def walk(node: Any, depth: int) -> None:
+        if not isinstance(node, dict):
+            return
+        out["depth"] = max(out["depth"], depth)
+        kind = node.get("type")
+        if kind == "array":
+            out["arrays"] += 1
+            walk(node.get("items"), depth + 1)
+        elif kind == "object":
+            props = node.get("properties") or {}
+            out["fields"] += len(props)
+            for sub in props.values():
+                walk(sub, depth + 1)
+
+    walk(schema, 0)
+    return out
+
+
+def drift(schema: Dict[str, Any], data: Any, path: str = "",
+          ignore_new: bool = False, ignore_missing: bool = False,
+          ignore_type: bool = False) -> List[str]:
     """返回字段漂移说明列表。空列表表示与契约一致。"""
     if not isinstance(schema, dict) or not schema:
         return []
@@ -52,21 +76,25 @@ def drift(schema: Dict[str, Any], data: Any, path: str = "") -> List[str]:
     actual = _kind(data)
     issues: List[str] = []
     where = path or "$"
-    if expected and expected not in ("unknown", actual):
+    if expected and expected not in ("unknown", actual) and not ignore_type:
         issues.append(f"{where}: 类型由 {expected} 变为 {actual}")
     if expected == "object" and isinstance(data, dict):
         props = schema.get("properties") or {}
-        for key in sorted(set(props) - set(data)):
-            issues.append(f"{where}.{key}: 字段消失")
-        for key in sorted(set(data) - set(props)):
-            issues.append(f"{where}.{key}: 新增字段")
+        if not ignore_missing:
+            for key in sorted(set(props) - set(data)):
+                issues.append(f"{where}.{key}: 字段消失")
+        if not ignore_new:
+            for key in sorted(set(data) - set(props)):
+                issues.append(f"{where}.{key}: 新增字段")
         for key, sub in props.items():
             if key in data:
-                issues.extend(drift(sub, data[key], f"{where}.{key}"))
+                issues.extend(drift(sub, data[key], f"{where}.{key}",
+                                    ignore_new, ignore_missing, ignore_type))
     elif expected == "array" and isinstance(data, list):
         sub = schema.get("items") or {}
         if sub and data:
-            issues.extend(drift(sub, data[0], f"{where}[0]"))
+            issues.extend(drift(sub, data[0], f"{where}[0]",
+                                ignore_new, ignore_missing, ignore_type))
     return issues
 
 
