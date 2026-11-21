@@ -374,7 +374,9 @@ class ResponsePanel(QWidget):
         self.time_label = Label("", 11, theme().text_dim, mono_font=True)
         self.size_label = Label("", 11, theme().text_faint, mono_font=True)
         self.type_label = Label("", 11, theme().text_faint, mono_font=True)
-        self.url_label = Label("", 10.5, theme().text_faint, mono_font=True)
+        # 最终请求地址不再占头部一行（地址栏里本来就有）：它一长就把
+        # 状态码/耗时挤成一团。改为挂在状态胶囊的悬浮提示上，信息不丢。
+        self._resp_url = ""
 
         self.find_btn = icon_button("search", "在响应中查找  ⌘F", 26, 14)
         self.find_btn.clicked.connect(self.toggle_find)
@@ -412,8 +414,6 @@ class ResponsePanel(QWidget):
         hl.setSpacing(8)
         hl.addWidget(self.meta, 0, Qt.AlignmentFlag.AlignVCenter)
         hl.addStretch(1)
-        hl.addWidget(self.url_label)
-        hl.addSpacing(6)
         hl.addWidget(self.find_btn)
         hl.addWidget(self.copy_btn)
         hl.addWidget(self.save_btn)
@@ -444,8 +444,9 @@ class ResponsePanel(QWidget):
         tl = QHBoxLayout(self.tabs_row)
         tl.setContentsMargins(6, 0, 12, 0)
         tl.setSpacing(0)
-        tl.addWidget(self.tabs, 0)
-        tl.addStretch(1)
+        # 标签行必须吃掉整行的剩余宽度：之前给了 0 伸缩 + 末尾 addStretch，
+        # 自适应标签只能拿 sizeHint（160px），明明放得下也会立刻折叠成「…」。
+        tl.addWidget(self.tabs, 1)
         # 格式 / 编码切换：与主题其他小按钮同一套自绘样式；只在「美化」页出现。
         # 去掉胶囊边框和填充，只留文字 + 箭头，和其余工具行保持同一套扁平语言。
         self.fmt_btn = Button("Auto", "chevron_down", kind="ghost", height=24,
@@ -1004,9 +1005,7 @@ class ResponsePanel(QWidget):
         self.sse_view.strip.setVisible(self._realtime_kind == "sse")
         self.sse_view.pause_btn.setVisible(self._realtime_kind == "sse")
         self._set_actions_enabled(False)
-        self.url_label.setVisible(bool(url))
-        self.url_label.setText(url)
-        self.url_label.setToolTip(url)
+        self._set_resp_url(url or "")
         session = session or {}
         view.set_frames(session.get("log") or [])
         self.ws_set_state(session.get("state", "idle"),
@@ -1086,6 +1085,51 @@ class ResponsePanel(QWidget):
             self.fmt_btn.hide()
             self.enc_btn.hide()
 
+    def _fit_head(self) -> None:
+        """按头部实际宽度取舍指标，窄面板下绝不把文字叠在一起。
+
+        状态码胶囊与耗时是必看项；「大小 / 类型」是可选项，空间不够就先收起来
+        （「更多」菜单里仍能拿到完整信息），而不是让 QHBoxLayout 把标签挤重叠。
+
+        这里用各控件自己的 sizeHint 逐项累加来算，不能读 meta.sizeHint() ——
+        刚 setVisible 的那一刻布局缓存还没刷新，会少算掉整组宽度。
+        """
+        if not self.head.isVisible():
+            return
+        has = self.response is not None
+        # 四个图标按钮始终按「会出现」来占位：它们和响应一起显示/隐藏
+        buttons = sum(b.sizeHint().width() + 8 for b in
+                      (self.find_btn, self.copy_btn, self.save_btn, self.more_btn))
+        avail = (self.width() or self.head.width()) - buttons - 34
+        # 胶囊宽度取实际钉死的宽度：刚 set_text 过 sizeHint 可能还是旧值
+        # 耗时在 set_response 里是后写入的，这里按「一定放得下」的宽度预留，
+        # 不能读当下可能还是空字符串的 sizeHint。
+        time_w = max(self.time_label.sizeHint().width(), 78)
+        base = max(self.pill.width(), self.pill.sizeHint().width()) + 22 + time_w
+        need_size = self.size_label.sizeHint().width() + 26
+        need_type = self.type_label.sizeHint().width() + 26
+
+        self.size_label.setVisible(has)
+        self.type_label.setVisible(has)
+        self.dot1.setVisible(has)
+        self.dot2.setVisible(has)
+        if has and base + need_size + need_type > avail:
+            self.type_label.hide()
+            self.dot2.hide()
+        if has and base + need_size > avail:
+            self.size_label.hide()
+            self.dot1.hide()
+        self.dot3.setVisible(self.type_label.isVisible() and bool(self.node_label.text()))
+
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        self._fit_head()
+
+    def _set_resp_url(self, url: str) -> None:
+        """记住最终请求地址（重定向 / Mock 后用得上），只做状态胶囊的悬浮提示。"""
+        self._resp_url = url or ""
+        self.pill.setToolTip(self._resp_url)
+
     def _set_dots(self, on: bool) -> None:
         self.dot1.setVisible(on)
         self.dot2.setVisible(on)
@@ -1127,11 +1171,10 @@ class ResponsePanel(QWidget):
         self.tabs_row.hide()
         self.meta.hide()
         self._set_head_visible(False)
-        self.url_label.hide()
         self.time_label.setText("")
         self.size_label.setText("")
         self.type_label.setText("")
-        self.url_label.setText("")
+        self._set_resp_url("")
         self._set_metrics_visible(False)
         self.dot3.hide()
         self._set_actions_enabled(False)
@@ -1175,8 +1218,7 @@ class ResponsePanel(QWidget):
         self.time_label.setText("")
         self.size_label.setText("")
         self.type_label.setText("")
-        self.url_label.setText("")
-        self.url_label.hide()
+        self._set_resp_url("")
         self._set_metrics_visible(False)
         self._set_dots(False)
         self._set_actions_enabled(False)
@@ -1196,7 +1238,7 @@ class ResponsePanel(QWidget):
         self.time_label.setText("")
         self.size_label.setText("")
         self.type_label.setText("")
-        self.url_label.hide()
+        self._set_resp_url("")
         self._set_metrics_visible(False)
         self._set_dots(False)
         self._set_actions_enabled(False)
@@ -1273,15 +1315,15 @@ class ResponsePanel(QWidget):
         self.sse_view.pause_btn.hide()
         self._set_metrics_visible(True)
         self._set_dots(True)
-        self.url_label.show()
 
         code = resp.status
         self.pill.set_text(f"{code} {resp.reason}".strip())
         self.pill.set_color(status_color(code))
         self.size_label.setText(human_size(resp.size))
         self.type_label.setText(ctype_label(resp.content_type))
-        self.url_label.setText(resp.url)
-        self.url_label.setToolTip(resp.url)
+        self._set_resp_url(resp.url or "")
+        self._fit_head()
+        QTimer.singleShot(0, self._fit_head)
 
         body = self._decode_current()
         self._body_text = body
@@ -1670,14 +1712,11 @@ class ResponsePanel(QWidget):
     def _on_tabs_more(self, global_pos) -> None:
         """标签被折叠时，「更多」按钮弹出完整列表（含徽标计数）。"""
         items = []
-        for key, label in self.tabs.all_items():
-            badge = 0
-            for item in self.tabs._items:
-                if item["key"] == key:
-                    badge = item.get("badge") or 0
-                    break
+        for key, label, badge in self.tabs.hidden_items():
             shown = i18n.tr(label) + (f"  {badge}" if badge else "")
             items.append((key, shown, None, None))
+        if not items:
+            return
         if self._tabs_menu is None:
             self._tabs_menu = ChoiceMenu(items, self.tabs.current(), self, width=176)
             self._tabs_menu.picked.connect(self._on_tab)
@@ -1762,7 +1801,7 @@ class ResponsePanel(QWidget):
         if chosen is a_toggle:
             self.wsActionRequested.emit("disconnect" if connected else "connect")
         elif chosen is a_copy_url:
-            url = self.url_label.text()
+            url = self._resp_url
             if url:
                 QApplication.clipboard().setText(url)
                 self.requestSaveBody.emit(b"", "copied")

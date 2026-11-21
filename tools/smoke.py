@@ -4593,9 +4593,59 @@ def main() -> int:
         cv.deleteLater()
         return 0
 
+    def step43() -> int:
+        # v1.0.87：更多按钮只在溢出时出现且只列被折叠项 / 胶囊令牌色 /
+        # 响应头不再塞 URL / OAuth 高级区默认收起
+        from app.response_panel import ResponsePanel
+        from app.widgets import Pill, SegmentedTabs
+        from app.theme import theme as _theme
+
+        items = [(f"k{i}", f"标签{i}") for i in range(8)]
+        tabs = SegmentedTabs(items, style="underline", height=30, pad_h=9,
+                             font_size=12, adaptive=True)
+        tabs.resize(1200, 30)
+        check("放得下时没有更多按钮", tabs._more_rect.isNull()
+              and tabs.hidden_items() == [])
+        tabs.resize(300, 30)
+        vis = set(tabs._visible())
+        hidden = [k for k, _l, _b in tabs.hidden_items()]
+        check("更多只列被折叠的标签",
+              bool(hidden) and all(k not in [items[i][0] for i in vis] for k in hidden))
+
+        # 胶囊：传令牌名时必须解析成主题色，不能落到 QColor 无效值（画出来变黑）
+        pill = Pill("未引用", color="text_faint", height=17)
+        check("胶囊支持主题令牌名", pill._color == _theme().text_faint
+              and pill._token == "text_faint", str(pill._color))
+
+        rp = ResponsePanel()
+        rp.show()
+        app.processEvents()
+        check("响应头不再单独占一行 URL",
+              not hasattr(rp, "url_label") and hasattr(rp, "_resp_url"))
+
+        from app.request_panel import AuthPage
+        page = AuthPage(store)
+        page.show()
+        page._on_type("oauth2")
+        app.processEvents()
+        check("OAuth 高级区默认收起", page.oauth_adv_body.isHidden())
+        check("OAuth 常用区字段精简",
+              not page.oauth_row_cred.isHidden()
+              and page.oauth_row_userpass.isHidden()
+              and page.oauth_code.isHidden())
+        page.oauth_grant.set_current("implicit", emit=True)
+        app.processEvents()
+        check("手动模式自动展开高级区", page.oauth_adv_body.isHidden() is False)
+        page.oauth_grant.set_current("client_credentials", emit=True)
+        app.processEvents()
+        check("离开手动模式后高级区收回", page.oauth_adv_body.isHidden())
+        page.deleteLater()
+        rp.deleteLater()
+        return 0
+
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39, step40, step41, step42]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39, step40, step41, step42, step43]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

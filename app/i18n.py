@@ -2531,3 +2531,11 @@ _EN.update({
     "字段消失": "Missing fields",
     "未定义": "Undefined",
 })
+
+# ---------------------------------------------------------------- v1.0.87：OAuth 高级区
+_EN.update({
+    "高级设置": "Advanced",
+    "收起高级": "Hide advanced",
+    "Secret 发送位置 / Token 参数名与放置 / PKCE / State / Refresh Token":
+        "Secret placement / token parameter and location / PKCE / state / refresh token",
+})

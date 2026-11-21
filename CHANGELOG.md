@@ -1,5 +1,20 @@
 # What's Changed
 
+## v1.0.87 — 2026-11-21
+
+**Fixed**
+- The response tab "More" button only appears when the tabs genuinely do not fit, and the menu lists only the folded tabs. When everything fits, every tab is shown as-is.
+- Folded tabs are packed tightly instead of leaving a hole where the hidden ones were, and the active tab is always pulled into view.
+- Response header no longer overlaps: the final request URL no longer occupies its own line (it moved to the status pill's tooltip), and "size / type" collapse first when the panel narrows, so the status code and latency stay intact.
+- The auth page no longer stretches to 800px because of long group descriptions, which used to clip the whole page after switching to a split layout. Descriptions wrap, field minimum width is smaller, and the auth-type tabs fold into "More" too.
+- Variable inspector badges such as "Unused / Conflict / Sensitive" were passed theme token names, which were treated as invalid colours and painted black. They now resolve through the theme.
+
+**Added**
+- OAuth 2.0 gets a collapsed "Advanced" section holding secret placement, token parameter and placement, PKCE, state and refresh token. Only the fields the selected grant needs stay in the main area; manual token mode expands the advanced section automatically.
+
+**Tests**
+- Smoke test group 43 covering overflow-only "More", pill token colours, the removed header URL, and the collapsed OAuth advanced section.
+
 ## v1.0.86 — 2026-11-21
 
 **Fixed**

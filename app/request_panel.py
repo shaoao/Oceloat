@@ -28,6 +28,7 @@ from .theme import C, S, method_color, font, mono, theme
 from .widgets import (
     Button,
     Card,
+    ChoiceMenu,
     Divider,
     ElideLabel,
     FadeStack,
@@ -861,10 +862,15 @@ class AuthPage(QWidget):
         self._loading = False
         self._type = "none"
         self._request_id = ""
+        self._oauth_was_manual = False
+        self._oauth_auto_adv = False
 
+        # 自适应：认证方式有 9 种，面板变窄时多余的收进「更多」，不硬挤成一团
         self.types = SegmentedTabs([(k, l) for k, l in AUTH_TYPES], style="pill", height=28,
-                                   font_size=12, pad_h=11)
+                                   font_size=12, pad_h=11, adaptive=True)
         self.types.changed.connect(self._on_type)
+        self.types.more_clicked.connect(self._on_types_more)
+        self._types_menu: Optional[ChoiceMenu] = None
 
         self.bearer_token = self._field("Token", "粘贴 Bearer Token，例如 eyJhbGciOi…")
         self.basic_user = self._field("用户名", "username")
@@ -942,9 +948,11 @@ class AuthPage(QWidget):
 
         self.oauth_grant = SegmentedTabs(
             [(g, GRANT_LABELS[g]) for g in GRANTS], style="pill", height=26,
-            font_size=11, pad_h=9)
+            font_size=11, pad_h=9, adaptive=True)
         self.oauth_grant.set_current("client_credentials", emit=False)
         self.oauth_grant.changed.connect(self._on_oauth_grant)
+        self.oauth_grant.more_clicked.connect(self._on_grant_more)
+        self._grant_menu: Optional[ChoiceMenu] = None
         self.oauth_issuer = self._field("Issuer", "https://example.com（OIDC 自动发现）")
         self.oauth_auth_url = self._field("授权地址", "https://example.com/oauth/authorize")
         self.oauth_token_url = self._field("Token 地址", "https://example.com/oauth/token")
@@ -994,40 +1002,57 @@ class AuthPage(QWidget):
         oauth_inner = QWidget()
         ol = QVBoxLayout(oauth_inner)
         ol.setContentsMargins(0, 0, 0, 0)
-        ol.setSpacing(9)
+        ol.setSpacing(8)
         ol.addWidget(Label("授权方式", 11.3, theme().text_dim, weight=QFont.Weight.DemiBold))
         ol.addWidget(self.oauth_grant)
-        ol.addWidget(self.oauth_issuer)
-        ol.addWidget(self.oauth_discover_btn)
+        # 常用区：每种 grant 只铺自己必需的几行，其余收进「高级设置」
         ol.addWidget(self.oauth_auth_url)
         ol.addWidget(self.oauth_token_url)
-        ol.addWidget(self.oauth_client_id)
-        ol.addWidget(self.oauth_client_secret)
+        self.oauth_row_cred = HBox(self.oauth_client_id, self.oauth_client_secret, 1, spacing=8)
+        ol.addWidget(self.oauth_row_cred)
+        ol.addWidget(self.oauth_redirect_uri)
+        ol.addWidget(self.oauth_code)
+        self.oauth_row_userpass = HBox(self.oauth_username, self.oauth_password, 1, spacing=8)
+        ol.addWidget(self.oauth_row_userpass)
+        ol.addWidget(self.oauth_scope)
+        ol.addWidget(self.oauth_access_token)
+        # 常用区只放「现在就要按」的两颗；OIDC 发现与清缓存属于低频操作，
+        # 收进高级区，窄面板下按钮行也不会挤成两行或被裁掉
+        self.oauth_actions = HBox(self.oauth_open_btn, self.oauth_fetch_btn, 1, spacing=6)
+        ol.addWidget(self.oauth_actions)
+
+        # 高级区：Secret 位置、Token 参数名/放置、PKCE、State、Refresh —— 默认收起
         self.oauth_secret_pos_label = Label("Secret 发送位置", 11.3, theme().text_dim,
                                             weight=QFont.Weight.DemiBold)
-        ol.addWidget(self.oauth_secret_pos_label)
-        ol.addWidget(self.oauth_token_auth_method)
-        ol.addWidget(self.oauth_scope)
-        ol.addWidget(self.oauth_username)
-        ol.addWidget(self.oauth_password)
-        ol.addWidget(self.oauth_code)
-        ol.addWidget(self.oauth_redirect_uri)
-        ol.addWidget(self.oauth_code_verifier)
-        ol.addWidget(self.oauth_state)
-        ol.addWidget(self.oauth_state_returned)
-        ol.addWidget(HBox(self.oauth_pkce_btn, self.oauth_open_btn,
-                          self.oauth_fetch_btn, self.oauth_clear_btn, 1, spacing=6))
-        ol.addWidget(self.oauth_access_token)
-        ol.addWidget(self.oauth_refresh_token)
         self.oauth_placement_label = Label("Token 放在哪里", 11.3, theme().text_dim,
                                            weight=QFont.Weight.DemiBold)
-        ol.addWidget(self.oauth_placement_label)
-        ol.addWidget(self.oauth_placement)
-        ol.addWidget(self.oauth_token_key)
+        self.oauth_adv_body = QWidget()
+        av = QVBoxLayout(self.oauth_adv_body)
+        av.setContentsMargins(0, 4, 0, 0)
+        av.setSpacing(8)
+        av.addWidget(self.oauth_issuer)
+        av.addWidget(HBox(self.oauth_discover_btn, self.oauth_clear_btn, 1, spacing=6))
+        av.addWidget(self.oauth_secret_pos_label)
+        av.addWidget(self.oauth_token_auth_method)
+        av.addWidget(self.oauth_token_key)
+        av.addWidget(self.oauth_placement_label)
+        av.addWidget(self.oauth_placement)
+        av.addWidget(self.oauth_refresh_token)
+        av.addWidget(self.oauth_code_verifier)
+        av.addWidget(self.oauth_state)
+        av.addWidget(self.oauth_state_returned)
+        av.addWidget(self.oauth_pkce_btn)
+        self.oauth_adv_body.setVisible(False)
+        self.oauth_adv_btn = Button("高级设置", "chevron_right", kind="ghost", height=24,
+                                    padding=6, icon_size=11, gap=5, font_size=11.5,
+                                    tooltip="Secret 发送位置 / Token 参数名与放置 / PKCE / State / Refresh Token")
+        self.oauth_adv_btn.clicked.connect(self._toggle_oauth_adv)
+        ol.addWidget(self.oauth_adv_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        ol.addWidget(self.oauth_adv_body)
         ol.addWidget(self.oauth_status)
         self.oauth_box = self._group(
             "OAuth 2.0",
-            "授权码 + PKCE / 客户端凭证 / 密码 / 手动 Token；自动缓存、过期刷新、OIDC 发现与 State 校验。",
+            "授权码 + PKCE / 客户端凭证 / 密码 / 手动 Token；Token 自动缓存并在过期前刷新。",
             oauth_inner)
 
         # AWS SigV4：每次发送前基于最终请求重新签名
@@ -1113,7 +1138,8 @@ class AuthPage(QWidget):
         i18n.placeholder(e, ph or placeholder)
         e.setFont(mono(11.8))
         e.setFixedHeight(30)
-        e.setMinimumWidth(260)
+        # 认证页有并排两列的字段：单个最少宽度给太大，分栏后整页会被横向裁掉
+        e.setMinimumWidth(140)
         if password:
             e.setEchoMode(QLineEdit.EchoMode.Password)
         e.textChanged.connect(self._on_change)
@@ -1124,8 +1150,13 @@ class AuthPage(QWidget):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 6, 0, 0)
         lay.setSpacing(9)
+        desc_label = Label(desc, 11.5, theme().text_faint)
+        # 说明文字必须能换行：否则它把整页的最小宽度撑到 800+，
+        # 左右分栏后页面被横向裁掉，页签行也跟着「消失」。
+        desc_label.setWordWrap(True)
+        desc_label.setMinimumWidth(1)
         head = VBox(Label(title, 12.5, theme().text, weight=QFont.Weight.DemiBold),
-                    Label(desc, 11.5, theme().text_faint), spacing=3)
+                    desc_label, spacing=3)
         lay.addWidget(head)
         for item in widgets:
             if isinstance(item, QLineEdit):
@@ -1147,6 +1178,41 @@ class AuthPage(QWidget):
             self._on_oauth_grant()
         if not self._loading:
             self.changed.emit()
+
+    def _on_grant_more(self, global_pos) -> None:
+        """授权方式放不下时，「更多」只列被折叠的那几种。"""
+        items = [(k, i18n.tr(label), None, None)
+                 for k, label, _badge in self.oauth_grant.hidden_items()]
+        if not items:
+            return
+        if self._grant_menu is None:
+            self._grant_menu = ChoiceMenu(items, self.oauth_grant.current(), self, width=168)
+            self._grant_menu.picked.connect(
+                lambda k: self.oauth_grant.set_current(k, emit=True))
+        else:
+            self._grant_menu._items = [list(it) for it in items]
+            self._grant_menu._src_items = [tuple(it) for it in items]
+            self._grant_menu.set_current(self.oauth_grant.current())
+        pos = global_pos if isinstance(global_pos, QPoint) else QPoint(
+            int(global_pos.x()), int(global_pos.y()))
+        self._grant_menu.popup(pos)
+
+    def _on_types_more(self, global_pos) -> None:
+        """认证方式放不下时，「更多」只列出被折叠的那几种。"""
+        items = [(k, i18n.tr(label), None, None)
+                 for k, label, _badge in self.types.hidden_items()]
+        if not items:
+            return
+        if self._types_menu is None:
+            self._types_menu = ChoiceMenu(items, self.types.current(), self, width=168)
+            self._types_menu.picked.connect(lambda k: self.types.set_current(k, emit=True))
+        else:
+            self._types_menu._items = [list(it) for it in items]
+            self._types_menu._src_items = [tuple(it) for it in items]
+            self._types_menu.set_current(self.types.current())
+        pos = global_pos if isinstance(global_pos, QPoint) else QPoint(
+            int(global_pos.x()), int(global_pos.y()))
+        self._types_menu.popup(pos)
 
     def _on_jwt_mode(self, mode: str) -> None:
         self.jwt_pages.set_current(mode)
@@ -1204,29 +1270,35 @@ class AuthPage(QWidget):
         self.digest_status.setText(i18n.tr(
             "收到 401 Digest 挑战后自动重发，nonce / nc 由 Ocelot 管理。"))
 
+    def _toggle_oauth_adv(self) -> None:
+        """展开 / 收起 OAuth 高级设置（默认收起，常用区只留必要字段）。"""
+        show = not self.oauth_adv_body.isVisible()
+        self.oauth_adv_body.setVisible(show)
+        self.oauth_adv_btn.set_icon("chevron_down" if show else "chevron_right")
+        self.oauth_adv_btn.setText("收起高级" if show else "高级设置")
+
     def _on_oauth_grant(self, _key: str = "") -> None:
         """按授权方式精确条件渲染：只显示该 grant 真正需要的字段。
 
-        之前只是「手动 vs 非手动」二分，导致授权码模式下仍显示密码模式的用户名、
-        客户端凭证下显示一堆用不到的授权字段 —— 页面显得臃肿且容易误填。
+        常用区只铺「必须填的几行」，PKCE / State / Token 参数名这类低频项
+        统一收进默认收起的「高级设置」—— 之前 20 多个字段一次性铺开，
+        页面长得像一堵墙，真正要填的反倒找不到。
         """
         grant = self.oauth_grant.current()
         manual = grant in ("implicit", "manual")
         auth_code = grant == "authorization_code"
         password = grant == "password"
 
-        # 所有「换取 token」的模式都需要的公共字段
-        common = [self.oauth_issuer, self.oauth_discover_btn,
-                  self.oauth_token_url, self.oauth_client_id,
-                  self.oauth_client_secret, self.oauth_secret_pos_label,
-                  self.oauth_token_auth_method, self.oauth_scope,
-                  self.oauth_refresh_token, self.oauth_clear_btn,
-                  self.oauth_placement_label, self.oauth_placement,
-                  self.oauth_token_key, self.oauth_fetch_btn]
+        # 换取 token 的模式才有的公共字段
+        common = [self.oauth_token_url, self.oauth_row_cred, self.oauth_client_id,
+                  self.oauth_client_secret, self.oauth_scope, self.oauth_actions,
+                  self.oauth_fetch_btn, self.oauth_discover_btn, self.oauth_clear_btn,
+                  self.oauth_issuer, self.oauth_secret_pos_label,
+                  self.oauth_token_auth_method, self.oauth_refresh_token]
         for widget in common:
             widget.setVisible(not manual)
 
-        # 仅授权码 + PKCE 需要的字段
+        # 仅授权码 + PKCE
         code_only = [self.oauth_auth_url, self.oauth_code, self.oauth_redirect_uri,
                      self.oauth_code_verifier, self.oauth_state,
                      self.oauth_state_returned, self.oauth_pkce_btn,
@@ -1234,12 +1306,31 @@ class AuthPage(QWidget):
         for widget in code_only:
             widget.setVisible(auth_code)
 
-        # 仅密码模式需要的字段
+        # 仅密码模式
+        self.oauth_row_userpass.setVisible(password)
         self.oauth_username.setVisible(password)
         self.oauth_password.setVisible(password)
 
-        # 手动 Token 模式：只留粘贴框与放置位置
+        # 手动 / 隐式：只留粘贴框，以及放在哪里的选择
         self.oauth_access_token.setVisible(manual)
+        self.oauth_token_key.setVisible(True)
+        self.oauth_placement_label.setVisible(True)
+        self.oauth_placement.setVisible(True)
+        # 手动模式要自己指定 Token 放哪（高级区里的两项就是全部必填项），
+        # 切过来时自动展开，免得用户以为「什么都不能填」。
+        if manual and not self._oauth_was_manual:
+            self.oauth_adv_body.setVisible(True)
+            self.oauth_adv_btn.set_icon("chevron_down")
+            self.oauth_adv_btn.setText("收起高级")
+            self._oauth_auto_adv = True
+        elif not manual and self._oauth_auto_adv:
+            # 高级区是刚才为手动模式自动展开的：换回其他 grant 就收起来，
+            # 别让「自动打开」变成一直占着半屏的常开区域。
+            self.oauth_adv_body.setVisible(False)
+            self.oauth_adv_btn.set_icon("chevron_right")
+            self.oauth_adv_btn.setText("高级设置")
+            self._oauth_auto_adv = False
+        self._oauth_was_manual = manual
         self._refresh_oauth_status()
         if not self._loading:
             self.changed.emit()

@@ -876,6 +876,7 @@ class SegmentedTabs(QWidget):
         self._adaptive = adaptive
         self._more_hover = False
         self._more_rect = QRectF()
+        self._packed: List[QRectF] = []      # 折叠后重新紧排的实际绘制矩形
         self.setFixedHeight(height)
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -1008,6 +1009,7 @@ class SegmentedTabs(QWidget):
         """
         rects = self._rects()
         n = len(rects)
+        self._packed = [QRectF(r) for r in rects]
         if not self._adaptive or n == 0:
             self._more_rect = QRectF()
             return list(range(n))
@@ -1017,22 +1019,30 @@ class SegmentedTabs(QWidget):
         if rects[-1].right() + 2 <= avail:
             self._more_rect = QRectF()
             return list(range(n))
-        # 需要折叠：从前往后收，直到下一项放不下；留出更多按钮
+        # 需要折叠：从前往后按「打包后」的宽度收，留出更多按钮的位置
         limit = avail - more_w - 2
         vis: List[int] = []
+        acc = 0.0
         for i, r in enumerate(rects):
-            if r.right() <= limit:
-                vis.append(i)
-            else:
+            add = r.width() + (self._spacing * 2 if vis else 0)
+            if acc + add > limit:
                 break
-        if not vis:  # 极端窄：至少留当前项
+            vis.append(i)
+            acc += add
+        if not vis:  # 极端窄：至少留一项
             vis = [0]
-        # 当前项若被折叠，换掉最后一项把它显示出来
-        for i, item in enumerate(self._items):
-            if item["key"] == self._current and i not in vis:
-                vis[-1] = i
-                break
-        x = rects[vis[-1]].right() + 2
+        # 当前项若被折叠，换掉最后一项把它显示出来（否则用户看不到自己所在的页）
+        cur = next((i for i, item in enumerate(self._items)
+                    if item["key"] == self._current), None)
+        if cur is not None and cur not in vis:
+            vis[-1] = cur
+        # 折叠后剩下的项要紧密排布：否则被藏起来的位置会留一块空洞
+        x = 0.0
+        packed = [QRectF(r) for r in rects]
+        for i in vis:
+            packed[i] = QRectF(x, 0, rects[i].width(), self.height())
+            x += rects[i].width() + self._spacing * 2
+        self._packed = packed
         self._more_rect = QRectF(x, 2, more_w, self.height() - 4)
         return vis
 
@@ -1040,8 +1050,19 @@ class SegmentedTabs(QWidget):
         """给「更多」菜单用：全部 (key, 原文标签)。"""
         return [(i["key"], i["label"]) for i in self._items]
 
+    def hidden_items(self) -> List[Tuple[str, str, int]]:
+        """真正被折叠掉的标签 (key, 原文标签, 徽标数)。
+
+        「更多」菜单只列这些：能显示全的时候根本不该出现这个按钮，
+        出现了也只该列放不下的那几项，而不是把全部标签重列一遍。
+        """
+        vis = set(self._visible())
+        return [(i["key"], i["label"], i.get("badge") or 0)
+                for idx, i in enumerate(self._items) if idx not in vis]
+
     def _snap_indicator(self) -> None:
-        rects = self._rects()
+        self._visible()
+        rects = self._packed or self._rects()
         _anim_stop(self._fade_anim)
         self._fade_t = 1.0
         self._prev_key = ""
@@ -1070,7 +1091,8 @@ class SegmentedTabs(QWidget):
         anim.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def _animate_indicator(self) -> None:
-        rects = self._rects()
+        self._visible()
+        rects = self._packed or self._rects()
         target = None
         for i, item in enumerate(self._items):
             if item["key"] == self._current and i < len(rects):
@@ -1117,8 +1139,9 @@ class SegmentedTabs(QWidget):
         more = self._more_rect.contains(pos) if not self._more_rect.isNull() else False
         idx = -1
         if not more:
-            for i in self._visible():
-                if self._rects()[i].contains(pos):
+            vis = self._visible()
+            for i in vis:
+                if self._packed[i].contains(pos):
                     idx = i
                     break
         if idx != self._hover or more != self._more_hover:
@@ -1138,9 +1161,8 @@ class SegmentedTabs(QWidget):
         if not self._more_rect.isNull() and self._more_rect.contains(pos):
             self.more_clicked.emit(QPointF(self.mapToGlobal(pos.toPoint())))
             return
-        rects = self._rects()
         for i in self._visible():
-            if rects[i].contains(pos):
+            if self._packed[i].contains(pos):
                 self.set_current(self._items[i]["key"], emit=True)
                 return
 
@@ -1150,9 +1172,9 @@ class SegmentedTabs(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        rects = self._rects()
-        moving = _anim_running(self._anim) or self._fade_t < 0.999
         visible = self._visible()
+        rects = self._packed or self._rects()
+        moving = _anim_running(self._anim) or self._fade_t < 0.999
         for i in visible:
             item, r = self._items[i], rects[i]
             active = item["key"] == self._current
@@ -1412,6 +1434,21 @@ class Card(QFrame):
         p.end()
 
 
+def _token_color(color) -> Tuple[Optional[str], Optional[str]]:
+    """颜色参数归一化：传令牌名（"text_faint"）时换成当前主题的真实色值。
+
+    返回 (颜色值, 令牌名)。令牌名要留着 —— 切主题时 refresh_theme 靠它重新取色。
+    """
+    if isinstance(color, str) and color.startswith(("text", "accent", "danger",
+                                                    "success", "warning", "info",
+                                                    "window", "panel", "elevated",
+                                                    "border", "hover", "selected")):
+        value = getattr(theme(), color, None)
+        if isinstance(value, str):
+            return value, color
+    return color, None
+
+
 def infer_token(color) -> Optional[str]:
     """把具体的颜色值反查为主题令牌名，便于切换主题时重新着色。"""
     if color is None:
@@ -1503,8 +1540,11 @@ class Pill(QWidget):
                  height: int = 19, radius: int = 6, dot: bool = False):
         super().__init__(parent)
         self._text = text
+        # 允许直接传主题令牌名（"text_faint" / "danger"…）：之前只认颜色值，
+        # 令牌名会落到 QColor(name) 变成无效色 → 画出来是纯黑，暗色主题下看不清。
+        color, token = _token_color(color)
         self._color = color
-        self._token = infer_token(color)
+        self._token = token if token else infer_token(color)
         # 响应状态胶囊左侧的状态灯：颜色跟着胶囊语义色走（灰=未连接、绿=2xx…）
         self._dot = dot
         self._font = mono(font_size, QFont.Weight.DemiBold) if mono_font else font(font_size, QFont.Weight.DemiBold)
@@ -1527,7 +1567,8 @@ class Pill(QWidget):
         w = int(fm.horizontalAdvance(text) + self._pad * 2 + 6)
         if self._dot:
             w += 16                       # 给左侧状态灯腾位置
-        self.setFixedWidth(max(w, self._pad * 2 + 12))
+        self._want_w = max(w, self._pad * 2 + 12)
+        self.setFixedWidth(self._want_w)
         h = max(self._min_height, int(fm.height() + 7))
         if self.height() != h:
             self.setFixedHeight(h)
@@ -1539,8 +1580,9 @@ class Pill(QWidget):
         self.update()
 
     def set_color(self, color: Optional[str]) -> None:
+        color, token = _token_color(color)
         self._color = color
-        self._token = infer_token(color)
+        self._token = token if token else infer_token(color)
         self.update()
 
     def refresh_theme(self) -> None:
@@ -1551,8 +1593,9 @@ class Pill(QWidget):
         self.update()
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        fm = QFontMetricsF(self._font)
-        return QSize(int(fm.horizontalAdvance(self._title()) + self._pad * 2), self.height())
+        # 必须和 _sync_size 钉死的宽度一致：算小了会让父布局把后面的标签
+        # 排到胶囊底下（状态码和耗时叠在一起），算大了又会平白多留空隙。
+        return QSize(getattr(self, "_want_w", 0), self.height())
 
     def _title(self) -> str:
         return i18n.tr(self._text) if isinstance(self._text, str) else str(self._text)

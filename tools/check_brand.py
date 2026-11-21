@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.86", VERSION == "1.0.86", VERSION)
-check("更新内容是 1.0.86", CHANGELOG[0]["version"] == "1.0.86")
+check("版本 1.0.87", VERSION == "1.0.87", VERSION)
+check("更新内容是 1.0.87", CHANGELOG[0]["version"] == "1.0.87")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -846,6 +846,26 @@ check("更新内容写了这轮改动",
       any("折叠" in x for x in ALL_ITEMS)
       and any("条件渲染" in x for x in ALL_ITEMS)
       and any("主题色" in x for x in ALL_ITEMS))
+
+print("\n[1.0.87 新增]")
+_wg_87 = (ROOT / "app" / "widgets.py").read_text(encoding="utf-8")
+_rp_87 = (ROOT / "app" / "response_panel.py").read_text(encoding="utf-8")
+_rq_87 = (ROOT / "app" / "request_panel.py").read_text(encoding="utf-8")
+_i18_87 = (ROOT / "app" / "i18n.py").read_text(encoding="utf-8")
+check("更多按钮只在溢出时出现", "def hidden_items" in _wg_87
+      and "if not items:\n            return" in _rp_87)
+check("折叠后标签紧排", "self._packed" in _wg_87 and "packed[i] = QRectF(x" in _wg_87)
+check("响应头不再占一行 URL", "url_label" not in _rp_87 and "_set_resp_url" in _rp_87)
+check("头部按宽度取舍指标", "def _fit_head" in _rp_87 and "need_type" in _rp_87)
+check("胶囊支持主题令牌名", "_token_color" in _wg_87 and "def _token_color" in _wg_87)
+check("OAuth 高级区默认收起", "oauth_adv_body" in _rq_87
+      and "def _toggle_oauth_adv" in _rq_87)
+check("1.0.87 英文词条齐全", all(k in _i18_87 for k in (
+      '"高级设置"', '"收起高级"')))
+check("更新内容写了这轮改动",
+      any("只列被折叠" in x for x in ALL_ITEMS)
+      and any("高级设置" in x for x in ALL_ITEMS)
+      and any("悬浮提示" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:
