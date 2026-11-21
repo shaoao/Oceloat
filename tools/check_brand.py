@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.87", VERSION == "1.0.87", VERSION)
-check("更新内容是 1.0.87", CHANGELOG[0]["version"] == "1.0.87")
+check("版本 1.0.88", VERSION == "1.0.88", VERSION)
+check("更新内容是 1.0.88", CHANGELOG[0]["version"] == "1.0.88")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -853,7 +853,7 @@ _rp_87 = (ROOT / "app" / "response_panel.py").read_text(encoding="utf-8")
 _rq_87 = (ROOT / "app" / "request_panel.py").read_text(encoding="utf-8")
 _i18_87 = (ROOT / "app" / "i18n.py").read_text(encoding="utf-8")
 check("更多按钮只在溢出时出现", "def hidden_items" in _wg_87
-      and "if not items:\n            return" in _rp_87)
+      and "def popup_hidden_tabs" in _wg_87)
 check("折叠后标签紧排", "self._packed" in _wg_87 and "packed[i] = QRectF(x" in _wg_87)
 check("响应头不再占一行 URL", "url_label" not in _rp_87 and "_set_resp_url" in _rp_87)
 check("头部按宽度取舍指标", "def _fit_head" in _rp_87 and "need_type" in _rp_87)
@@ -866,6 +866,37 @@ check("更新内容写了这轮改动",
       any("只列被折叠" in x for x in ALL_ITEMS)
       and any("高级设置" in x for x in ALL_ITEMS)
       and any("悬浮提示" in x for x in ALL_ITEMS))
+
+print("\n[1.0.88 新增]")
+_cv_88 = (ROOT / "app" / "contract_view.py").read_text(encoding="utf-8")
+_wg_88 = (ROOT / "app" / "widgets.py").read_text(encoding="utf-8")
+_ce_88 = (ROOT / "app" / "code_editor.py").read_text(encoding="utf-8")
+_th_88 = (ROOT / "app" / "theme.py").read_text(encoding="utf-8")
+_rp_88 = (ROOT / "app" / "response_panel.py").read_text(encoding="utf-8")
+_i18_88 = (ROOT / "app" / "i18n.py").read_text(encoding="utf-8")
+_ai_88 = (ROOT / "app" / "ai.py").read_text(encoding="utf-8")
+check("契约页去掉漂移筛选", "SegmentedTabs" not in _cv_88 and "self.filter" not in _cv_88)
+check("漂移结果按需展开并可关闭", "def open_drift" in _cv_88 and "def close_drift" in _cv_88)
+check("契约结论固定在底部", "self.result_bar" in _cv_88 and "def _paint_result" in _cv_88)
+check("契约页窄了压短按钮文案", "def _sync_layout" in _cv_88 and "保存为契约" in _cv_88)
+check("响应头任意位置断行", "class HeaderRows(QTextBrowser)" in _rp_88
+      and "ScrollBarAlwaysOff" in _rp_88)
+check("响应头改用文档表格", "class HeaderRows(QTextBrowser)" in _rp_88)
+check("滚动条细且圆润",
+      "border-radius: 3px" in _th_88 and "width: 10px" in _th_88)
+check("One Dark Pro 精确色值",
+      _ce_88.count("#C678DD") >= 2 and "#98C379" in _ce_88
+      and "#D19A66" in _ce_88 and "#5C6370" in _ce_88 and "#E06C75" in _ce_88)
+check("代码底色走主题", 'code_bg="#282C34"' in _th_88 and "def _apply_colors" in _ce_88)
+check("徽标用主题色", "p.setPen(C(t.accent))" in _wg_88)
+check("AI 认识契约页", '"contract": "关注点：接口契约与字段漂移' in _ai_88
+      and 'ctx["contract"] = self.contract.ai_snapshot()' in _rp_88)
+check("1.0.88 英文词条齐全", all(k in _i18_88 for k in (
+      '"关闭漂移结果"', '"有 {n} 处字段漂移，点「检查漂移」查看"')))
+check("更新内容写了这轮改动",
+      any("字段漂移" in x for x in ALL_ITEMS)
+      and any("One Dark Pro" in x for x in ALL_ITEMS)
+      and any("滚动条" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

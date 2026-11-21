@@ -29,6 +29,7 @@ from .widgets import (
     Button,
     Card,
     ChoiceMenu,
+    popup_hidden_tabs,
     Divider,
     ElideLabel,
     FadeStack,
@@ -1179,40 +1180,14 @@ class AuthPage(QWidget):
         if not self._loading:
             self.changed.emit()
 
+    def _popup_more(self, attr: str, tabs, pos) -> None:
+        popup_hidden_tabs(self, attr, tabs, pos)
+
     def _on_grant_more(self, global_pos) -> None:
-        """授权方式放不下时，「更多」只列被折叠的那几种。"""
-        items = [(k, i18n.tr(label), None, None)
-                 for k, label, _badge in self.oauth_grant.hidden_items()]
-        if not items:
-            return
-        if self._grant_menu is None:
-            self._grant_menu = ChoiceMenu(items, self.oauth_grant.current(), self, width=168)
-            self._grant_menu.picked.connect(
-                lambda k: self.oauth_grant.set_current(k, emit=True))
-        else:
-            self._grant_menu._items = [list(it) for it in items]
-            self._grant_menu._src_items = [tuple(it) for it in items]
-            self._grant_menu.set_current(self.oauth_grant.current())
-        pos = global_pos if isinstance(global_pos, QPoint) else QPoint(
-            int(global_pos.x()), int(global_pos.y()))
-        self._grant_menu.popup(pos)
+        self._popup_more("_grant_menu", self.oauth_grant, global_pos)
 
     def _on_types_more(self, global_pos) -> None:
-        """认证方式放不下时，「更多」只列出被折叠的那几种。"""
-        items = [(k, i18n.tr(label), None, None)
-                 for k, label, _badge in self.types.hidden_items()]
-        if not items:
-            return
-        if self._types_menu is None:
-            self._types_menu = ChoiceMenu(items, self.types.current(), self, width=168)
-            self._types_menu.picked.connect(lambda k: self.types.set_current(k, emit=True))
-        else:
-            self._types_menu._items = [list(it) for it in items]
-            self._types_menu._src_items = [tuple(it) for it in items]
-            self._types_menu.set_current(self.types.current())
-        pos = global_pos if isinstance(global_pos, QPoint) else QPoint(
-            int(global_pos.x()), int(global_pos.y()))
-        self._types_menu.popup(pos)
+        self._popup_more("_types_menu", self.types, global_pos)
 
     def _on_jwt_mode(self, mode: str) -> None:
         self.jwt_pages.set_current(mode)
@@ -1936,11 +1911,18 @@ class RequestEditor(QWidget):
         self.urlbar.urlChanged.connect(self._on_url)
         self.node_btn = self.urlbar.node_btn
 
+        # 请求页签同样自适应：面板窄了把放不下的收进「…」，而不是把最后一个
+        # 「后置脚本」硬裁在右边（之前直接消失，用户以为页签没了）。
         self.tabs = SegmentedTabs(
-            HTTP_TABS, style="underline", height=32, pad_h=10, font_size=12.2)
+            HTTP_TABS, style="underline", height=32, pad_h=10, font_size=12.2,
+            adaptive=True)
         self.tabs.changed.connect(self._on_tab)
+        self.tabs.more_clicked.connect(self._on_tabs_more)
+        self._tabs_menu: Optional[ChoiceMenu] = None
         self.count_label = Label("", 10.5, theme().text_faint, mono_font=True)
-        tools = HBox(self.tabs, 1, spacing=8)
+        # 用 (widget, stretch) 形式：addWidget 不带伸缩因子，标签只会拿到
+        # sizeHint（160px）就被判定放不下，明明有整行宽度也只剩一个页签。
+        tools = HBox((self.tabs, 1), spacing=8)
 
         self.params = KVEditor("参数名", "值", empty_hint="添加查询参数", with_types=True,
                                allow_file=False)
@@ -2529,6 +2511,9 @@ class RequestEditor(QWidget):
                 return
         rows.append({"key": "Content-Type", "value": "application/json", "enabled": True})
         self.headers.set_rows(rows)
+
+    def _on_tabs_more(self, global_pos) -> None:
+        popup_hidden_tabs(self, "_tabs_menu", self.tabs, global_pos, width=182)
 
     def _on_more(self, anchor: QWidget) -> None:
         t = theme()

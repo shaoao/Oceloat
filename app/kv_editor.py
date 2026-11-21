@@ -852,8 +852,8 @@ class KVEditor(QWidget):
     def refresh_theme(self) -> None:
         t = theme()
         self._bulk_edit.setStyleSheet(
-            f"QPlainTextEdit {{ background: {t.code_bg}; border: 1px solid {S(t.border)};"
-            f" border-radius: 8px; padding: 8px; color: {t.text}; }}")
+            f"QPlainTextEdit {{ background: {t.code_bg}; color: {t.code_text}; border: 1px solid {S(t.border)};"
+            f" border-radius: 8px; padding: 8px; }}")
 
     # -------------------------------------------------- 智能粘贴
     def paste_text(self, text: str) -> bool:

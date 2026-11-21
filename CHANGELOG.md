@@ -1,5 +1,22 @@
 # What's Changed
 
+## v1.0.88 — 2026-11-21
+
+**Changed**
+- Contract page: the redundant "field drift" filter row is gone. Drift details now appear only after clicking **Check drift**, and a × in the corner closes them. The verdict (consistent / N drifts) sits at the bottom of the left column, so the Schema code block keeps the whole area.
+- Every scrollbar is now a thin rounded pill (10px track, 6px handle, 3px radius) instead of a rectangular block.
+- All code views use the exact One Dark Pro palette: `#282C34` background, keys `#E06C75`, strings `#98C379`, numbers/booleans `#D19A66`, keywords `#C678DD`, comments `#5C6370` — response body, request body, scripts and the contract Schema all match.
+- Tab counters use the theme colour (accent-tinted background, accent text) instead of grey on grey.
+
+**Fixed**
+- Response headers and Cookies are rendered as a single document table: long cookies, JWTs and URLs wrap anywhere instead of being clipped at the right edge, and never force a horizontal scrollbar or push content outside the panel.
+- Request tabs, auth types and OAuth grant tabs only fold into "…" when they genuinely do not fit — "post-response script" is no longer cut off by the neighbouring panel.
+- The contract page compresses its action labels and makes the observability column scrollable on narrow layouts, so the two panes no longer squeeze each other.
+- AI analysis recognises the current page: on the contract tab it is fed the saved contract, the drift list and the observability breakdown instead of guessing from the response body.
+
+**Tests**
+- Smoke test group 44 plus new brand checks for the drift panel, wrapping headers, adaptive request tabs, badge colours and the One Dark Pro tokens.
+
 ## v1.0.87 — 2026-11-21
 
 **Fixed**

@@ -716,6 +716,34 @@ def icon_button(icon_name: str, tooltip: str = "", size: int = 26,
 # ---------------------------------------------------------------- 自绘选择菜单
 
 
+def popup_hidden_tabs(owner, attr: str, tabs: "SegmentedTabs", pos,
+                      width: int = 168, with_badge: bool = False,
+                      on_pick=None) -> None:
+    """自适应页签的「更多」菜单：只列被真正折叠掉的项，菜单实例复用。
+
+    请求页签、认证方式、授权方式、响应页签四处都要这套逻辑，集中在这里，
+    免得每处各写一遍、还各自错一遍（之前响应页签会列出全部标签）。
+    """
+    items = []
+    for key, label, badge in tabs.hidden_items():
+        shown = _tr(label) + (f"  {badge}" if (with_badge and badge) else "")
+        items.append((key, shown, None, None))
+    if not items:
+        return
+    menu = getattr(owner, attr, None)
+    if menu is None:
+        menu = ChoiceMenu(items, tabs.current(), owner, width=width)
+        menu.picked.connect(on_pick or (lambda k: tabs.set_current(k, emit=True)))
+        setattr(owner, attr, menu)
+    else:
+        menu._items = [list(it) for it in items]
+        menu._src_items = [tuple(it) for it in items]
+        menu.set_current(tabs.current())
+    point = pos if isinstance(pos, QPoint) else QPoint(int(pos.x()), int(pos.y()))
+    menu.popup(point)
+
+
+
 class ChoiceMenu(QWidget):
     """轻量自绘下拉：语义色文字 + 图标对号 + 悬停灰层。
 
@@ -1220,10 +1248,12 @@ class SegmentedTabs(QWidget):
                 bw = QFontMetricsF(self._badge_font).horizontalAdvance(btext) + 10
                 br = QRectF(x + tw + 6, r.center().y() - 7.5, bw, 15)
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(C(t.selected) if active else C(t.hover))
+                # 徽标跟着主题色走：底色用强调色的透明版，数字用强调色本身。
+                # 之前未选中时是「灰底灰字」，在深色里几乎看不见，也无法体现主题。
+                p.setBrush(C(t.accent_soft))
                 p.drawRoundedRect(br, 7.5, 7.5)
                 p.setFont(self._badge_font)
-                p.setPen(C(t.accent) if active else C(t.text_dim))
+                p.setPen(C(t.accent))
                 p.drawText(br, int(Qt.AlignmentFlag.AlignCenter), btext)
 
         # 溢出时画「更多」按钮：三个点，主题色，和标签同一套语言

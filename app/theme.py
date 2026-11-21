@@ -61,6 +61,9 @@ class Theme:
     shadow: Color
     dark: bool = True
     label: str = ""
+    # 代码区前景色：One Dark Pro 的 #ABB2BF 比界面正文灰一档，长代码不刺眼。
+    # 单独一个令牌，是因为代码底色（#282C34）与界面底色不是一个色系。
+    code_text: str = "#ABB2BF"
     # 强调色的两级透明版本：accent_soft 用于胶囊底/徽标底，accent_dim 用于聚焦描边。
     # 单独列出来是为了让「换主题色」能一路渗到选中、聚焦、徽标，而不只是按钮。
     accent_soft: Color = (255, 255, 255, 26)
@@ -123,7 +126,9 @@ def _dark_scheme(key: str, label: str, base: str) -> Theme:
         danger="#E48178",
         info="#89AECE",
         selection=(255, 255, 255, 48),
-        code_bg=_shift(base, -2),
+        # 代码区统一 One Dark Pro 底色：所有 JSON / XML / 脚本 / 响应正文都在
+        # 这一块 #282C34 上按 One Dark Pro 的 token 上色，和常见编辑器一致。
+        code_bg="#282C34",
         detail_bg=_shift(base, -10),
         scroll=(255, 255, 255, 28),
         scroll_hover=(255, 255, 255, 60),
@@ -132,6 +137,7 @@ def _dark_scheme(key: str, label: str, base: str) -> Theme:
         label=label,
         accent_soft=(255, 255, 255, 26),
         accent_dim=(255, 255, 255, 88),
+        code_text="#ABB2BF",
     )
 
 
@@ -157,7 +163,8 @@ def _light_scheme(key: str, label: str, base: str) -> Theme:
         danger="#C8433A",
         info="#2C6BAD",
         selection=(0, 0, 0, 38),
-        code_bg="#FFFFFF",
+        # 浅色下用 One Light 的底色与正文色，和深色主题的 One Dark Pro 一一对应
+        code_bg="#FAFAFA",
         detail_bg=_shift(base, -4),
         scroll=(0, 0, 0, 28),
         scroll_hover=(0, 0, 0, 64),
@@ -166,6 +173,7 @@ def _light_scheme(key: str, label: str, base: str) -> Theme:
         label=label,
         accent_soft=(0, 0, 0, 22),
         accent_dim=(0, 0, 0, 74),
+        code_text="#383A42",
     )
 
 
@@ -426,18 +434,34 @@ _QSS = Template(
     QLineEdit#Field:disabled { color: $text_faint; }
     QLineEdit#Bare { background: transparent; border: none; padding: 0px; }
     QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }
-    QScrollBar:vertical { background: transparent; width: 9px; margin: 0px; }
+    /* 滚动条：细条 + 全圆头，不再是一根长方形色块。轨道留 3px 内缩，
+       手柄因此只有 4px 宽，圆角等于半宽，放大到任何倍率都是胶囊形。 */
+    QScrollBar:vertical {
+        background: transparent; width: 10px; margin: 0px; border: none;
+    }
     QScrollBar::handle:vertical {
-        background: $scroll; border-radius: 4px; min-height: 26px; margin: 2px 2px 2px 3px;
+        background: $scroll; border-radius: 3px; min-height: 40px;
+        margin: 4px 2px 4px 2px;
     }
     QScrollBar::handle:vertical:hover { background: $scroll_hover; }
-    QScrollBar:horizontal { background: transparent; height: 9px; margin: 0px; }
+    QScrollBar::handle:vertical:pressed { background: $scroll_hover; }
+    QScrollBar:horizontal {
+        background: transparent; height: 10px; margin: 0px; border: none;
+    }
     QScrollBar::handle:horizontal {
-        background: $scroll; border-radius: 4px; min-width: 26px; margin: 3px 2px 2px 2px;
+        background: $scroll; border-radius: 3px; min-width: 40px;
+        margin: 2px 4px 2px 4px;
     }
     QScrollBar::handle:horizontal:hover { background: $scroll_hover; }
-    QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; border: none; }
+    QScrollBar::handle:horizontal:pressed { background: $scroll_hover; }
+    QScrollBar::add-line, QScrollBar::sub-line {
+        width: 0px; height: 0px; border: none; background: transparent;
+    }
     QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+    QScrollBar::up-arrow, QScrollBar::down-arrow,
+    QScrollBar::left-arrow, QScrollBar::right-arrow {
+        width: 0px; height: 0px; image: none;
+    }
     QMenu {
         background: $elevated; border: 1px solid $border_strong; border-radius: 11px;
         padding: 6px;
@@ -468,7 +492,7 @@ _QSS = Template(
     QTreeWidget, QListWidget { background: transparent; border: none; outline: none; }
     QTreeWidget::item, QListWidget::item { border: none; }
     QPlainTextEdit#Code, QTextEdit#Code {
-        background: $code_bg; color: $text; border: none;
+        background: $code_bg; color: $code_text; border: none;
     }
     QLabel#H1 { font-size: 15px; font-weight: 600; }
     QLabel#Dim { color: $text_dim; }

@@ -2539,3 +2539,14 @@ _EN.update({
     "Secret 发送位置 / Token 参数名与放置 / PKCE / State / Refresh Token":
         "Secret placement / token parameter and location / PKCE / state / refresh token",
 })
+
+# ---------------------------------------------------------------- v1.0.88：契约页按需展开
+_EN.update({
+    "关闭漂移结果": "Close drift results",
+    "还没有保存契约，先点「保存为契约」。":
+        "No contract saved yet. Save the current response as a contract first.",
+    "有 {n} 处字段漂移，点「检查漂移」查看":
+        "{n} field drifts found. Click \"Check drift\" to review them.",
+    "✕ 发现 {n} 处字段漂移": "✕ {n} field drifts",
+    "检查": "Check",
+})

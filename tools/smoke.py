@@ -4643,9 +4643,93 @@ def main() -> int:
         rp.deleteLater()
         return 0
 
+    def step44() -> int:
+        # v1.0.88：契约页按需展开 / 响应头可断行不溢出 / 请求页签自适应 /
+        # 徽标主题色 / One Dark Pro 精确色值
+        import json as _json
+
+        from app import contract as _contract
+        from app.code_editor import _TOKENS_DARK
+        from app.contract_view import ContractView
+        from app.response_panel import HeaderRows
+        from app.theme import theme as _theme
+        from app.widgets import SegmentedTabs
+
+        # --- 契约页
+        cv = ContractView()
+        cv.set_store(store)
+        cv.resize(760, 560)
+        cv.show()
+        app.processEvents()
+        check("契约页不再有漂移筛选页签", not hasattr(cv, "filter"))
+        check("漂移结果默认收起",
+              cv.drift_head.isHidden() and cv.drift_view.isHidden())
+        body = b'{"id":1,"ghost":true}'
+        data, _err = _contract.parse_json(body, "application/json")
+        _contract.save_contract(store, _contract.key_for("POST", "https://x/api"),
+                                _contract.infer({"id": 1, "name": "x"}), data)
+        cv.set_data(_contract.key_for("POST", "https://x/api"), body, "application/json",
+                    meta={"status": 200})
+        app.processEvents()
+        check("静默检查不展开漂移", cv.drift_view.isHidden())
+        cv._check(show_panel=True)
+        app.processEvents()
+        check("点检查后展开漂移", not cv.drift_view.isHidden())
+        check("漂移结论放在底部并带数量",
+              cv.result_bar.isVisible() and "字段漂移" in cv.result.text())
+        cv.close_drift()
+        app.processEvents()
+        check("可以关闭漂移结果", cv.drift_view.isHidden() and cv.drift_head.isHidden())
+        check("契约页操作按钮随宽度压短",
+              all(b.text() in ("保存", "检查", "删除", "复制")
+                  for b in (cv.save_btn, cv.check_btn, cv.clear_btn, cv.copy_btn)))
+        snap = cv.ai_snapshot()
+        check("AI 契约快照带 schema 与观测",
+              "fields" in snap["summary"] and "timing" in snap["observability"])
+        cv.deleteLater()
+
+        # --- 响应头 / Cookie：文档渲染 + 任意位置断行
+        hr = HeaderRows()
+        hr.resize(300, 200)
+        hr.show()
+        hr.add("acw_tc", "6f301e1817952619125614054e1acdn_sec_tc_abcdefghijklmnopqrstuvwx",
+               True, meta="HttpOnly · 过期 2026-11-21 12:51")
+        for _ in range(3):
+            app.processEvents()
+        check("响应头不再用固定宽 QLabel 排列", not hasattr(hr, "_key_labels"))
+        check("响应头按文档表格渲染",
+              hr.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        check("长 Cookie 值不产生横向溢出",
+              hr.document().size().width() <= hr.viewport().width() + 1)
+        hr.deleteLater()
+
+        # --- 请求页签自适应
+        tabs = SegmentedTabs([(f"k{i}", f"标签{i}") for i in range(7)],
+                             style="underline", height=32, pad_h=10,
+                             font_size=12.2, adaptive=True)
+        tabs.resize(1000, 32)
+        check("请求页签放得下时全部显示", tabs.hidden_items() == [])
+        tabs.resize(300, 32)
+        check("请求页签窄了收进更多",
+              bool(tabs.hidden_items()) and len(tabs._visible()) < 7)
+
+        # --- 徽标跟着主题色
+        _root = Path(__file__).resolve().parents[1]
+        check("徽标底色用强调色", "accent_soft" in
+              (_root / "app" / "widgets.py").read_text(encoding="utf-8"))
+        # --- One Dark Pro 精确色值
+        check("One Dark Pro 键名红", _TOKENS_DARK["property"] == "#E06C75")
+        check("One Dark Pro 字符串绿", _TOKENS_DARK["string"] == "#98C379")
+        check("One Dark Pro 数字橙", _TOKENS_DARK["number"] == "#D19A66")
+        check("One Dark Pro 关键字紫", _TOKENS_DARK["keyword"] == "#C678DD")
+        check("One Dark Pro 注释灰", _TOKENS_DARK["comment"] == "#5C6370")
+        check("代码底色 One Dark Pro", _theme().code_bg == "#282C34"
+              and _theme().code_text == "#ABB2BF")
+        return 0
+
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39, step40, step41, step42, step43]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39, step40, step41, step42, step43, step44]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

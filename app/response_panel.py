@@ -1,6 +1,7 @@
 """响应面板：状态胶囊、耗时/体积、美化 / 树形 / 原始 / 响应头 / Cookies / 预览。"""
 from __future__ import annotations
 
+import html
 import json
 import re
 from typing import Any, Dict, List, Optional
@@ -15,6 +16,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -22,7 +24,7 @@ from PyQt6.QtWidgets import (
 from . import i18n, icons
 from .code_editor import CodeView, JsonTree, ctype_label, human_elapsed, human_size, pretty_json
 from .http_client import Response
-from .theme import C, font, mono, status_color, theme
+from .theme import C, font, mono, mono_families, status_color, theme
 from .widgets import (
     Button,
     Card,
@@ -40,6 +42,7 @@ from .widgets import (
     VBox,
     icon_button,
     ChoiceMenu,
+    popup_hidden_tabs,
 )
 
 BINARY_KINDS = ("image", "audio", "video", "pdf", "binary")
@@ -94,51 +97,59 @@ def _hexdump(data: bytes, limit: int = 4096) -> str:
     return "\n".join(rows) or i18n.tr("响应体为空")
 
 
-class HeaderRows(QWidget):
-    """响应头 / Cookie 的键值列表。"""
+class HeaderRows(QTextBrowser):
+    """响应头 / Cookie 列表。
+
+    整张表用一份 QTextDocument 渲染：长 Cookie / JWT / 长 URL 在任意位置断行，
+    宽度永远不超过面板，也不会出现横向滚动把内容顶到面板外（之前用 QLabel
+    逐行排，一串没有空格的值会被整条裁掉）。文字仍可选中复制，行数再多也只
+    是一个控件，比几十个 QLabel 更省。
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._rows: List[Any] = []
-        self.lay = QVBoxLayout(self)
-        self.lay.setContentsMargins(12, 8, 12, 12)
-        self.lay.setSpacing(0)
-        self.lay.addStretch(1)
+        self._rows: List[Tuple[str, str, bool, str]] = []
+        self.setObjectName("Bare")
+        self.setOpenExternalLinks(False)
+        self.setFrameShape(QTextBrowser.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.document().setDocumentMargin(12)
+        self._build()
 
     def clear(self) -> None:
-        while self.lay.count() > 1:
-            item = self.lay.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
-        self._rows.clear()
+        self._rows = []
+        self._build()
 
     def add(self, key: str, value: str, highlight: bool = False, meta: str = "") -> None:
-        row = QWidget()
-        row.setMinimumHeight(26)
-        lay = QHBoxLayout(row)
-        lay.setContentsMargins(2, 4, 2, 4)
-        lay.setSpacing(12)
-        k = Label(key, 11.5, theme().text_dim, mono_font=True)
-        k.setFixedWidth(198)
-        k.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        box = QVBoxLayout()
-        box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(2)
-        v = Label(value, 11.5, theme().success if highlight else theme().text, mono_font=True)
-        v.setWordWrap(True)
-        v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        box.addWidget(v)
-        if meta:
-            m = Label(meta, 10, theme().text_faint, mono_font=True)
-            m.setWordWrap(True)
-            box.addWidget(m)
-        lay.addWidget(k, 0)
-        lay.addLayout(box, 1)
-        self.lay.insertWidget(self.lay.count() - 1, row)
-        self._rows.append(row)
+        self._rows.append((key, value, highlight, meta))
+        self._build()
 
+    def refresh_theme(self) -> None:
+        self._build()
+
+    def _build(self) -> None:
+        t = theme()
+        fam = ",".join(mono_families()) or "monospace"
+        # 用 pt 而不是 px：和界面其它 Label 的字号口径一致（px 会跟着 DPR 变大一倍/变小）
+        base = f"font-family:{fam};font-size:11.5pt;"
+        if not self._rows:
+            self.setHtml("")
+            return
+        parts = ['<table width="100%" cellspacing="0" cellpadding="0">']
+        for key, value, highlight, meta in self._rows:
+            vcolor = t.success if highlight else t.text
+            parts.append(
+                f'<tr><td width="32%" valign="top" style="{base}color:{t.text_dim};'
+                f'padding:5px 10px 5px 0;word-wrap:break-word">{html.escape(key)}</td>'
+                f'<td valign="top" style="{base}color:{vcolor};padding:5px 0">'
+                f'{html.escape(value)}</td></tr>')
+            if meta:
+                parts.append(
+                    f'<tr><td></td><td style="{base}font-size:10pt;color:{t.text_faint};'
+                    f'padding:0 0 3px 0">{html.escape(meta)}</td></tr>')
+        parts.append("</table>")
+        self.setHtml("".join(parts))
 
 VIEW_LIMIT = 600_000      # 单个响应在代码区里最多渲染 600KB，超出部分截断并说明
 
@@ -539,8 +550,8 @@ class ResponsePanel(QWidget):
         self.body_stack.add("pretty", self._scrollable(self.pretty))
         self.body_stack.add("tree", self.tree_host)
         self.body_stack.add("raw", self._scrollable(self.raw))
-        self.body_stack.add("headers", self._scrollable(self.headers_host))
-        self.body_stack.add("cookies", self._scrollable(self.cookies_host))
+        self.body_stack.add("headers", self.headers_host)
+        self.body_stack.add("cookies", self.cookies_host)
         self.body_stack.add("console", self.console_host)
         self.body_stack.add("preview", self.preview_host)
         self.body_stack.add("diff", diff_host)
@@ -1290,6 +1301,10 @@ class ResponsePanel(QWidget):
                 }
             elif tab == "timeline":
                 ctx["timeline"] = list(self.timeline.entries)
+            elif tab == "contract":
+                # 契约页看的不是某一段正文，而是「已保存契约 + 字段漂移 + 观测」，
+                # 单独打包，别让 AI 拿响应正文去猜契约信息。
+                ctx["contract"] = self.contract.ai_snapshot()
             elif tab == "preview":
                 ctx["preview"] = f"内容类型：{resp.content_type or '未知'}；体积：{resp.size} B"
         return ctx
@@ -1715,22 +1730,9 @@ class ResponsePanel(QWidget):
             self._find_visible = False
 
     def _on_tabs_more(self, global_pos) -> None:
-        """标签被折叠时，「更多」按钮弹出完整列表（含徽标计数）。"""
-        items = []
-        for key, label, badge in self.tabs.hidden_items():
-            shown = i18n.tr(label) + (f"  {badge}" if badge else "")
-            items.append((key, shown, None, None))
-        if not items:
-            return
-        if self._tabs_menu is None:
-            self._tabs_menu = ChoiceMenu(items, self.tabs.current(), self, width=176)
-            self._tabs_menu.picked.connect(self._on_tab)
-        else:
-            self._tabs_menu._items = [list(it) for it in items]
-            self._tabs_menu._src_items = [tuple(it) for it in items]
-            self._tabs_menu.set_current(self.tabs.current())
-        self._tabs_menu.popup(global_pos if isinstance(global_pos, QPoint)
-                              else QPoint(int(global_pos.x()), int(global_pos.y())))
+        """标签被折叠时，「更多」只列出被折叠的那几项（带徽标计数）。"""
+        popup_hidden_tabs(self, "_tabs_menu", self.tabs, global_pos,
+                          width=176, with_badge=True, on_pick=self._on_tab)
 
     def _toggle_wrap(self) -> None:
         from PyQt6.QtWidgets import QPlainTextEdit

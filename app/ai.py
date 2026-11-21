@@ -352,6 +352,11 @@ _TAB_FOCUS = {
     "error": "关注点：请求没有拿到正常响应。依据错误文案与阶段区分 DNS 解析失败、"
              "连接被拒、TLS 证书 / 协议不匹配、超时、代理配置、CORS 预检被拦、"
              "本地脚本异常；给出最可能的原因排序和 1-3 步可立即执行的排查动作。",
+    "contract": "关注点：接口契约与字段漂移。依据给出的契约 Schema（字段数 / 层级 / 数组）"
+                "与漂移清单，逐个说明字段消失、新增字段、类型变化的影响与风险等级，"
+                "判断哪些是破坏性变更、哪些可以放宽；再结合观测里的状态码、耗时、"
+                "响应体大小与 DNS/TCP/TLS/TTFB/下载分段，指出契约与实现不一致的根因。"
+                "不要讨论与契约无关的正文业务逻辑，也不要臆造清单里没有的字段。",
 }
 
 
@@ -390,7 +395,7 @@ def messages_for_analysis(ctx: Dict[str, Any]) -> List[Dict[str, str]]:
         ("响应头", "headers", 2200), ("Cookies", "cookies", 1800),
         ("控制台日志", "console", 2200), ("对比差异", "diff", 2200),
         ("时间线", "timeline", 1800), ("提取结果", "extract", 900),
-        ("预览信息", "preview", 900),
+        ("预览信息", "preview", 900), ("契约与观测", "contract", 4000),
     ):
         value = ctx.get(key)
         if not value:
@@ -432,6 +437,7 @@ def analysis_key(ctx: Dict[str, Any]) -> str:
         "extract": ctx.get("extract"),
         "timeline": ctx.get("timeline"),
         "preview": ctx.get("preview"),
+        "contract": ctx.get("contract"),
         "error": ctx.get("error"),
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)

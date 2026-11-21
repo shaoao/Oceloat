@@ -2724,7 +2724,7 @@ class ImportCurlDialog(GlassDialog):
             "  --data-raw '{\"name\": \"Ocelot\"}'")
         self.edit.setStyleSheet(
             f"QPlainTextEdit {{ background: {theme().code_bg}; border: 1px solid {S(theme().border)};"
-            f" border-radius: 9px; padding: 10px; color: {theme().text}; }}")
+            f" border-radius: 9px; padding: 10px; color: {theme().code_text}; }}")
         self.edit.textChanged.connect(self._preview)
         lay.addWidget(self.edit, 3)
 

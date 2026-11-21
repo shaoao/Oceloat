@@ -37,46 +37,47 @@ from . import i18n
 from .theme import C, font, mono, theme
 
 # ---------------------------------------------------------------- 统一 token 配色
-# 深色：One Dark / 现代 IDE 常见方案；浅色：对应的降饱和版本。
-# 顺序：函数定义 > 关键字 > 字符串 > 数字 > 参数 > 标点 > 注释
+# 深色：One Dark Pro（Atom / VS Code 同款）的官方色值，逐项对齐，不做近似；
+# 浅色：对应的 One Light，色相互相对应。
+# 顺序：关键字 > 字面量 > 字符串 > 数字 > 参数 > 标点 > 注释
 _TOKENS_DARK: Dict[str, str] = {
-    "key": "#E06C9A",        # def / class / import / const / function —— 粉紫
-    "keyword": "#E06C75",    # return / if / else / true / null —— 红
-    "string": "#A8CE8F",     # 字符串 —— 黄绿
-    "number": "#D9A96B",     # 数字 —— 橙
-    "param": "#E5C07B",      # 函数参数 / flag —— 浅黄
-    "func": "#7FB4E6",       # 函数名 —— 蓝
-    "builtin": "#56B6C2",    # 内建 / 类型 —— 青
-    "punct": "#9BA0AC",      # 标点 —— 灰蓝
-    "comment": "#6E7681",    # 注释 —— 深灰
-    "url": "#7FB4E6",
-    "property": "#9BB8E0",   # JSON key —— 淡蓝
+    "key": "#C678DD",        # def / class / import / const / function —— 紫
+    "keyword": "#C678DD",    # return / if / else / for —— 紫
+    "literal": "#D19A66",    # true / false / null / this —— 橙
+    "string": "#98C379",     # 字符串 —— 绿
+    "number": "#D19A66",     # 数字 —— 橙
+    "param": "#D19A66",      # 函数参数 / flag / 属性名 —— 橙
+    "func": "#61AFEF",       # 函数名 —— 蓝
+    "builtin": "#56B6C2",    # 内建 / 类型 / 实体 —— 青
+    "punct": "#ABB2BF",      # 标点 —— 正文灰
+    "comment": "#5C6370",    # 注释 —— 灰紫
+    "url": "#61AFEF",
+    "property": "#E06C75",   # JSON key —— 红
+    "tag": "#E06C75",        # HTML 标签名 —— 红
+    "attr": "#D19A66",       # HTML 属性名 —— 橙
 }
 
 _TOKENS_LIGHT: Dict[str, str] = {
     "key": "#A626A4",
-    "keyword": "#C0394B",
-    "string": "#3F7A3F",
-    "number": "#A06000",
-    "param": "#8A5A00",
-    "func": "#2C63B4",
-    "builtin": "#007C8C",
-    "punct": "#5A6070",
-    "comment": "#9096A0",
-    "url": "#2C63B4",
-    "property": "#2E5A8A",
+    "keyword": "#A626A4",
+    "literal": "#986801",
+    "string": "#50A14F",
+    "number": "#986801",
+    "param": "#986801",
+    "func": "#4078F2",
+    "builtin": "#0184BC",
+    "punct": "#383A42",
+    "comment": "#A0A1A7",
+    "url": "#4078F2",
+    "property": "#E45649",
+    "tag": "#E45649",
+    "attr": "#986801",
 }
 
 
 def tokens() -> Dict[str, str]:
     """当前主题下的一整套 token 颜色 —— 所有高亮器都从这里取，保证全局一致。"""
     return _TOKENS_DARK if theme().is_dark else _TOKENS_LIGHT
-
-
-def _colors():
-    c = tokens()
-    return (c["property"], c["string"], c["number"], c["keyword"],
-            c["punct"], c["comment"])
 
 
 class JsonHighlighter(QSyntaxHighlighter):
@@ -93,7 +94,7 @@ class JsonHighlighter(QSyntaxHighlighter):
             (re.compile(r'"(?:[^"\\]|\\.)*"'), c["string"], QFont.Weight.Normal),
             (re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.])"),
              c["number"], QFont.Weight.Normal),
-            (re.compile(r"\b(?:true|false|null)\b"), c["keyword"], QFont.Weight.Normal),
+            (re.compile(r"\b(?:true|false|null)\b"), c["literal"], QFont.Weight.Normal),
             (re.compile(r"[{}\[\],:]"), c["punct"], QFont.Weight.Normal),
             (re.compile(r'"(?:[^"\\]|\\.)*"(?=\s*:)'), c["property"], QFont.Weight.Normal),
         ]
@@ -149,14 +150,14 @@ class HtmlHighlighter(QSyntaxHighlighter):
         c = tokens()
         # 语义 token → 统一配色 token 的映射
         mapping = {
-            "tag": "func",        # 标签名 —— 蓝
-            "attr": "param",      # 属性名 —— 浅黄橙
-            "value": "string",    # 属性值 —— 黄绿
-            "punct": "punct",     # 尖括号 / 斜杠 / 等号 —— 灰
-            "comment": "comment", # 注释 —— 深灰
-            "decl": "keyword",    # DOCTYPE / 声明 —— 红
+            "tag": "tag",         # 标签名 —— 红
+            "attr": "attr",       # 属性名 —— 橙
+            "value": "string",    # 属性值 —— 绿
+            "punct": "punct",     # 尖括号 / 斜杠 / 等号 —— 正文灰
+            "comment": "comment", # 注释 —— 灰紫
+            "decl": "keyword",    # DOCTYPE / 声明 —— 紫
             "entity": "builtin",  # &nbsp; 实体 —— 青
-            "key": "key",         # 脚本关键字 —— 粉紫
+            "key": "key",         # 脚本关键字 —— 紫
             "number": "number",   # 数字 —— 橙
             "func": "func",       # 脚本函数名 —— 蓝
         }
@@ -344,6 +345,9 @@ class CodeHighlighter(QSyntaxHighlighter):
             (r"\b(?:" + "|".join(re.escape(w) for w in words if not w.startswith("-")
                                  and w not in decl)
              + r")\b", c["keyword"], QFont.Weight.Normal),
+            # 字面量单独一档：One Dark Pro 里 true/false/null 是橙色，不跟关键字同色
+            (r"\b(?:true|false|null|None|True|False|undefined|NaN|nil)\b",
+             c["literal"], QFont.Weight.Normal),
             (r"\b(?:" + "|".join(builtins) + r")\b" if builtins else r"(?!)",
              c["builtin"], QFont.Weight.Normal),
             # 函数调用名 —— 蓝色
@@ -404,7 +408,8 @@ class CodeView(QPlainTextEdit):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setTabStopDistance(self.fontMetrics().horizontalAdvance(" ") * 4)
-        self.setStyleSheet(f"QPlainTextEdit {{ background: transparent; border: none; }}")
+        self.setObjectName("Code")
+        self._apply_colors()
         self.document().setDocumentMargin(doc_margin)
         self._hl = None
         if highlight:
@@ -567,7 +572,7 @@ class CodeView(QPlainTextEdit):
             cur = QTextCursor(self.document())
             cur.select(QTextCursor.SelectionType.Document)
             fmt = QTextCharFormat()
-            fmt.setForeground(QBrush(C(theme().text)))
+            fmt.setForeground(QBrush(C(theme().code_text)))
             cur.mergeCharFormat(fmt)
 
     # -------------------------------------------------- 字号
@@ -661,8 +666,15 @@ class CodeView(QPlainTextEdit):
             self._hl.set_language(language)
 
     # -------------------------------------------------- 主题
+    def _apply_colors(self) -> None:
+        """代码区底色 / 前景取主题里的 code_bg / code_text（One Dark Pro）。"""
+        t = theme()
+        self.setStyleSheet(
+            f"QPlainTextEdit {{ background: {t.code_bg}; color: {t.code_text}; border: none; }}")
+
     def refresh_theme(self) -> None:
         """切换主题后重新着色：语法高亮的颜色是写入文本格式的，必须重新高亮。"""
+        self._apply_colors()
         hl = getattr(self, "_hl", None)
         if hl is not None:
             if isinstance(hl, (CodeHighlighter, HtmlHighlighter)):

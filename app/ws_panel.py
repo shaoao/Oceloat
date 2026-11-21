@@ -705,7 +705,7 @@ class FrameCard(QWidget):
         # 既不是死黑，也让整块区域跟卡片背景连成一体。
         t = theme()
         self.body.setStyleSheet(
-            f"QPlainTextEdit {{ background: {t.code_bg}; color: {t.text}; border: none; }}")
+            f"QPlainTextEdit {{ background: {t.code_bg}; color: {t.code_text}; border: none; }}")
         # 内容再长也不出滚动条：折行 + 卡片跟着内容长高，滚动交给外层日志区
         self.body.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.body.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -746,7 +746,7 @@ class FrameCard(QWidget):
         t = theme()
         self.code_card._fill = t.code_bg
         self.body.setStyleSheet(
-            f"QPlainTextEdit {{ background: {t.code_bg}; color: {t.text}; border: none; }}")
+            f"QPlainTextEdit {{ background: {t.code_bg}; color: {t.code_text}; border: none; }}")
         self.code_card.update()
         self.body.update()
 
