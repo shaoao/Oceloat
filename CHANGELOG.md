@@ -1,5 +1,16 @@
 # What's Changed
 
+## v1.0.90 — 2026-11-22
+
+**Added**
+- GraphQL body type: schema introspection, context-aware field completion, query skeletons from the schema, operation picker, variable sync and validation, and AI-written queries.
+- Git sync & diff: collections export to a folder in a stable format; per-request added / removed / changed view with secrets masked; one-click commit, which works even without a configured git identity.
+
+**Fixed**
+- XML body Format no longer raises ImportError.
+- Importing GraphQL from Postman no longer flattens the query into JSON.
+- Code areas in the GraphQL and Git views share the card background instead of stacking two layers.
+
 ## v1.0.89 — 2026-11-21
 
 **Changed**

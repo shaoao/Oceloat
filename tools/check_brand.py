@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.89", VERSION == "1.0.89", VERSION)
-check("更新内容是 1.0.89", CHANGELOG[0]["version"] == "1.0.89")
+check("版本 1.0.90", VERSION == "1.0.90", VERSION)
+check("更新内容是 1.0.90", CHANGELOG[0]["version"] == "1.0.90")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))

@@ -26,9 +26,22 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "Ocelot"
 STATE_FILE = APP_DIR / "state.json"
 LEGACY_DIR = Path.home() / "Library" / "Application Support" / "Reqly"
 
-VERSION = "1.0.89"
+VERSION = "1.0.90"
 
 CHANGELOG = [
+    {
+        "version": "1.0.90",
+        "date": "2026-11-22",
+        "items": [
+            "新增 GraphQL 请求体：Schema 内省、按层级补全字段、从 Schema 生成查询、"
+            "多操作选择、变量同步与校验，AI 一句话写查询",
+            "新增 Git 同步与 Diff：集合按稳定格式导出到文件夹，按请求看新增 / 删除 / 修改，"
+            "密钥自动打码，可一键提交；没配 git 身份也能提交",
+            "修复 XML 请求体点 Format 报 ImportError",
+            "修复从 Postman 导入 GraphQL 时查询被转成 JSON 丢失",
+            "GraphQL / Git 窗口的代码区与卡片同色，不再叠出两层底色",
+        ],
+    },
     {
         "version": "1.0.89",
         "date": "2026-11-21",
@@ -1623,6 +1636,7 @@ BODY_CONTENT_TYPES = {
     "urlencoded": "application/x-www-form-urlencoded",
     "form": "multipart/form-data",
     "binary": "application/octet-stream",
+    "graphql": "application/json",
 }
 
 
@@ -2041,6 +2055,10 @@ class Store:
         try:
             self._trim()
             report = self._storage.write(self.data)
+            if (self.settings.get("git") or {}).get("auto"):
+                from .gitsync import auto_write
+
+                auto_write(self.settings, self.collections)
             errors = report.get("errors") or []
             if errors:
                 print(f"[Ocelot] 保存有问题: {errors[:3]}")

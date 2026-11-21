@@ -65,7 +65,13 @@ def _prepare(req: Dict[str, Any], env: Dict[str, str]) -> Dict[str, Any]:
     body: Optional[str] = None
     form: List[Tuple[str, str]] = []
     files: List[Tuple[str, str]] = []
-    if mode in ("json", "text", "xml", "html"):
+    if mode == "graphql":
+        from .graphql import payload_text
+
+        body = resolve_vars(payload_text(bdata), env)
+        if not any(k.lower() == "content-type" for k, _ in headers):
+            headers.append(("Content-Type", "application/json"))
+    elif mode in ("json", "text", "xml", "html"):
         body = resolve_vars(bdata.get("raw", "") or "", env)
         if not any(k.lower() == "content-type" for k, _ in headers):
             headers.append(("Content-Type", body_content_type(bdata)))

@@ -528,7 +528,14 @@ class ApiClient(QObject):
         mode = body_mode(bdata)
         json_raw = ""
         params: List[Dict[str, str]] = []
-        if mode in ("json", "text", "xml", "html"):
+        if mode == "graphql":
+            from .graphql import payload_text
+
+            json_raw = resolve_vars(payload_text(bdata), env_vars)
+            if not content_type:
+                content_type = "application/json; charset=utf-8"
+                headers.append({"name": "Content-Type", "value": content_type})
+        elif mode in ("json", "text", "xml", "html"):
             json_raw = resolve_vars(bdata.get("raw", "") or "", env_vars)
             if not content_type:
                 content_type = body_content_type(bdata, charset=True)
@@ -728,8 +735,13 @@ class ApiClient(QObject):
         multipart: Optional[QHttpMultiPart] = None
         bdata = req.get("body") or {}
         mode = body_mode(bdata)
-        if mode in ("json", "text", "xml", "html"):
-            text = resolve_vars(bdata.get("raw", "") or "", env_vars)
+        if mode in ("json", "text", "xml", "html", "graphql"):
+            if mode == "graphql":
+                from .graphql import payload_text
+
+                text = resolve_vars(payload_text(bdata), env_vars)
+            else:
+                text = resolve_vars(bdata.get("raw", "") or "", env_vars)
             payload = QByteArray(text.encode("utf-8"))
             if not has_ct:
                 nreq.setHeader(QNetworkRequest.KnownHeaders.ContentTypeHeader,

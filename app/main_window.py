@@ -897,6 +897,7 @@ class MainWindow(QWidget):
         self.sidebar.requestDeleted.connect(self._on_request_deleted)
         self.sidebar.changed.connect(self._on_store_changed)
         self.sidebar.runFolder.connect(self.run_collection)
+        self.sidebar.gitRequested.connect(self.open_git)
         self.sidebar.transferRequested.connect(self.open_transfer)
         self.sidebar.trashRequested.connect(self.open_trash)
         self.sidebar.notify.connect(lambda msg: self.toast.show_message(msg, "success"))
@@ -1113,6 +1114,7 @@ class MainWindow(QWidget):
         acts["env"] = menu.addAction(icons.icon("globe", t.text, 14), "环境变量…")
         acts["resources"] = menu.addAction(icons.icon("grid", t.text, 14), "资源管理器…")
         acts["cloud"] = menu.addAction(icons.icon("cloud", t.text, 14), "云同步…")
+        acts["git"] = menu.addAction(icons.icon("sync", t.text, 14), "Git 同步与 Diff…")
         menu.addSeparator()
         acts["mock"] = menu.addAction(icons.icon("grid", t.text, 14), "Mock 服务…")
         acts["curl"] = menu.addAction(icons.icon("code", t.text, 14), "导入 cURL…")
@@ -1142,6 +1144,8 @@ class MainWindow(QWidget):
             self.open_resources()
         elif chosen is a_cloud:
             self.show_settings(page="cloud")
+        elif chosen is acts["git"]:
+            self.open_git()
         elif chosen is a_mock:
             self.open_mock()
         elif chosen is a_curl:
@@ -2955,6 +2959,12 @@ class MainWindow(QWidget):
         dlg.imported.connect(self._on_imported)
         dlg.exec()
 
+    def open_git(self, focus_id: str = "") -> None:
+        """Git 同步与 Diff：集合导出到文件夹，按请求看改动、一键提交。"""
+        from .git_panel import GitDialog
+
+        GitDialog(self.store, self, focus_id=focus_id).exec()
+
     def open_trash(self) -> None:
         """回收站：恢复误删的集合 / 请求，恢复后立即回到原位置。"""
         from .trash_dialog import TrashDialog
@@ -3130,6 +3140,8 @@ class MainWindow(QWidget):
             self.show_settings(page="appearance")
         elif key == "cloud":
             self.show_settings(page="cloud")
+        elif key == "git":
+            self.open_git()
         elif key == "doc":
             self.open_doc()
         elif key == "mock":

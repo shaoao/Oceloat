@@ -282,6 +282,7 @@ class CodeHighlighter(QSyntaxHighlighter):
         "csharp": "using var new class public private static void return if else for while async await true false null string int HttpClient Console",
         "kotlin": "import fun val var class object if else for while return when is in null true false runBlocking println",
         "powershell": "Write-Output Invoke-WebRequest Uri Method Headers Body StatusCode Content true false param",
+        "graphql": "query mutation subscription fragment on true false null",
         "shell": "curl http httpie https -X -H -d -F -k -L -s -I -v --data-raw --data-urlencode --form --header --request --location --insecure --verbose",
     }
 
@@ -299,6 +300,7 @@ class CodeHighlighter(QSyntaxHighlighter):
         self.rehighlight()
 
     _DECL = {
+        "graphql": "query mutation subscription fragment",
         "python": "def class",
         "javascript": "function class",
         "go": "func type struct interface",
@@ -311,6 +313,7 @@ class CodeHighlighter(QSyntaxHighlighter):
     }
     # 各语言的内建/类型名（青色）
     _BUILTINS = {
+        "graphql": "String Int Float Boolean ID",
         "python": "str int float bool list dict set tuple self",
         "javascript": "console JSON Math Promise window document",
         "go": "string int bool error byte rune",
@@ -379,6 +382,9 @@ class _Gutter(QWidget):
 
 
 class CodeView(QPlainTextEdit):
+    # 放进 Card 时设 True：底色交给卡片画，避免卡片色和代码底色叠出两层
+    TRANSPARENT = False
+
     """带行号与查找高亮的只读代码视图。"""
 
     # 全局代码字号（设置页可改，改完立刻作用于所有已打开的视图）
@@ -669,8 +675,9 @@ class CodeView(QPlainTextEdit):
     def _apply_colors(self) -> None:
         """代码区底色 / 前景取主题里的 code_bg / code_text（One Dark Pro）。"""
         t = theme()
+        bg = "transparent" if self.TRANSPARENT else t.code_bg
         self.setStyleSheet(
-            f"QPlainTextEdit {{ background: {t.code_bg}; color: {t.code_text}; border: none; }}")
+            f"QPlainTextEdit {{ background: {bg}; color: {t.code_text}; border: none; }}")
 
     def refresh_theme(self) -> None:
         """切换主题后重新着色：语法高亮的颜色是写入文本格式的，必须重新高亮。"""

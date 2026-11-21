@@ -818,6 +818,7 @@ class Sidebar(QWidget):
     previewRequest = pyqtSignal(dict)       # 单击：预览
     requestDeleted = pyqtSignal(str)
     runFolder = pyqtSignal(str)             # 右键「运行集合」：folder node id
+    gitRequested = pyqtSignal(str)          # 右键「查看改动」：顶层集合 id
     transferRequested = pyqtSignal()        # 搜索框右侧的导入 / 导出按钮
     trashRequested = pyqtSignal()           # 打开回收站
     changed = pyqtSignal()
@@ -1351,6 +1352,9 @@ class Sidebar(QWidget):
         act_export = (menu.addAction(icons.icon("download", t.text, 14),
                                      i18n.tr("导出集合"))
                       if is_folder else None)
+        is_root = is_folder and any(c.get("id") == node_id for c in self.store.collections)
+        act_git = (menu.addAction(icons.icon("sync", t.text, 14), i18n.tr("查看改动（Git）…"))
+                   if is_root else None)
         act_rename = menu.addAction(icons.icon("pencil", t.text, 14), i18n.tr("重命名…"))
         act_dup = menu.addAction(icons.icon("copy", t.text, 14), i18n.tr("创建副本"))
         if not is_folder:
@@ -1378,6 +1382,8 @@ class Sidebar(QWidget):
             path = export_folder(self.store, node, self.window(), global_pos)
             if path:
                 self.notify.emit(i18n.trf("已导出到 {name}", name=path.rsplit("/", 1)[-1]))
+        elif act_git is not None and chosen is act_git:
+            self.gitRequested.emit(node_id)
         elif chosen is act_rename:
             self._rename_dialog(node)
         elif chosen is act_dup:

@@ -2759,10 +2759,14 @@ class ImportCurlDialog(GlassDialog):
             bits.append(i18n.trf("请求头 {n} 个", n=len(req["headers"])))
         body = req.get("body") or {}
         mode = body_mode(body)
-        if mode in ("json", "html"):
+        if mode == "json":
             bits.append(i18n.trf("JSON 请求体 {n} 字符", n=len(body.get("raw") or "")))
+        elif mode == "html":
+            bits.append(i18n.trf("HTML 请求体 {n} 字符", n=len(body.get("raw") or "")))
         elif mode == "xml":
             bits.append(i18n.trf("XML 请求体 {n} 字符", n=len(body.get("raw") or "")))
+        elif mode == "graphql":
+            bits.append(i18n.trf("GraphQL 查询 {n} 字符", n=len(body.get("raw") or "")))
         elif mode == "text":
             bits.append(i18n.trf("文本请求体 {n} 字符", n=len(body.get("raw") or "")))
         elif mode == "form":
@@ -3329,6 +3333,7 @@ class CommandPalette(QWidget):
         ("settings", "设置…", "sliders", "⌘,"),
         ("appearance", "外观与主题色…", "moon", ""),
         ("cloud", "云同步…", "cloud", ""),
+        ("git", "Git 同步与 Diff…", "sync", ""),
         ("toggle_sidebar", "显示 / 隐藏侧边栏", "layers", "⌘B"),
         ("import_curl", "导入 cURL…", "code", ""),
         ("import_collection", "导入集合…", "download", ""),

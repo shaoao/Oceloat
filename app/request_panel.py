@@ -70,6 +70,7 @@ BODY_MODES = [
     ("urlencoded", "x-www-form-urlencoded"),
     ("raw", "Raw"),
     ("json", "JSON"),
+    ("graphql", "GraphQL"),
     ("xml", "XML"),
     ("text", "Text"),
     ("binary", "Binary"),
@@ -630,7 +631,13 @@ class BodyPage(QWidget):
         fl.addWidget(self.clear_file_btn)
         self.file_host = VBox(self.file_frame, 1, margins=(0, 0, 0, 0))
 
+        from .graphql_panel import GqlPage
+
+        self.gql = GqlPage()
+        self.gql.changed.connect(self._on_gql_changed)
+
         self.stack = FadeStack()
+        self.stack.add("gql", self._page(self.gql))
         self.stack.add("code", self._page(self.code_frame, self.code_tools))
         self.stack.add("form", self._page(self.form_host))
         self.stack.add("file", self._page(self.file_host))
@@ -661,14 +668,7 @@ class BodyPage(QWidget):
     def _on_mode(self, mode: str) -> None:
         mode = _MODE_ALIAS.get(mode, mode)
         self._mode = mode
-        if mode in ("raw", "json", "xml", "text"):
-            self.stack.set_current("code")
-        elif mode in ("form", "urlencoded"):
-            self.stack.set_current("form")
-        elif mode == "binary":
-            self.stack.set_current("file")
-        else:
-            self.stack.set_current("code")
+        self.stack.set_current(self._page_for(mode))
         if mode == "none":
             self.code.setEnabled(False)
             self.code.setStyleSheet("QPlainTextEdit { color: rgba(128,128,138,120); }")
@@ -707,6 +707,7 @@ class BodyPage(QWidget):
                 "json": "application/json", "xml": "application/xml",
                 "text": "text/plain",
                 "urlencoded": "x-www-form-urlencoded", "form": "multipart/form-data",
+                "graphql": "application/json",
                 "binary": "application/octet-stream", "none": "",
             }.get(mode, ""))
         self.raw_lang_tabs.setVisible(mode == "raw")
@@ -756,7 +757,7 @@ class BodyPage(QWidget):
 
     def _format(self) -> None:
         if self._code_mode() == "xml":
-            from ..code_editor import _format_xml
+            from .code_editor import _format_xml
 
             out = _format_xml(self.code.toPlainText())
             if out:
@@ -803,19 +804,14 @@ class BodyPage(QWidget):
         self.modes.set_current(mode, emit=False)
         self.raw_lang_tabs.set_current(self._raw_lang, emit=False)
         self.code.setPlainText(body.get("raw", "") or "")
+        self.gql.load(body.get("raw", "") if mode == "graphql" else "",
+                      body.get("gql_vars", ""), body.get("gql_op", ""))
         self.form.set_rows(body.get("form", []) or [])
         path = body.get("file", "")
         self._file_path = path or ""
         self.file_name.setText(path or i18n.tr("未选择文件"))
         self.file_name.setToolTip(path)
-        if mode in ("raw", "json", "xml", "text"):
-            self.stack.set_current("code")
-        elif mode in ("form", "urlencoded"):
-            self.stack.set_current("form")
-        elif mode == "binary":
-            self.stack.set_current("file")
-        else:
-            self.stack.set_current("code")
+        self.stack.set_current(self._page_for(mode))
         self._sync_code_language()
         self._sync_tools()
         if self._code_mode() in ("json", "xml"):
@@ -823,13 +819,28 @@ class BodyPage(QWidget):
         self._loading = False
 
     def dump(self) -> Dict[str, Any]:
-        return {
+        out = {
             "mode": self._mode,
             "raw": self.code.toPlainText(),
             "raw_lang": self._raw_lang,
             "form": self.form.rows(),
             "file": self._file_path,
         }
+        if self._mode == "graphql":
+            out.update(self.gql.dump())
+        return out
+
+    @staticmethod
+    def _page_for(mode: str) -> str:
+        if mode == "graphql":
+            return "gql"
+        if mode in ("form", "urlencoded"):
+            return "form"
+        return "file" if mode == "binary" else "code"
+
+    def _on_gql_changed(self) -> None:
+        if not self._loading:
+            self.changed.emit()
 
     def has_content(self) -> bool:
         """有没有内容（给徽标用）。不复制整段正文 —— 大请求体每次敲键都 toPlainText 很贵。"""
@@ -837,6 +848,8 @@ class BodyPage(QWidget):
             return False
         if self._mode == "binary":
             return bool(self._file_path)
+        if self._mode == "graphql":
+            return self.gql.has_content()
         if self._mode in ("form", "urlencoded"):
             return bool(self.form.rows())
         return self.code.document().characterCount() > 1
@@ -1949,6 +1962,10 @@ class RequestEditor(QWidget):
         self.body = BodyPage()
         self.body.changed.connect(self._on_body)
         self.body.aiRequested.connect(self._ai_fill_body)
+        self.body.gql.notify.connect(self.notify.emit)
+        # GraphQL 页拉 Schema 要用「此刻」的地址 / 认证 / 环境：按需取，不缓存
+        self.body.gql.ctx = lambda: (dict(self.request or {}), dict(self.store.settings),
+                                     self.store.env_vars())
         self.auth = AuthPage(store=self.store)
         self.auth.changed.connect(self._on_auth)
         self.scripts_pre = ScriptPage(store=self.store, kind="pre")

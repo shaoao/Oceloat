@@ -17,7 +17,7 @@ python3 main.py
 
 Python 3.10+，PyQt6 6.5+。macOS 上也可以双击 `启动 Ocelot.command`。第一次打开自带几条示例请求，点一下就能发。
 
-不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.89.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
+不想装 Python 就直接用打好的 App：`dist/Ocelot.app`，或者拖进「应用程序」的 `Ocelot-1.0.90.dmg`。包是自签名的，第一次打开如果被拦，去「系统设置 → 隐私与安全性」点一次「仍要打开」。
 
 ## 发请求
 
@@ -28,6 +28,10 @@ GET / POST / PUT / PATCH / DELETE / HEAD / OPTIONS 都有。参数、请求头�
 ![响应树形视图](docs/shot-response.png)
 
 WebSocket 和 Socket.IO 是独立的请求类型，有整页界面：文本 / JSON / 二进制收发、子协议、心跳与往返延迟、断线重连、帧日志。
+
+GraphQL 是请求体里的一种类型：点「Schema」做一次内省，之后输入字段名按当前层级补全，必填参数自动带上；也可以从 Schema 里挑字段一键生成查询（参数提成 $变量），或用一句话让 AI 写。一份文档多个操作时可以选这次执行哪个；变量按查询声明自动补齐，括号和变量 JSON 边写边校验。
+
+集合能同步到 Git：「设置 → Git 同步与 Diff」选一个文件夹，集合以稳定格式写进去（键排序、去掉时间戳），按请求看新增 / 删除 / 修改，改动细到字段，Token 和密码自动打码；填一句说明就能提交，也可以打开「保存时自动写入」。
 
 SSE（Server-Sent Events）也在里面：填一个 http(s) 地址连上，服务器推来的事件按行实时进日志，支持自动重连、`Last-Event-ID` 续传、按事件名 / 心跳筛选，日志能导出。SSE 页有自己的样子：顶部一条握手结果（HTTP 状态码 + Content-Type + 事件速率），事件名按实际收到的动态变成筛选按钮，事件太密可以先暂停、继续时一次性放出来；连不上时会把服务端返回的错误正文写进日志，而不是只说一句「失败」。
 
@@ -142,6 +146,7 @@ corrupted/              读不出来的文件会被挪到这里，留着当证�
 ```bash
 python3 tools/smoke.py        # 823 项自测，会真起 HTTP / WebSocket 服务
 python3 tools/check_brand.py  # 标识、版本与打包配方检查
+python3 tools/check_gql_git.py # GraphQL 与 Git Diff 自测
 python3 tools/readme_shots.py # 重新生成上文截图
 python3 tools/build_app.py    # 打包成 Ocelot.app + dmg（约 62MB / 27MB）
 ```

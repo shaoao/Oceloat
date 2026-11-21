@@ -96,6 +96,9 @@ def _postman_body(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     raw = (body or {}).get("raw") or ""
     if mode == "none" or (not raw and not (body or {}).get("form") and not (body or {}).get("file")):
         return None
+    if mode == "graphql":
+        return {"mode": "graphql", "graphql": {"query": raw,
+                                               "variables": body.get("gql_vars") or ""}}
     if mode in ("json", "xml", "text", "raw"):
         lang = "json" if mode == "json" else (
             "xml" if mode == "xml" else (body.get("raw_lang") or "text"))
@@ -609,7 +612,11 @@ def _import_postman_body(body: Dict[str, Any]) -> Dict[str, Any]:
         out.update(mode="binary", file=str(src))
         return out
     if mode == "graphql":
-        out.update(mode="json", raw=json.dumps(body.get("graphql") or {}, ensure_ascii=False))
+        g = body.get("graphql") or {}
+        v = g.get("variables") or ""
+        if not isinstance(v, str):
+            v = json.dumps(v, ensure_ascii=False, indent=2)
+        out.update(mode="graphql", raw=str(g.get("query") or ""), gql_vars=v)
         return out
     return out
 

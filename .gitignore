@@ -24,3 +24,5 @@ state.json.bak
 build/
 dist/
 *.dmg
+
+.ocelot_patch_backup/

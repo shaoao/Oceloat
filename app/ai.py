@@ -549,6 +549,37 @@ def clean_json(text: str) -> str:
     return s[start:]
 
 
+_SYS_GQL = (
+    "你是 GraphQL 专家，为 API 调试工具写查询。规则：\n"
+    "1. 只用 Schema 摘要里真实存在的根字段和参数；Schema 为空时按常见约定写，字段尽量少而准；\n"
+    "2. 写成具名操作（query GetXxx / mutation DoXxx），参数一律提成 $变量 并声明类型，"
+    "不要把字面量写死在查询里；\n"
+    "3. 选择集只取回答需求必需的字段，嵌套不超过 3 层，列表字段带上分页参数（若 Schema 有）；\n"
+    "4. 用户已有查询时在其基础上改，保留其操作名与风格；\n"
+    "5. 只输出 GraphQL 文档本身，两空格缩进，不要解释、不要 Markdown 围栏。"
+)
+
+
+def messages_for_graphql(need: str, schema_summary: str = "",
+                         existing: str = "") -> List[Dict[str, str]]:
+    parts = ["需求：" + need.strip()]
+    if schema_summary:
+        parts.append("Schema 摘要（根字段: 返回类型）：\n" + schema_summary[:6000])
+    if existing.strip():
+        parts.append("当前查询：\n" + existing.strip()[:1500])
+    return [{"role": "system", "content": _SYS_GQL},
+            {"role": "user", "content": "\n\n".join(parts)}]
+
+
+def clean_code(text: str) -> str:
+    """模型输出 → 纯代码：去掉 ``` 围栏和前后说明行。"""
+    s = (text or "").strip()
+    if "```" in s:
+        body = s.split("```", 2)[1]
+        s = body.split("\n", 1)[1] if "\n" in body else ""
+    return s.strip()
+
+
 def clean_line(text: str, limit: int = 24) -> str:
     """模型输出 → 单行文本（名字、标题）：取第一行、去引号、限长。"""
     for line in (text or "").split("\n"):
