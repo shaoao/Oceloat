@@ -2522,3 +2522,12 @@ _EN.update({
     "解析链": "Resolution chain",
     "导出变量快照": "Export variable snapshot",
 })
+
+# ---------------------------------------------------------------- v1.0.86：界面排版收紧
+_EN.update({
+    "字段数": "Fields",
+    "层级": "Depth",
+    "数组": "Arrays",
+    "字段消失": "Missing fields",
+    "未定义": "Undefined",
+})

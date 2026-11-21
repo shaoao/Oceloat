@@ -270,8 +270,8 @@ apply_theme(app, theme_by_name("dark"))
 
 # ---------------------------------------------------------------- 文案 / 版本
 print("\n[文案 / 版本]")
-check("版本 1.0.85", VERSION == "1.0.85", VERSION)
-check("更新内容是 1.0.85", CHANGELOG[0]["version"] == "1.0.85")
+check("版本 1.0.86", VERSION == "1.0.86", VERSION)
+check("更新内容是 1.0.86", CHANGELOG[0]["version"] == "1.0.86")
 # 历史版本的断言不该随新版本翻篇就失效：把全部条目摊平了一起找
 ALL_ITEMS = [item for entry in CHANGELOG for item in entry.get("items", [])]
 check("更新内容写了品牌标识", any("标识" in x for x in ALL_ITEMS))
@@ -824,6 +824,28 @@ check("更新内容写了这轮改动",
       any("Digest" in x for x in ALL_ITEMS)
       and any("OIDC" in x for x in ALL_ITEMS)
       and any("可拖动" in x for x in ALL_ITEMS))
+
+print("\n[1.0.86 新增]")
+_wg_86 = (ROOT / "app" / "widgets.py").read_text(encoding="utf-8")
+_rp_86 = (ROOT / "app" / "response_panel.py").read_text(encoding="utf-8")
+_cv_86 = (ROOT / "app" / "contract_view.py").read_text(encoding="utf-8")
+_rq_86 = (ROOT / "app" / "request_panel.py").read_text(encoding="utf-8")
+_vi_86 = (ROOT / "app" / "var_inspector.py").read_text(encoding="utf-8")
+_i18_86 = (ROOT / "app" / "i18n.py").read_text(encoding="utf-8")
+check("标签栏支持溢出折叠", "more_clicked" in _wg_86 and "def _visible" in _wg_86
+      and "adaptive=True" in _rp_86 and "_on_tabs_more" in _rp_86)
+check("契约页 KPI 带标签不重叠", '"字段数"' in _cv_86 and "ElideLabel" in _cv_86
+      and "class _Metric" in _cv_86)
+check("认证按 grant 条件渲染", "def _on_oauth_grant" in _rq_86
+      and "code_only" in _rq_86 and "self.oauth_username.setVisible(password)" in _rq_86)
+check("按钮行靠左对齐", "self.aws_presign_btn, 1" in _rq_86)
+check("变量侦探改主题色", "theme().accent" in _vi_86 and '"warning"' not in _vi_86)
+check("1.0.86 英文词条齐全", all(k in _i18_86 for k in (
+      '"字段数"', '"层级"', '"数组"', '"字段消失"', '"未定义"')))
+check("更新内容写了这轮改动",
+      any("折叠" in x for x in ALL_ITEMS)
+      and any("条件渲染" in x for x in ALL_ITEMS)
+      and any("主题色" in x for x in ALL_ITEMS))
 
 print(f"\n{len(FAIL)} failed / {TOTAL[0]} checks")
 if FAIL:

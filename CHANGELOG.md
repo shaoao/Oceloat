@@ -1,5 +1,18 @@
 # What's Changed
 
+## v1.0.86 — 2026-11-21
+
+**Fixed**
+- Response tabs no longer overlap or vanish when the panel narrows or switches to a split layout; overflowing tabs collapse into a "More" menu that keeps the current tab visible and shows badge counts.
+- OAuth 2.0 page now renders fields per grant type (client credentials / password / authorization code + PKCE / manual token), with section labels hidden alongside their fields; the page is no longer cluttered.
+- AWS SigV4 and OAuth action buttons now sit left-aligned next to each other instead of being pushed to opposite ends.
+- Contract page KPIs now carry labels (fields / depth / arrays) and observability values use eliding labels so they no longer crush each other in a narrow column.
+- Variable inspector badges now use the theme color and gray-scale contrast instead of mixed warning/info/success colors; only "Undefined" keeps a danger color as a real warning.
+
+**Added**
+- SegmentedTabs adaptive overflow mode with an all-items "More" menu.
+- Smoke test group 42 covering tab folding, button alignment, grant-based conditional rendering and contract layout.
+
 ## v1.0.85 — 2026-11-21
 
 **Fixed**

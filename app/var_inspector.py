@@ -99,7 +99,11 @@ class _VarCard(QWidget):
         self.card = Card(radius=9)
         lay = HBox(spacing=8)
         lay.setContentsMargins(11, 8, 11, 8)
-        self.dot = Pill("", color="accent", dot=True, height=18)
+        # 小圆点统一走主题色：不同来源只改透明度，不用红黄蓝绿杂色
+        dot_color = {"env": theme().accent, "global": theme().text,
+                     "runtime": theme().accent, "builtin": theme().text_dim}.get(
+                         row.get("primary"), theme().accent)
+        self.dot = Pill("", color=dot_color, dot=True, height=18)
         self.name_label = Label(self.name, 12.2, theme().text,
                                 weight=font(12.2).weight(), mono_font=True)
         self.value_label = Label(value or "—", 10.8, theme().text_faint, mono_font=True)
@@ -118,18 +122,19 @@ class _VarCard(QWidget):
         self._apply_badges(row)
 
     def _apply_badges(self, row: Dict[str, Any]) -> None:
+        # 纯黑主题：徽标靠白灰明暗层次，只有「未定义」这种真问题才用危险色
         if row.get("missing"):
             self.badges.layout().addWidget(
                 Pill(i18n.tr("未定义"), color="danger", height=17))
         if row.get("conflict"):
             self.badges.layout().addWidget(
-                Pill(i18n.tr("冲突"), color="warning", height=17))
+                Pill(i18n.tr("冲突"), color=theme().text, height=17))
         if row.get("unused"):
             self.badges.layout().addWidget(
                 Pill(i18n.tr("未引用"), color="text_faint", height=17))
         if row.get("secret"):
             self.badges.layout().addWidget(
-                Pill(i18n.tr("敏感"), color="info", height=17))
+                Pill(i18n.tr("敏感"), color=theme().text_dim, height=17))
 
     def set_selected(self, selected: bool) -> None:
         t = theme()
@@ -339,9 +344,9 @@ class VarInspectorDialog(GlassDialog):
         kind_labels = {"global": "全局", "env": "环境", "runtime": "运行时",
                        "builtin": "内置动态", "missing": "未定义",
                        "unused": "未引用"}
-        color = {"global": "info", "env": "accent", "runtime": "success",
-                 "builtin": "warning", "missing": "danger", "unused": "text_faint"}.get(
-                     kind, "accent")
+        color = {"global": t.text_dim, "env": t.accent, "runtime": t.text,
+                 "builtin": t.text_faint, "missing": t.danger,
+                 "unused": t.text_faint}.get(kind, t.accent)
         self.detail_lay.addWidget(HBox(
             Pill(i18n.tr(kind_labels.get(kind, "全局")), color=color, height=20),
             (Label(row["name"], 16, t.text, weight=font(16).weight(),
@@ -368,8 +373,8 @@ class VarInspectorDialog(GlassDialog):
         if not row["sources"]:
             self.detail_lay.addWidget(Label(
                 i18n.tr("未定义：只在请求里被引用"), 11.2, t.danger))
-        source_colors = {"global": "info", "env": "accent", "runtime": "success",
-                         "builtin": "warning"}
+        source_colors = {"global": t.text_dim, "env": t.accent, "runtime": t.text,
+                         "builtin": t.text_faint}
         for src in row["sources"]:
             self.detail_lay.addWidget(HBox(
                 Pill(src["label"], color=source_colors.get(

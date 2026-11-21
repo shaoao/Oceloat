@@ -427,8 +427,10 @@ class ResponsePanel(QWidget):
              ("preview", "预览"),
              ("diff", "对比"), ("extract", "提取"), ("timeline", "时间线"),
              ("contract", "契约")],
-            style="underline", height=30, pad_h=9, font_size=12)
+            style="underline", height=30, pad_h=9, font_size=12, adaptive=True)
         self.tabs.changed.connect(self._on_tab)
+        self.tabs.more_clicked.connect(self._on_tabs_more)
+        self._tabs_menu: Optional[ChoiceMenu] = None
         self.tree_tools = HBox(1)
         self.expand_btn = Button("全部展开", None, kind="ghost", height=22, padding=7, font_size=11)
         self.collapse_btn = Button("全部折叠", None, kind="ghost", height=22, padding=7, font_size=11)
@@ -1664,6 +1666,27 @@ class ResponsePanel(QWidget):
         if key not in ("pretty", "raw"):
             self.find_bar.hide()
             self._find_visible = False
+
+    def _on_tabs_more(self, global_pos) -> None:
+        """标签被折叠时，「更多」按钮弹出完整列表（含徽标计数）。"""
+        items = []
+        for key, label in self.tabs.all_items():
+            badge = 0
+            for item in self.tabs._items:
+                if item["key"] == key:
+                    badge = item.get("badge") or 0
+                    break
+            shown = i18n.tr(label) + (f"  {badge}" if badge else "")
+            items.append((key, shown, None, None))
+        if self._tabs_menu is None:
+            self._tabs_menu = ChoiceMenu(items, self.tabs.current(), self, width=176)
+            self._tabs_menu.picked.connect(self._on_tab)
+        else:
+            self._tabs_menu._items = [list(it) for it in items]
+            self._tabs_menu._src_items = [tuple(it) for it in items]
+            self._tabs_menu.set_current(self.tabs.current())
+        self._tabs_menu.popup(global_pos if isinstance(global_pos, QPoint)
+                              else QPoint(int(global_pos.x()), int(global_pos.y())))
 
     def _toggle_wrap(self) -> None:
         from PyQt6.QtWidgets import QPlainTextEdit

@@ -848,14 +848,20 @@ class ChoiceMenu(QWidget):
 
 
 class SegmentedTabs(QWidget):
-    """macOS 风格分段控件 / 下划线标签。items: [(key, label, badge)]"""
+    """macOS 风格分段控件 / 下划线标签。items: [(key, label, badge)]
+
+    adaptive=True 时控件跟随父容器宽度：放不下的标签自动折叠进末尾的
+    「更多」按钮，点它弹出完整列表。用于标签数量多、面板又可能变窄的场景
+    （响应面板在左右分栏后宽度会减半），避免文字重叠与标签被挤出消失。
+    """
 
     changed = pyqtSignal(str)
+    more_clicked = pyqtSignal(object)  # 请求弹出「更多」菜单，带全局坐标
 
     def __init__(self, items: Sequence[Tuple[str, str]], style: str = "underline",
                  current: Optional[str] = None, parent=None, font_size: float = 12.5,
                  spacing: int = 2, pad_h: int = 11, height: int = 30,
-                 show_badges: bool = True):
+                 show_badges: bool = True, adaptive: bool = False):
         super().__init__(parent)
         self._items: List[Dict] = []
         self._style = style
@@ -867,6 +873,9 @@ class SegmentedTabs(QWidget):
         self._hover = -1
         self._hover_v = 0.0
         self._show_badges = show_badges
+        self._adaptive = adaptive
+        self._more_hover = False
+        self._more_rect = QRectF()
         self.setFixedHeight(height)
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -882,7 +891,10 @@ class SegmentedTabs(QWidget):
         for key, label in items:
             self._items.append({"key": key, "label": label, "badge": 0})
         self._current = current or (self._items[0]["key"] if self._items else "")
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        if adaptive:
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        else:
+            self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
     def _label(self, item: Dict) -> str:
         return _tr(item["label"])
@@ -901,9 +913,10 @@ class SegmentedTabs(QWidget):
         结果第二个标签被裁掉半截 —— 所以这里主动把尺寸钉到新的 sizeHint。
         """
         self.updateGeometry()
-        want = self.sizeHint().width()
-        if want and (self.minimumWidth() != want or self.maximumWidth() != want):
-            self.setFixedWidth(want)
+        if not self._adaptive:
+            want = self.sizeHint().width()
+            if want and (self.minimumWidth() != want or self.maximumWidth() != want):
+                self.setFixedWidth(want)
         self._snap_indicator()
 
     # -------------------------------------------------- API
@@ -980,7 +993,52 @@ class SegmentedTabs(QWidget):
 
     def sizeHint(self) -> QSize:  # noqa: N802
         rects = self._rects()
-        return QSize(int(rects[-1].right()) + 2 if rects else 0, self.height())
+        full = int(rects[-1].right()) + 2 if rects else 0
+        if self._adaptive:
+            # 自适应模式：给一个足够小的提示宽度，让父布局能把剩余空间分给它；
+            # 真正能显示几项由 _visible() 按实时宽度决定。
+            return QSize(min(full, 160), self.height())
+        return QSize(full, self.height())
+
+    def _visible(self) -> List[int]:
+        """当前宽度下能完整显示的标签下标；非自适应模式全部显示。
+
+        预留「更多」按钮的宽度。保证当前选中的标签一定可见（哪怕它排在后面），
+        否则折叠后用户会看不到自己正处的页面。
+        """
+        rects = self._rects()
+        n = len(rects)
+        if not self._adaptive or n == 0:
+            self._more_rect = QRectF()
+            return list(range(n))
+        avail = self.width()
+        more_w = 30.0
+        # 先假设不需要更多按钮，看看能否全放下
+        if rects[-1].right() + 2 <= avail:
+            self._more_rect = QRectF()
+            return list(range(n))
+        # 需要折叠：从前往后收，直到下一项放不下；留出更多按钮
+        limit = avail - more_w - 2
+        vis: List[int] = []
+        for i, r in enumerate(rects):
+            if r.right() <= limit:
+                vis.append(i)
+            else:
+                break
+        if not vis:  # 极端窄：至少留当前项
+            vis = [0]
+        # 当前项若被折叠，换掉最后一项把它显示出来
+        for i, item in enumerate(self._items):
+            if item["key"] == self._current and i not in vis:
+                vis[-1] = i
+                break
+        x = rects[vis[-1]].right() + 2
+        self._more_rect = QRectF(x, 2, more_w, self.height() - 4)
+        return vis
+
+    def all_items(self) -> List[Tuple[str, str]]:
+        """给「更多」菜单用：全部 (key, 原文标签)。"""
+        return [(i["key"], i["label"]) for i in self._items]
 
     def _snap_indicator(self) -> None:
         rects = self._rects()
@@ -1055,24 +1113,34 @@ class SegmentedTabs(QWidget):
 
     # -------------------------------------------------- 交互
     def mouseMoveEvent(self, e):  # noqa: N802
+        pos = e.position()
+        more = self._more_rect.contains(pos) if not self._more_rect.isNull() else False
         idx = -1
-        for i, r in enumerate(self._rects()):
-            if r.contains(e.position()):
-                idx = i
-                break
-        if idx != self._hover:
+        if not more:
+            for i in self._visible():
+                if self._rects()[i].contains(pos):
+                    idx = i
+                    break
+        if idx != self._hover or more != self._more_hover:
             self._hover = idx
+            self._more_hover = more
             self.update()
 
     def leaveEvent(self, e):  # noqa: N802
         self._hover = -1
+        self._more_hover = False
         self.update()
 
     def mouseReleaseEvent(self, e):  # noqa: N802
         if e.button() != Qt.MouseButton.LeftButton:
             return
-        for i, r in enumerate(self._rects()):
-            if r.contains(e.position()):
+        pos = e.position()
+        if not self._more_rect.isNull() and self._more_rect.contains(pos):
+            self.more_clicked.emit(QPointF(self.mapToGlobal(pos.toPoint())))
+            return
+        rects = self._rects()
+        for i in self._visible():
+            if rects[i].contains(pos):
                 self.set_current(self._items[i]["key"], emit=True)
                 return
 
@@ -1084,7 +1152,9 @@ class SegmentedTabs(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         rects = self._rects()
         moving = _anim_running(self._anim) or self._fade_t < 0.999
-        for i, (item, r) in enumerate(zip(self._items, rects)):
+        visible = self._visible()
+        for i in visible:
+            item, r = self._items[i], rects[i]
             active = item["key"] == self._current
             if active:
                 hot = self._fade_t if self._prev_key else 1.0
@@ -1134,7 +1204,20 @@ class SegmentedTabs(QWidget):
                 p.setPen(C(t.accent) if active else C(t.text_dim))
                 p.drawText(br, int(Qt.AlignmentFlag.AlignCenter), btext)
 
-        if self._style == "underline" and self._indicator_w > 0:
+        # 溢出时画「更多」按钮：三个点，主题色，和标签同一套语言
+        if not self._more_rect.isNull():
+            mr = self._more_rect
+            if self._more_hover:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(C(t.hover))
+                p.drawRoundedRect(mr.adjusted(0, 2, 0, -2), 6, 6)
+            p.setPen(C(t.accent if self._more_hover else t.text_dim))
+            dots = "···"
+            p.setFont(font(13, QFont.Weight.DemiBold))
+            p.drawText(mr, int(Qt.AlignmentFlag.AlignCenter), dots)
+
+        if self._style == "underline" and self._indicator_w > 0 and self._current in \
+                [self._items[i]["key"] for i in visible]:
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(C(t.accent))
             bar = QRectF(self._indicator + 7, self.height() - 3.0, max(self._indicator_w - 14, 8), 2.0)

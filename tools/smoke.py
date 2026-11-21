@@ -4517,9 +4517,85 @@ def main() -> int:
         page.deleteLater()
         return 0
 
+    def step42() -> int:
+        # v1.0.86：标签溢出折叠 / 契约页紧凑排版 / 认证条件渲染 / 按钮对齐 / 主题色
+        from app.request_panel import AuthPage
+        from app.widgets import Button, HBox, SegmentedTabs
+
+        # 标签自适应：窄了折叠、宽了全显、更多菜单含全部项
+        items = [(f"k{i}", f"标签{i}") for i in range(11)]
+        tabs = SegmentedTabs(items, style="underline", height=30, pad_h=9,
+                             font_size=12, adaptive=True)
+        tabs.resize(900, 30)
+        check("标签栏宽时全部显示", len(tabs._visible()) == len(items)
+              and tabs._more_rect.isNull())
+        tabs.resize(320, 30)
+        check("标签栏窄时折叠出更多", len(tabs._visible()) < len(items)
+              and not tabs._more_rect.isNull())
+        tabs.set_current("k10")
+        check("折叠时当前项仍可见", 10 in tabs._visible())
+        check("更多菜单能取到全部标签", len(tabs.all_items()) == len(items))
+
+        # 按钮行靠左对齐：尾部 stretch 吸收剩余空间，按钮紧挨
+        b1 = Button("A", None, kind="ghost", height=24)
+        b2 = Button("B", None, kind="ghost", height=24)
+        row = HBox(b1, b2, 1, spacing=6)
+        row.resize(700, 24); row.show()
+        app.processEvents()
+        check("按钮行靠左紧挨对齐",
+              b1.x() == 0 and 0 <= b2.x() - b1.x() - b1.width() <= 8,
+              f"b1={b1.x()} b2={b2.x()}")
+
+        # 认证条件渲染：各授权方式字段按 grant 显隐
+        page = AuthPage(store)
+        page.show()
+        page._on_type("oauth2")
+        page.oauth_grant.set_current("client_credentials", emit=True)
+        app.processEvents()
+        check("客户端凭证不显示用户名与授权码",
+              page.oauth_username.isHidden() and page.oauth_code.isHidden())
+        page.oauth_grant.set_current("password", emit=True)
+        app.processEvents()
+        check("密码模式显示用户名但不显示授权码",
+              not page.oauth_username.isHidden() and page.oauth_code.isHidden())
+        page.oauth_grant.set_current("authorization_code", emit=True)
+        app.processEvents()
+        check("授权码模式显示授权字段但不显示用户名",
+              not page.oauth_code.isHidden() and not page.oauth_auth_url.isHidden()
+              and page.oauth_username.isHidden())
+        page.oauth_grant.set_current("implicit", emit=True)
+        app.processEvents()
+        check("手动 Token 只显示粘贴框",
+              not page.oauth_access_token.isHidden() and page.oauth_token_url.isHidden())
+        page.deleteLater()
+
+        # 契约页：KPI 有标签、观测数值不重叠、字段摘要可读
+        from app import contract
+        from app.contract_view import ContractView
+        from app.widgets import ElideLabel
+        cv = ContractView()
+        cv.set_store(store)
+        body = b'{"a":1,"b":{"c":2}}'
+        contract.save_contract(store, "GET /a", contract.infer({"a": 1, "b": {"c": 2}}),
+                               {"a": 1, "b": {"c": 2}})
+        cv.set_data("GET /a", body, "application/json",
+                    {"dns": 12, "tcp": 96, "ssl": 108, "ttfb": 1205, "download": 0},
+                    {"status": 200, "elapsed": 1205, "size": 20,
+                     "content_type": "application/json; charset=utf-8"})
+        check("契约摘要 KPI 带中文标签",
+              "字段" in cv.summary_fields.caption.text()
+              and cv.summary_fields.value.text() == "3",
+              cv.summary_fields.value.text())
+        check("观测数值用省略标签防挤压",
+              isinstance(cv.kpi_type.value, ElideLabel)
+              and cv.kpi_status.value.text() == "200")
+        check("契约页仍左右可拖动", cv.split.count() == 2)
+        cv.deleteLater()
+        return 0
+
     steps = [step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11,
              step12, step13, step14, step15, step16, step17, step18, step19, step20, step21,
-             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39, step40, step41]
+             step22, step23, step24, step25, step26, step27, step28, step29, step30, step31, step32, step33, step34, step35, step36, step37, step38, step39, step40, step41, step42]
 
     def driver(i: int = 0) -> None:
         if i >= len(steps):

@@ -1003,8 +1003,9 @@ class AuthPage(QWidget):
         ol.addWidget(self.oauth_token_url)
         ol.addWidget(self.oauth_client_id)
         ol.addWidget(self.oauth_client_secret)
-        ol.addWidget(Label("Secret 发送位置", 11.3, theme().text_dim,
-                           weight=QFont.Weight.DemiBold))
+        self.oauth_secret_pos_label = Label("Secret 发送位置", 11.3, theme().text_dim,
+                                            weight=QFont.Weight.DemiBold)
+        ol.addWidget(self.oauth_secret_pos_label)
         ol.addWidget(self.oauth_token_auth_method)
         ol.addWidget(self.oauth_scope)
         ol.addWidget(self.oauth_username)
@@ -1015,11 +1016,12 @@ class AuthPage(QWidget):
         ol.addWidget(self.oauth_state)
         ol.addWidget(self.oauth_state_returned)
         ol.addWidget(HBox(self.oauth_pkce_btn, self.oauth_open_btn,
-                          self.oauth_fetch_btn, self.oauth_clear_btn, spacing=6))
+                          self.oauth_fetch_btn, self.oauth_clear_btn, 1, spacing=6))
         ol.addWidget(self.oauth_access_token)
         ol.addWidget(self.oauth_refresh_token)
-        ol.addWidget(Label("Token 放在哪里", 11.3, theme().text_dim,
-                           weight=QFont.Weight.DemiBold))
+        self.oauth_placement_label = Label("Token 放在哪里", 11.3, theme().text_dim,
+                                           weight=QFont.Weight.DemiBold)
+        ol.addWidget(self.oauth_placement_label)
         ol.addWidget(self.oauth_placement)
         ol.addWidget(self.oauth_token_key)
         ol.addWidget(self.oauth_status)
@@ -1056,7 +1058,7 @@ class AuthPage(QWidget):
             "为 AWS API Gateway / S3 / EC2 等接口生成 AWS4-HMAC-SHA256 签名，可推断区域、预览签名明细、生成预签名 URL。",
             self.aws_access, self.aws_secret, self.aws_session,
             self.aws_region, self.aws_service, self.aws_sign_body,
-            HBox(self.aws_infer_btn, self.aws_presign_btn, spacing=6),
+            HBox(self.aws_infer_btn, self.aws_presign_btn, 1, spacing=6),
             self.aws_status, self.aws_detail)
 
         # Digest：401 挑战 → 自动重发，标准库实现
@@ -1140,6 +1142,9 @@ class AuthPage(QWidget):
             self._refresh_inherit()
         elif key == "jwt":
             self._refresh_jwt()
+        elif key == "oauth2":
+            # 首次切进认证页时也要按当前 grant 条件渲染，避免所有字段一次性铺开
+            self._on_oauth_grant()
         if not self._loading:
             self.changed.emit()
 
@@ -1200,22 +1205,40 @@ class AuthPage(QWidget):
             "收到 401 Digest 挑战后自动重发，nonce / nc 由 Ocelot 管理。"))
 
     def _on_oauth_grant(self, _key: str = "") -> None:
+        """按授权方式精确条件渲染：只显示该 grant 真正需要的字段。
+
+        之前只是「手动 vs 非手动」二分，导致授权码模式下仍显示密码模式的用户名、
+        客户端凭证下显示一堆用不到的授权字段 —— 页面显得臃肿且容易误填。
+        """
         grant = self.oauth_grant.current()
         manual = grant in ("implicit", "manual")
         auth_code = grant == "authorization_code"
-        for widget in (self.oauth_issuer, self.oauth_discover_btn,
-                       self.oauth_auth_url, self.oauth_token_url,
-                       self.oauth_client_id, self.oauth_client_secret,
-                       self.oauth_token_auth_method, self.oauth_scope,
-                       self.oauth_username, self.oauth_password,
-                       self.oauth_refresh_token, self.oauth_clear_btn,
-                       self.oauth_placement, self.oauth_token_key):
+        password = grant == "password"
+
+        # 所有「换取 token」的模式都需要的公共字段
+        common = [self.oauth_issuer, self.oauth_discover_btn,
+                  self.oauth_token_url, self.oauth_client_id,
+                  self.oauth_client_secret, self.oauth_secret_pos_label,
+                  self.oauth_token_auth_method, self.oauth_scope,
+                  self.oauth_refresh_token, self.oauth_clear_btn,
+                  self.oauth_placement_label, self.oauth_placement,
+                  self.oauth_token_key, self.oauth_fetch_btn]
+        for widget in common:
             widget.setVisible(not manual)
-        for widget in (self.oauth_code, self.oauth_redirect_uri,
-                       self.oauth_code_verifier, self.oauth_state,
-                       self.oauth_state_returned, self.oauth_pkce_btn,
-                       self.oauth_open_btn):
+
+        # 仅授权码 + PKCE 需要的字段
+        code_only = [self.oauth_auth_url, self.oauth_code, self.oauth_redirect_uri,
+                     self.oauth_code_verifier, self.oauth_state,
+                     self.oauth_state_returned, self.oauth_pkce_btn,
+                     self.oauth_open_btn]
+        for widget in code_only:
             widget.setVisible(auth_code)
+
+        # 仅密码模式需要的字段
+        self.oauth_username.setVisible(password)
+        self.oauth_password.setVisible(password)
+
+        # 手动 Token 模式：只留粘贴框与放置位置
         self.oauth_access_token.setVisible(manual)
         self._refresh_oauth_status()
         if not self._loading:
